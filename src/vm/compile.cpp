@@ -67,7 +67,9 @@
 #include "crossgenroresolvenamespace.h"
 #endif
 
+#ifndef NO_NGENPDB
 #include <cvinfo.h>
+#endif
 
 #ifdef MDIL
 #include <mdil.h>
@@ -532,7 +534,8 @@ HRESULT CEECompileInfo::LoadAssemblyByPath(
 #endif
 
 #if defined(CROSSGEN_COMPILE) && !defined(FEATURE_CORECLR)
-            pDomain->ToCompilationDomain()->ComputeAssemblyHardBindList(pAssemblyHolder->GetPersistentMDImport());
+            if (!IsReadyToRunCompilation())
+                pDomain->ToCompilationDomain()->ComputeAssemblyHardBindList(pAssemblyHolder->GetPersistentMDImport());
 #endif
 
 #ifdef MDIL
@@ -1031,7 +1034,7 @@ HRESULT CEECompileInfo::SetCompilationTarget(CORINFO_ASSEMBLY_HANDLE     assembl
         mscorlib.InitializeSpec(SystemDomain::SystemFile());
         GetAppDomain()->BindAssemblySpec(&mscorlib,TRUE,FALSE);
 
-        if (!SystemDomain::SystemFile()->HasNativeImage())
+        if (!IsReadyToRunCompilation() && !SystemDomain::SystemFile()->HasNativeImage())
         {
             if (!CLRConfig::GetConfigValue(CLRConfig::INTERNAL_NgenAllowMscorlibSoftbind))
             {
@@ -1039,6 +1042,14 @@ HRESULT CEECompileInfo::SetCompilationTarget(CORINFO_ASSEMBLY_HANDLE     assembl
             }
         }
     }
+
+#ifdef FEATURE_READYTORUN_COMPILER
+    if (IsReadyToRunCompilation() && !pModule->IsILOnly())
+    {
+        GetSvcLogger()->Printf(LogLevel_Error, W("Error: /readytorun not supported for mixed mode assemblies\n"));
+        return E_FAIL;
+    }
+#endif
 
     return S_OK;
 }
@@ -2525,6 +2536,11 @@ BOOL CEECompileInfo::NeedsTypeLayoutCheck(CORINFO_CLASS_HANDLE classHnd)
     if (!pMT->IsValueType())
         return FALSE;
 
+    // Skip this check for equivalent types. Equivalent types are used for interop that ensures
+    // matching layout.
+    if (pMT->GetClass()->IsEquivalentType())
+        return FALSE;
+
     return !pMT->IsLayoutFixedInCurrentVersionBubble();
 }
 
@@ -2624,6 +2640,26 @@ BOOL CEECompileInfo::AreAllClassesFullyLoaded(CORINFO_MODULE_HANDLE moduleHandle
 // public\devdiv\inc\corsym.h and debugger\sh\symwrtr\ngenpdbwriter.h,cpp
 // ----------------------------------------------------------------------------
 
+#ifdef NO_NGENPDB
+BOOL CEECompileInfo::GetIsGeneratingNgenPDB() 
+{
+    return FALSE; 
+}
+
+void CEECompileInfo::SetIsGeneratingNgenPDB(BOOL fGeneratingNgenPDB) 
+{
+}
+
+BOOL IsNgenPDBCompilationProcess()
+{
+    return FALSE;
+}
+
+HRESULT __stdcall CreatePdb(CORINFO_ASSEMBLY_HANDLE hAssembly, BSTR pNativeImagePath, BSTR pPdbPath, BOOL pdbLines, BSTR pManagedPdbSearchPath)
+{
+    return E_NOTIMPL;
+}
+#else // NO_NGENPDB
 
 BOOL CEECompileInfo::GetIsGeneratingNgenPDB() 
 {
@@ -4421,6 +4457,7 @@ HRESULT __stdcall CreatePdb(CORINFO_ASSEMBLY_HANDLE hAssembly, BSTR pNativeImage
     return S_OK;
 }
 
+#endif // NO_NGENPDB
 
 // End of PDB writing code
 // ----------------------------------------------------------------------------
@@ -6114,6 +6151,7 @@ void CEEPreloader::TriageTypeFromSoftBoundModule(TypeHandle th, Module * pSoftBo
     }
 }
 
+#ifdef FEATURE_FULL_NGEN
 static TypeHandle TryToLoadTypeSpecHelper(Module * pModule, PCCOR_SIGNATURE pSig, ULONG cSig)
 {
     STANDARD_VM_CONTRACT;
@@ -6135,7 +6173,6 @@ static TypeHandle TryToLoadTypeSpecHelper(Module * pModule, PCCOR_SIGNATURE pSig
     return th;
 }
 
-#ifdef FEATURE_FULL_NGEN
 void CEEPreloader::TriageTypeSpecsFromSoftBoundModule(Module * pSoftBoundModule)
 {
     STANDARD_VM_CONTRACT;
@@ -8167,5 +8204,17 @@ HRESULT CompilationDomain::SetPlatformWinmdPaths(LPCWSTR pwzPlatformWinmdPaths)
     return S_OK;
 }
 #endif // CROSSGEN_COMPILE
+
+#if defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
+bool UseRyuJit()
+{
+#ifdef CROSSGEN_COMPILE
+    return true;
+#else
+    static ConfigDWORD useRyuJitValue;
+    return useRyuJitValue.val(CLRConfig::INTERNAL_UseRyuJit) == 1 || IsNgenOffline();
+#endif
+}
+#endif
 
 #endif // FEATURE_PREJIT

@@ -16,6 +16,11 @@
 #include <utilcode.h>
 #include <corhost.h>
 
+typedef int (STDMETHODCALLTYPE *HostMain)(
+    const int argc,
+    const wchar_t** argv
+    );
+
 #define ASSERTE_ALL_BUILDS(expr) _ASSERTE_ALL_BUILDS(__FILE__, (expr))
 
 // Holder for const wide strings
@@ -94,7 +99,10 @@ static LPCWSTR* StringArrayToUnicode(int argc, LPCSTR* argv)
 //  propertyValues          - Values of properties of the app domain
 //  argc                    - Number of arguments passed to the executed assembly
 //  argv                    - Array of arguments passed to the executed assembly
-//  managedAssemblyPath     - Path of the managed assembly to execute
+//  managedAssemblyPath     - Path of the managed assembly to execute (or NULL if using a custom entrypoint).
+//  enntyPointAssemblyName  - Name of the assembly which holds the custom entry point (or NULL to use managedAssemblyPath).
+//  entryPointTypeName      - Name of the type which holds the custom entry point (or NULL to use managedAssemblyPath).
+//  entryPointMethodName    - Name of the method which is the custom entry point (or NULL to use managedAssemblyPath).
 //  exitCode                - Exit code returned by the executed assembly
 //
 // Returns:
@@ -111,9 +119,16 @@ HRESULT ExecuteAssembly(
             int argc,
             LPCSTR* argv,
             LPCSTR managedAssemblyPath,
+            LPCSTR entryPointAssemblyName,
+            LPCSTR entryPointTypeName,
+            LPCSTR entryPointMethodName,
             DWORD* exitCode)
 {
-    *exitCode = 0;
+    if (exitCode == NULL)
+    {
+        return HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER);
+    }
+    *exitCode = -1;
 
     DWORD error = PAL_InitializeCoreCLR(exePath, coreClrPath, true);
     HRESULT hr = HRESULT_FROM_WIN32(error);
@@ -133,9 +148,6 @@ HRESULT ExecuteAssembly(
     hr = host->SetStartupFlags((STARTUP_FLAGS)
                                (STARTUP_FLAGS::STARTUP_LOADER_OPTIMIZATION_SINGLE_DOMAIN |
                                 STARTUP_FLAGS::STARTUP_SINGLE_APPDOMAIN));
-    IfFailRet(hr);
-
-    hr = host->Authenticate(CORECLR_HOST_AUTHENTICATION_KEY);
     IfFailRet(hr);
 
     hr = host->Start();
@@ -168,7 +180,8 @@ HRESULT ExecuteAssembly(
         // - Prevents the application from being torn down if a managed exception is unhandled
         //
         APPDOMAIN_ENABLE_PLATFORM_SPECIFIC_APPS |
-        APPDOMAIN_ENABLE_PINVOKE_AND_CLASSIC_COMINTEROP,
+        APPDOMAIN_ENABLE_PINVOKE_AND_CLASSIC_COMINTEROP |
+        APPDOMAIN_DISABLE_TRANSPARENCY_ENFORCEMENT,
         NULL,                    // Name of the assembly that contains the AppDomainManager implementation
         NULL,                    // The AppDomainManager implementation type name
         propertyCount,
@@ -180,11 +193,33 @@ HRESULT ExecuteAssembly(
     ConstWStringArrayHolder argvW;
     argvW.Set(StringArrayToUnicode(argc, argv), argc);
     
-    ConstWStringHolder managedAssemblyPathW = StringToUnicode(managedAssemblyPath);
+    if (entryPointAssemblyName == NULL || entryPointTypeName == NULL || entryPointMethodName == NULL)
+    {
+        ConstWStringHolder managedAssemblyPathW = StringToUnicode(managedAssemblyPath);
 
-    hr = host->ExecuteAssembly(domainId, managedAssemblyPathW, argc, argvW, exitCode);
-    IfFailRet(hr);
+        hr = host->ExecuteAssembly(domainId, managedAssemblyPathW, argc, argvW, exitCode);
+        IfFailRet(hr);
+    }
+    else
+    {
+        ConstWStringHolder entryPointAssemblyNameW = StringToUnicode(entryPointAssemblyName);
+        ConstWStringHolder entryPointTypeNameW = StringToUnicode(entryPointTypeName);
+        ConstWStringHolder entryPointMethodNameW = StringToUnicode(entryPointMethodName);
 
+        HostMain pHostMain;
+
+        hr = host->CreateDelegate(
+            domainId,
+            entryPointAssemblyNameW,
+            entryPointTypeNameW,
+            entryPointMethodNameW,
+            (INT_PTR*)&pHostMain);
+        
+        IfFailRet(hr);
+
+        *exitCode = pHostMain(argc, argvW);
+    }
+    
     hr = host->UnloadAppDomain(domainId,
                                true); // Wait until done
     IfFailRet(hr);

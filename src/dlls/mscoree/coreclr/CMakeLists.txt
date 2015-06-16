@@ -1,28 +1,44 @@
 if (WIN32)
-preprocess_def_file(${DEF_SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/coreclr.def)
+    preprocess_def_file(${DEF_SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/coreclr.def)
 
-list(APPEND CLR_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/coreclr.def)
+    list(APPEND CLR_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/coreclr.def)
 
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /ENTRY:CoreDllMain")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /ENTRY:CoreDllMain")
 
-# No library groups for Win32
-set(START_LIBRARY_GROUP)
-set(END_LIBRARY_GROUP)
+    # No library groups for Win32
+    set(START_LIBRARY_GROUP)
+    set(END_LIBRARY_GROUP)
 
 else()
+    add_definitions(-DNO_CRT_INIT)
 
-add_definitions(-DNO_CRT_INIT)
+    set(EXPORTS_FILE ${CMAKE_CURRENT_BINARY_DIR}/coreclr.exports)
+    generate_exports_file(${DEF_SOURCES} ${EXPORTS_FILE})
 
-if(CMAKE_SYSTEM_NAME STREQUAL Linux)
-# This option is necessary to ensure that the overloaded delete operator defined inside
-# of the utilcode will be used instead of the standard library delete operator.
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Xlinker -Bsymbolic-functions")
+    if(CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
+        # This option is necessary to ensure that the overloaded delete operator defined inside
+        # of the utilcode will be used instead of the standard library delete operator.
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Xlinker -Bsymbolic -Bsymbolic-functions")
 
-# The following linked options can be inserted into the linker libraries list to 
-# ensure proper resolving of circular references between a subset of the libraries.
-    set(START_LIBRARY_GROUP -Wl,--start-group)
-    set(END_LIBRARY_GROUP -Wl,--end-group)
-endif(CMAKE_SYSTEM_NAME STREQUAL Linux)
+        # The following linked options can be inserted into the linker libraries list to 
+        # ensure proper resolving of circular references between a subset of the libraries.
+        set(START_LIBRARY_GROUP -Wl,--start-group)
+        set(END_LIBRARY_GROUP -Wl,--end-group)
+
+        # These options are used to force every object to be included even if it's unused.
+        set(START_WHOLE_ARCHIVE -Wl,--whole-archive)
+        set(END_WHOLE_ARCHIVE -Wl,--no-whole-archive) 
+
+        set(EXPORTS_LINKER_OPTION -Wl,--version-script=${EXPORTS_FILE})
+    endif(CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
+        # These options are used to force every object to be included even if it's unused.
+        set(START_WHOLE_ARCHIVE -force_load)
+        set(END_WHOLE_ARCHIVE )
+
+        set(EXPORTS_LINKER_OPTION -Wl,-exported_symbols_list,${EXPORTS_FILE})
+    endif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
 
 endif (WIN32)
 
@@ -33,6 +49,16 @@ add_library(coreclr
     ${CLR_SOURCES}
 )
 
+add_custom_target(coreclr_exports DEPENDS ${EXPORTS_FILE})
+add_dependencies(coreclr coreclr_exports)
+
+set_property(TARGET coreclr APPEND_STRING PROPERTY LINK_FLAGS ${EXPORTS_LINKER_OPTION})
+set_property(TARGET coreclr APPEND_STRING PROPERTY LINK_DEPENDS ${EXPORTS_FILE})
+
+if (CLR_CMAKE_PLATFORM_UNIX)
+    set(LIB_UNWINDER unwinder_wks)
+endif (CLR_CMAKE_PLATFORM_UNIX)
+
 # IMPORTANT! Please do not rearrange the order of the libraries. The linker on Linux is
 # order dependent and changing the order can result in undefined symbols in the shared 
 # library.
@@ -40,6 +66,8 @@ set(CORECLR_LIBRARIES
     utilcode
     ${START_LIBRARY_GROUP} # Start group of libraries that have circular references
     cordbee_wks
+    debug-pal
+    ${LIB_UNWINDER}
     cee_wks
     ${END_LIBRARY_GROUP} # End group of libraries that have circular references
     mdcompiler_wks
@@ -78,7 +106,10 @@ if(WIN32)
     )
 else()
     list(APPEND CORECLR_LIBRARIES
-        CoreClrPal
+        ${START_WHOLE_ARCHIVE} # force all PAL objects to be included so all exports are available  
+        coreclrpal
+        ${END_WHOLE_ARCHIVE} 
+        mscorrc_debug
         palrt
     )
 endif(WIN32)
@@ -100,7 +131,7 @@ if(WIN32)
         COMMAND $<TARGET_FILE:dactablegen_exe> /dac:${CMAKE_CURRENT_BINARY_DIR}/daccess.i /pdb:${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/coreclr.pdb /dll:$<TARGET_FILE:coreclr> /bin:${CMAKE_CURRENT_BINARY_DIR}/wks.bin
         COMMAND $<TARGET_FILE:InjectResource> /bin:${CMAKE_CURRENT_BINARY_DIR}/wks.bin /dll:$<TARGET_FILE:coreclr>
         COMMAND $<TARGET_FILE:GenClrDebugResource> /dac:$<TARGET_FILE:mscordaccore> /dbi:$<TARGET_FILE:mscordbi> /sku:onecoreclr /out:${CMAKE_CURRENT_BINARY_DIR}/clrDebugResource.bin
-        COMMAND $<TARGET_FILE:InjectResource> /bin:${CMAKE_CURRENT_BINARY_DIR}/clrDebugResource.bin /dll:$<TARGET_FILE:coreclr> /name:CLRDEBUGINFOWINDOWSAMD64
+        COMMAND $<TARGET_FILE:InjectResource> /bin:${CMAKE_CURRENT_BINARY_DIR}/clrDebugResource.bin /dll:$<TARGET_FILE:coreclr> /name:CLRDEBUGINFO
         COMMENT Add dactable & debug resources to coreclr
     )
 endif(WIN32)

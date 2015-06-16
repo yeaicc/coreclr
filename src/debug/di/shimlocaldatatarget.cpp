@@ -80,6 +80,9 @@ private:
 // Note: throws
 BOOL CompatibleHostAndTargetPlatforms(HANDLE hTargetProcess)
 {
+#if defined(FEATURE_PAL)    
+    return TRUE;
+#else
     // get the platform for the host process
     BOOL fHostProcessIsWow64 = FALSE;
     BOOL fSuccess = FALSE;            
@@ -118,6 +121,7 @@ BOOL CompatibleHostAndTargetPlatforms(HANDLE hTargetProcess)
     {
         return TRUE;
     }
+#endif
 } // CompatibleHostAndTargetPlatforms
 
 // Helper macro to check for failure conditions at the start of data-target methods.
@@ -273,6 +277,9 @@ HRESULT STDMETHODCALLTYPE
 ShimLocalDataTarget::GetPlatform( 
         CorDebugPlatform *pPlatform)
 {
+#ifdef FEATURE_PAL
+#error ShimLocalDataTarget is not implemented on PAL systems yet
+#endif    
     // Assume that we're running on Windows for now.
 #if defined(DBG_TARGET_X86)
     *pPlatform = CORDB_PLATFORM_WINDOWS_X86;

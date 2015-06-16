@@ -11,22 +11,7 @@ extern "C"
     {
         PORTABILITY_ASSERT("Implement for PAL");
     }
-    
-    void ErectWriteBarrier_ASM(Object** dst, Object* ref)
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
 
-    void ExternalMethodFixupPatchLabel()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
-    void ExternalMethodFixupStub()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-    
     void GenericPInvokeCalliHelper()
     {
         PORTABILITY_ASSERT("Implement for PAL");
@@ -47,41 +32,12 @@ extern "C"
         PORTABILITY_ASSERT("Implement for PAL");
     }
 
-    void TheUMEntryPrestub()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
-    void UMThunkStub()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
     void VarargPInvokeStub()
     {
         PORTABILITY_ASSERT("Implement for PAL");
     }
     
-    void STDCALL UM2MThunk_WrapperHelper(void *pThunkArgs,
-                                         int argLen,
-                                         void *pAddr,
-                                         UMEntryThunk *pEntryThunk,
-                                         Thread *pThread)
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
     void VarargPInvokeStub_RetBuffArg()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
-    void VirtualMethodFixupPatchLabel()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
-    void VirtualMethodFixupStub()
     {
         PORTABILITY_ASSERT("Implement for PAL");
     }
@@ -116,38 +72,20 @@ extern "C"
           );
         return eax;
     }
+
+    DWORD xmmYmmStateSupport()
+    {
+        DWORD eax;
+        __asm("  xgetbv\n" \
+            : "=a"(eax) /*output in eax*/\
+            : "c"(0) /*inputs - 0 in ecx*/\
+            : "eax", "edx" /* registers that are clobbered*/
+          );
+        // check OS has enabled both XMM and YMM state support
+        return ((eax & 0x06) == 0x06) ? 1 : 0;
+    }
     
-    void STDCALL JIT_MemCpy(void *dest, const void *src, SIZE_T count)
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
-    void STDCALL JIT_MemCpy_End()
-    {
-    }
-
-    void STDCALL JIT_MemSet(void *dest, int c, SIZE_T count)
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-
-    void STDCALL JIT_MemSet_End()
-    {
-    }
-
     void STDCALL JIT_ProfilerEnterLeaveTailcallStub(UINT_PTR ProfilerHandle)
     {
     }
-
-#ifdef FEATURE_PREJIT
-    void StubDispatchFixupStub()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }
-#endif    
-
-    void StubDispatchFixupPatchLabel()
-    {
-        PORTABILITY_ASSERT("Implement for PAL");
-    }    
 };

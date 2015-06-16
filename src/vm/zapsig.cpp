@@ -66,7 +66,7 @@ BOOL ZapSig::GetSignatureForTypeDesc(TypeDesc * desc, SigBuilder * pSigBuilder)
     }
     else
     {
-        switch (elemType)
+        switch ((DWORD)elemType)
         {
         case ELEMENT_TYPE_FNPTR:
             {
@@ -169,7 +169,7 @@ BOOL ZapSig::GetSignatureForTypeHandle(TypeHandle      handle,
 
     // Can we encode the type using a short ET encoding?
     // 
-    CorElementType elemType = elemType = TryEncodeUsingShortcut(pMT);
+    CorElementType elemType = TryEncodeUsingShortcut(pMT);
     if (elemType != ELEMENT_TYPE_END)
     {
         _ASSERTE(pMT->IsTypicalTypeDefinition());
@@ -365,7 +365,7 @@ BOOL ZapSig::GetSignatureForTypeHandle(TypeHandle      handle,
     CorElementType sigType     = CorSigUncompressElementType(pSig);
     CorElementType handleType  = handle.GetSignatureCorElementType();
 
-    switch (sigType)
+    switch ((DWORD)sigType)
     {
         default:
         {
@@ -970,7 +970,15 @@ MethodDesc *ZapSig::DecodeMethod(Module *pReferencingModule,
             MemberLoader::ThrowMissingMethodException(constrainedType.GetMethodTable(), NULL, NULL, NULL, 0, NULL);
         }
 
-        pMethod = directMethod;
+        // Strip the instantiating stub if the signature did not ask for one
+        if (directMethod->IsInstantiatingStub() && !isInstantiatingStub)
+        {
+            pMethod = directMethod->GetWrappedMethodDesc();
+        }
+        else
+        {
+            pMethod = directMethod;
+        }
     }
 
     return pMethod;

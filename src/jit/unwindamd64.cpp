@@ -121,7 +121,15 @@ void Compiler::unwindPush(regNumber reg)
     unsigned int cbProlog = unwindGetCurrentOffset(func);
     noway_assert((BYTE)cbProlog == cbProlog);
     code->CodeOffset = (BYTE)cbProlog;
-    if (RBM_CALLEE_SAVED & genRegMask(reg))
+    if ((RBM_CALLEE_SAVED & genRegMask(reg))
+#if ETW_EBP_FRAMED
+        // In case of ETW_EBP_FRAMED defined the REG_FPBASE (RBP)
+        // is excluded from the callee-save register list.
+        // Make sure the register gets PUSH unwind info in this case,
+        // since it is pushed as a frame register.
+        || (reg == REG_FPBASE)
+#endif // ETW_EBP_FRAMED
+        )
     {
         code->UnwindOp = UWOP_PUSH_NONVOL;
         code->OpInfo = (BYTE)reg;
@@ -392,8 +400,8 @@ void DumpUnwindInfo(bool isHotCode, UNATIVE_OFFSET startOffset, UNATIVE_OFFSET e
             i++;
             break;
 
-        case UWOP_SAVE_XMM:
-        case UWOP_SAVE_XMM_FAR:
+        case UWOP_EPILOG:
+        case UWOP_SPARE_CODE:
         case UWOP_PUSH_MACHFRAME:
         default:
             printf("    Unrecognized UNWIND_CODE: 0x%04X\n", *(USHORT*)pCode);
@@ -628,9 +636,9 @@ void Compiler::unwindEmitFuncHelper(FuncInfoDsc* func, void* pHotCode, void* pCo
 void Compiler::unwindEmitFunc(FuncInfoDsc* func, void* pHotCode, void* pColdCode)
 {
     // Verify that the JIT enum is in sync with the JIT-EE interface enum
-    static_assert_no_msg(FUNC_ROOT    == CORJIT_FUNC_ROOT);
-    static_assert_no_msg(FUNC_HANDLER == CORJIT_FUNC_HANDLER); 
-    static_assert_no_msg(FUNC_FILTER  == CORJIT_FUNC_FILTER);
+    static_assert_no_msg(FUNC_ROOT    == (FuncKind)CORJIT_FUNC_ROOT);
+    static_assert_no_msg(FUNC_HANDLER == (FuncKind)CORJIT_FUNC_HANDLER); 
+    static_assert_no_msg(FUNC_FILTER  == (FuncKind)CORJIT_FUNC_FILTER);
 
     unwindEmitFuncHelper(func, pHotCode, pColdCode, true);
 

@@ -48,9 +48,23 @@ DllMain(HANDLE instance, DWORD reason, LPVOID reserved)
     {
         if (g_procInitialized)
         {
-            return FALSE;   // should only get called once
+#ifdef FEATURE_PAL            
+            // Double initialization can happen on Unix 
+            // in case of manual load of DAC shared lib and calling DllMain
+            // not a big deal, we just ignore it. 
+            return TRUE;
+#else
+            return FALSE;            
+#endif            
         }
 
+#ifdef FEATURE_PAL
+        int err = PAL_InitializeDLL();
+        if(err != 0)
+        {
+            return FALSE;
+        }
+#endif
         InitializeCriticalSection(&g_dacCritSec);
 
         // Save the module handle.
@@ -66,8 +80,9 @@ DllMain(HANDLE instance, DWORD reason, LPVOID reserved)
         {
             DeleteCriticalSection(&g_dacCritSec);
         }
-        
+#ifndef FEATURE_PAL 
         TLS_FreeMasterSlotIndex();
+#endif
         g_procInitialized = false;
         break;
     }
@@ -1319,7 +1334,7 @@ SplitName::CdNextField(ClrDataAccess* dac,
                                       fieldTypeHandle);
             if (!*fieldType && tokenScopeRet)
             {
-                delete *tokenScopeRet;
+                delete (ClrDataModule*)*tokenScopeRet;
             }
             return *fieldType ? S_OK : E_OUTOFMEMORY;
         }
@@ -5473,16 +5488,26 @@ ClrDataAccess::Initialize(void)
 
     // Determine our platform based on the pre-processor macros set when we were built
 
-#if defined(_TARGET_X86_)
-    CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_X86;
-#elif defined(_TARGET_AMD64_)
-    CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_AMD64;
-#elif defined(_TARGET_ARM_)
-    CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_ARM;
-#elif defined(_TARGET_ARM64_)
-    CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_ARM64;
+#ifdef FEATURE_PAL
+     #if defined(DBG_TARGET_X86)
+         CorDebugPlatform hostPlatform = CORDB_PLATFORM_POSIX_X86;
+     #elif defined(DBG_TARGET_AMD64)
+         CorDebugPlatform hostPlatform = CORDB_PLATFORM_POSIX_AMD64;
+     #else
+         #error Unknown Processor.
+     #endif
 #else
-#error Unknown processor.
+    #if defined(DBG_TARGET_X86)
+        CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_X86;
+    #elif defined(DBG_TARGET_AMD64)
+        CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_AMD64;
+    #elif defined(DBG_TARGET_ARM)
+        CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_ARM;
+    #elif defined(DBG_TARGET_ARM64)
+        CorDebugPlatform hostPlatform = CORDB_PLATFORM_WINDOWS_ARM64;
+    #else
+        #error Unknown Processor.
+    #endif
 #endif
 
     CorDebugPlatform targetPlatform;
@@ -5792,35 +5817,34 @@ ClrDataAccess::RawGetMethodName(
             maxPrecodeSize = max(maxPrecodeSize, sizeof(RemotingPrecode));
 #endif
 
-            EX_TRY
+            for (SIZE_T i = 0; i < maxPrecodeSize / PRECODE_ALIGNMENT; i++)
             {
-                for (SIZE_T i = 0; i < maxPrecodeSize / PRECODE_ALIGNMENT; i++)
+                EX_TRY
                 {
                     // Try to find matching precode entrypoint
-                    if (PrecodeStubManager::IsPrecodeByAsm(alignedAddress))
+                    Precode* pPrecode = Precode::GetPrecodeFromEntryPoint(alignedAddress, TRUE);
+                    if (pPrecode != NULL)
                     {
-                        Precode* pPrecode = Precode::GetPrecodeFromEntryPoint(alignedAddress, TRUE);
-                        if (pPrecode != NULL)
+                        methodDesc = pPrecode->GetMethodDesc();
+                        if (methodDesc != NULL)
                         {
-                            methodDesc = pPrecode->GetMethodDesc();
-                            if (methodDesc != NULL)
+                            if (DacValidateMD(methodDesc))
                             {
                                 if (displacement)
                                 {
                                     *displacement = TO_TADDR(address) - PCODEToPINSTR(alignedAddress);
                                 }
-
                                 goto NameFromMethodDesc;
                             }
                         }
                     }
                     alignedAddress -= PRECODE_ALIGNMENT;
                 }
+                EX_CATCH
+                {
+                }
+                EX_END_CATCH(SwallowAllExceptions)
             }
-            EX_CATCH
-            {
-            }
-            EX_END_CATCH(SwallowAllExceptions)
         }
         else
         if (pStubManager == JumpStubStubManager::g_pManager)
@@ -6950,6 +6974,7 @@ bool ClrDataAccess::TargetConsistencyAssertsEnabled()
 // 
 HRESULT ClrDataAccess::VerifyDlls()
 {
+#ifndef FEATURE_PAL
     // Provide a knob for disabling this check if we really want to try and proceed anyway with a 
     // DAC mismatch.  DAC behavior may be arbitrarily bad - globals probably won't be at the same
     // address, data structures may be laid out differently, etc.
@@ -7021,7 +7046,6 @@ HRESULT ClrDataAccess::VerifyDlls()
         // Timestamp mismatch.  This means mscordacwks is being used with a version of
         // mscorwks other than the one it was built for.  This will not work reliably.
 
-#ifndef FEATURE_PAL
 #ifdef _DEBUG
         // Check if verbose asserts are enabled.  The default is up to the specific instantiation of
         // ClrDataAccess, but can be overridden (in either direction) by a COMPLUS knob.
@@ -7067,11 +7091,11 @@ HRESULT ClrDataAccess::VerifyDlls()
             _ASSERTE_MSG(false, szMsgBuf);
         }
 #endif
-#endif
 
         // Return a specific hresult indicating this problem
         return CORDBG_E_MISMATCHED_CORWKS_AND_DACWKS_DLLS;
     }
+#endif // FEATURE_PAL
 
     return S_OK;
 }
@@ -7171,6 +7195,26 @@ bool ClrDataAccess::MdCacheGetEEName(TADDR taEEStruct, SString & eeName)
 HRESULT
 ClrDataAccess::GetDacGlobals()
 {
+#ifdef FEATURE_PAL
+    PVOID dacTableAddress = nullptr;
+    ULONG dacTableSize = 0;
+    DWORD err = PAL_GetDacTableAddress((PVOID)m_globalBase, &dacTableAddress, &dacTableSize);
+    if (err != ERROR_SUCCESS)
+    {
+        return CORDBG_E_MISSING_DEBUGGER_EXPORTS;
+    }
+
+    if (dacTableSize != sizeof(g_dacGlobals))
+    {
+        return E_INVALIDARG;
+    }
+
+    if (FAILED(ReadFromDataTarget(m_pTarget, (ULONG64)dacTableAddress, (BYTE*)&g_dacGlobals, dacTableSize)))
+    {
+        return CORDBG_E_MISSING_DEBUGGER_EXPORTS;
+    }
+    return S_OK;
+#else
     HRESULT status = E_FAIL;
     DWORD rsrcRVA = 0;
     LPVOID rsrcData = NULL;
@@ -7278,6 +7322,7 @@ ClrDataAccess::GetDacGlobals()
 Exit:
 
     return status;
+#endif
 }
 
 #undef MAKEINTRESOURCE
@@ -7410,6 +7455,9 @@ STDAPI CLRDataAccessCreateInstance(ICLRDataTarget * pLegacyTarget,
 // This is the legacy entrypoint to DAC, used by dbgeng/dbghelp (windbg, SOS, watson, etc).
 //
 //----------------------------------------------------------------------------
+#ifdef __llvm__
+__attribute__((used))
+#endif // __llvm__
 STDAPI
 CLRDataCreateInstance(REFIID iid,
                       ICLRDataTarget * pLegacyTarget,

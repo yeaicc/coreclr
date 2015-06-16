@@ -5,12 +5,6 @@
 //
 // File: clsload.cpp
 //
-
-
-
-//
-
-//
 // ============================================================================
 
 #include "common.h"
@@ -1399,9 +1393,9 @@ TypeHandle ClassLoader::LookupTypeHandleForTypeKeyInner(TypeKey *pKey, BOOL fChe
     // Check if it's the typical instantiation.  In this case it's not stored in the same
     // way as other constructed types.
     if (!pKey->IsConstructed() || 
-        pKey->GetKind() == ELEMENT_TYPE_CLASS && ClassLoader::IsTypicalInstantiation(pKey->GetModule(), 
-                                                                                     pKey->GetTypeToken(),
-                                                                                     pKey->GetInstantiation()))
+        (pKey->GetKind() == ELEMENT_TYPE_CLASS && ClassLoader::IsTypicalInstantiation(pKey->GetModule(), 
+                                                                                      pKey->GetTypeToken(),
+                                                                                      pKey->GetInstantiation())))
     {
         return TypeHandle(pKey->GetModule()->LookupTypeDef(pKey->GetTypeToken()));
     }
@@ -3075,11 +3069,38 @@ ClassLoader::ResolveTokenToTypeDefThrowing(
     {
         nameHandle.SetTokenNotToLoad(tdAllTypes);
     }
-    
+
+    return ResolveNameToTypeDefThrowing(pFoundRefModule, &nameHandle, ppTypeDefModule, pTypeDefToken, loadFlag, pfUsesTypeForwarder);
+}
+
+/*static*/
+BOOL
+ClassLoader::ResolveNameToTypeDefThrowing(
+    Module *         pModule,
+    NameHandle *     pName,
+    Module **        ppTypeDefModule,
+    mdTypeDef *      pTypeDefToken,
+    Loader::LoadFlag loadFlag,
+    BOOL *           pfUsesTypeForwarder) // The semantic of this parameter: TRUE if a type forwarder is found. It is never set to FALSE.
+{    
+    CONTRACT(BOOL)
+    {
+        if (FORBIDGC_LOADER_USE_ENABLED()) NOTHROW; else THROWS;
+        if (FORBIDGC_LOADER_USE_ENABLED()) GC_NOTRIGGER; else GC_TRIGGERS;
+        MODE_ANY;
+        if (FORBIDGC_LOADER_USE_ENABLED()) FORBID_FAULT; else { INJECT_FAULT(COMPlusThrowOM()); }
+        PRECONDITION(CheckPointer(pModule));
+        PRECONDITION(CheckPointer(pName));
+        SUPPORTS_DAC;
+    }
+    CONTRACT_END;
+
+    TypeHandle typeHnd;
     mdToken  foundTypeDef;
     Module * pFoundModule;
     mdExportedType foundExportedType;
-    Module * pSourceModule = pFoundRefModule;
+    Module * pSourceModule = pModule;
+    Module * pFoundRefModule = pModule;
     
     for (UINT32 nTypeForwardingChainSize = 0; nTypeForwardingChainSize < const_cMaxTypeForwardingChainSize; nTypeForwardingChainSize++)
     {
@@ -3087,7 +3108,7 @@ ClassLoader::ResolveTokenToTypeDefThrowing(
         pFoundModule = NULL;
         foundExportedType = mdTokenNil;
         if (!pSourceModule->GetClassLoader()->FindClassModuleThrowing(
-            &nameHandle, 
+            pName,
             &typeHnd, 
             &foundTypeDef, 
             &pFoundModule, 
@@ -4880,7 +4901,7 @@ BOOL AccessCheckOptions::DemandMemberAccess(AccessCheckContext *pContext, Method
         _ASSERTE(GetAppDomain()->GetSecurityDescriptor()->IsFullyTrusted() ||
                  m_accessCheckType == kRestrictedMemberAccess);
 
-        if (visibilityCheck)
+        if (visibilityCheck && Security::IsTransparencyEnforcementEnabled())
         {
             // In CoreCLR RMA means visibility checks always succeed if the target is user code.
             if ((m_accessCheckType == kRestrictedMemberAccess || m_accessCheckType == kRestrictedMemberAccessNoTransparency) &&
@@ -5530,6 +5551,9 @@ static BOOL CheckTransparentAccessToCriticalCode(
     }
     CONTRACTL_END;
 
+    if (!Security::IsTransparencyEnforcementEnabled())
+        return TRUE;
+
     // At most one of these should be non-NULL
     _ASSERTE(1 >= ((pOptionalTargetMethod ? 1 : 0) +
                    (pOptionalTargetField ? 1 : 0) +
@@ -5561,11 +5585,8 @@ static BOOL CheckTransparentAccessToCriticalCode(
         {
             SecurityTransparent::LogTransparencyError(pContext->GetCallerMethod(), "Transparent code accessing a critical type, method, or field", pOptionalTargetMethod);
         }
-        if (!g_pConfig->DisableTransparencyEnforcement())
 #endif // _DEBUG
-        {
-            return accessCheckOptions.DemandMemberAccessOrFail(pContext, pTargetMT, FALSE /*visibilityCheck*/);
-        }
+        return accessCheckOptions.DemandMemberAccessOrFail(pContext, pTargetMT, FALSE /*visibilityCheck*/);
     }
 
     return TRUE;
@@ -6241,7 +6262,7 @@ BOOL ClassLoader::CheckAccessMember(                // TRUE if access is allowed
     // it was already done in CanAccessClass above.
 
     if (accessCheckOptions.TransparencyCheckNeeded() &&
-        (checkTargetMethodTransparency && pOptionalTargetMethod ||
+        ((checkTargetMethodTransparency && pOptionalTargetMethod) ||
          pOptionalTargetField))
     {
         if (!CheckTransparentAccessToCriticalCode(

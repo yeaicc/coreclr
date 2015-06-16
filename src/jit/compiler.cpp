@@ -885,8 +885,9 @@ void                Compiler::compDisplayStaticSizes(FILE* fout)
 #if FEATURE_STACK_FP_X87
     fprintf(fout, "Offset / size of gtFPlvl        = %2u / %2u\n", offsetof(GenTree, gtFPlvl       ), sizeof(gtDummy->gtFPlvl       ));
 #endif // FEATURE_STACK_FP_X87
-    fprintf(fout, "Offset / size of gtCostEx       = %2u / %2u\n", offsetof(GenTree, _gtCostEx     ), sizeof(gtDummy->_gtCostEx     ));
-    fprintf(fout, "Offset / size of gtCostSz       = %2u / %2u\n", offsetof(GenTree, _gtCostSz     ), sizeof(gtDummy->_gtCostSz     ));
+// TODO: The section that report GenTree sizes should be made into a public static member function of the GenTree class (see https://github.com/dotnet/coreclr/pull/493)
+//    fprintf(fout, "Offset / size of gtCostEx       = %2u / %2u\n", offsetof(GenTree, _gtCostEx     ), sizeof(gtDummy->_gtCostEx     ));
+//    fprintf(fout, "Offset / size of gtCostSz       = %2u / %2u\n", offsetof(GenTree, _gtCostSz     ), sizeof(gtDummy->_gtCostSz     ));
     fprintf(fout, "Offset / size of gtFlags        = %2u / %2u\n", offsetof(GenTree, gtFlags       ), sizeof(gtDummy->gtFlags       ));
     fprintf(fout, "Offset / size of gtVNPair       = %2u / %2u\n", offsetof(GenTree, gtVNPair      ), sizeof(gtDummy->gtVNPair      ));
     fprintf(fout, "Offset / size of gtRsvdRegs     = %2u / %2u\n", offsetof(GenTree, gtRsvdRegs    ), sizeof(gtDummy->gtRsvdRegs    ));
@@ -2983,7 +2984,8 @@ bool  Compiler::compRsvdRegCheck(FrameLayoutState curState)
 // importing, morphing, optimizations and code generation.  This is called from the EE through the
 // code:CILJit::compileMethod function.  
 // 
-// See the document jitOverview.doc file in this directory for an overview of the structure of the JIT. 
+// For an overview of the structure of the JIT, see:
+//   https://github.com/dotnet/coreclr/blob/master/Documentation/ryujit-overview.md
 //  
 void                 Compiler::compCompile(void * * methodCodePtr,
                                            ULONG  * methodCodeSize,

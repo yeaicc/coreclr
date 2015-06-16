@@ -55,6 +55,7 @@ enum gc_reason
     reason_gcstress = 8,        // this turns into reason_induced & gc_mechanisms.stress_induced = true
     reason_lowmemory_blocking = 9,
     reason_induced_compacting = 10,
+    reason_lowmemory_host = 11,
     reason_max
 };
 
@@ -198,6 +199,9 @@ public:
     BOOL CancelFullGCNotification();
     int WaitForFullGCApproach(int millisecondsTimeout);
     int WaitForFullGCComplete(int millisecondsTimeout);
+
+    int StartNoGCRegion(ULONGLONG totalSize, BOOL lohSizeKnown, ULONGLONG lohSize, BOOL disallowFullBlockingGC);
+    int EndNoGCRegion();
 
     PER_HEAP_ISOLATED     unsigned GetMaxGeneration();
  

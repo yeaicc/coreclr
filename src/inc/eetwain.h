@@ -32,7 +32,7 @@
 #include "stackwalktypes.h"
 #include "bitvector.h"
 
-#if defined(_WIN64) || defined(_TARGET_ARM_)
+#if !defined(_TARGET_X86_)
 #define USE_GC_INFO_DECODER
 #endif
 
@@ -42,6 +42,8 @@
 #else
 #define CHECK_APP_DOMAIN    0
 #endif
+
+#define NO_OVERRIDE_OFFSET (DWORD)-1
 
 struct EHContext;
 
@@ -133,7 +135,7 @@ enum GenericParamContextType
 
 class ICodeManager
 {
-    VPTR_BASE_VTABLE_CLASS(ICodeManager)
+    VPTR_BASE_VTABLE_CLASS_AND_CTOR(ICodeManager)
 
 public:
 
@@ -231,7 +233,8 @@ virtual bool EnumGcRefs(PREGDISPLAY     pContext,
                         EECodeInfo     *pCodeInfo,
                         unsigned        flags,
                         GCEnumCallback  pCallback,
-                        LPVOID          hCallBack) = 0;
+                        LPVOID          hCallBack,
+                        DWORD           relOffsetOverride = NO_OVERRIDE_OFFSET) = 0;
 
 /*
     Return the address of the local security object reference
@@ -353,7 +356,7 @@ struct hdrInfo;
 
 class EECodeManager : public ICodeManager {
 
-    VPTR_VTABLE_CLASS(EECodeManager, ICodeManager)
+    VPTR_VTABLE_CLASS_AND_CTOR(EECodeManager, ICodeManager)
 
 public:
 
@@ -460,16 +463,17 @@ bool EnumGcRefs(PREGDISPLAY     pContext,
                 EECodeInfo     *pCodeInfo,
                 unsigned        flags,
                 GCEnumCallback  pCallback,
-                LPVOID          hCallBack);
+                LPVOID          hCallBack,
+                DWORD           relOffsetOverride = NO_OVERRIDE_OFFSET);
 
 #ifdef FEATURE_CONSERVATIVE_GC
 // Temporary conservative collection, for testing purposes, until we have
 // accurate gc info from the JIT.
-bool EECodeManager::EnumGcRefsConservative(PREGDISPLAY     pRD,
-                                           EECodeInfo     *pCodeInfo,
-                                           unsigned        flags,
-                                           GCEnumCallback  pCallBack,
-                                           LPVOID          hCallBack);
+bool EnumGcRefsConservative(PREGDISPLAY     pRD,
+                            EECodeInfo     *pCodeInfo,
+                            unsigned        flags,
+                            GCEnumCallback  pCallBack,
+                            LPVOID          hCallBack);
 #endif // FEATURE_CONSERVATIVE_GC
 
 /*

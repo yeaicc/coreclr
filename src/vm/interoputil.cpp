@@ -295,20 +295,53 @@ static const BinderMethodID s_stubsDisposableToClosable[] =
     METHOD__IDISPOSABLE_TO_ICLOSABLE_ADAPTER__CLOSE
 };
 
+#ifdef FEATURE_CORECLR
+DEFINE_ASM_QUAL_TYPE_NAME(NCCWINRT_ASM_QUAL_TYPE_NAME, g_INotifyCollectionChanged_WinRTName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NCCMA_ASM_QUAL_TYPE_NAME, g_NotifyCollectionChangedToManagedAdapterName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NCCWA_ASM_QUAL_TYPE_NAME, g_NotifyCollectionChangedToWinRTAdapterName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NPCWINRT_ASM_QUAL_TYPE_NAME, g_INotifyPropertyChanged_WinRTName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NPCMA_ASM_QUAL_TYPE_NAME, g_NotifyPropertyChangedToManagedAdapterName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NPCWA_ASM_QUAL_TYPE_NAME, g_NotifyPropertyChangedToWinRTAdapterName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(CMDWINRT_ASM_QUAL_TYPE_NAME, g_ICommand_WinRTName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(CMDMA_ASM_QUAL_TYPE_NAME, g_ICommandToManagedAdapterName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(CMDWA_ASM_QUAL_TYPE_NAME, g_ICommandToWinRTAdapterName, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NCCEHWINRT_ASM_QUAL_TYPE_NAME, g_NotifyCollectionChangedEventHandler_WinRT, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(PCEHWINRT_ASM_QUAL_TYPE_NAME, g_PropertyChangedEventHandler_WinRT_Name, g_SystemRuntimeWindowsRuntimeAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+#else
+DEFINE_ASM_QUAL_TYPE_NAME(NCCWINRT_ASM_QUAL_TYPE_NAME, g_INotifyCollectionChanged_WinRTName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NCCMA_ASM_QUAL_TYPE_NAME, g_NotifyCollectionChangedToManagedAdapterName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NCCWA_ASM_QUAL_TYPE_NAME, g_NotifyCollectionChangedToWinRTAdapterName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NPCWINRT_ASM_QUAL_TYPE_NAME, g_INotifyPropertyChanged_WinRTName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NPCMA_ASM_QUAL_TYPE_NAME, g_NotifyPropertyChangedToManagedAdapterName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NPCWA_ASM_QUAL_TYPE_NAME, g_NotifyPropertyChangedToWinRTAdapterName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(CMDWINRT_ASM_QUAL_TYPE_NAME, g_ICommand_WinRTName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(CMDMA_ASM_QUAL_TYPE_NAME, g_ICommandToManagedAdapterName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(CMDWA_ASM_QUAL_TYPE_NAME, g_ICommandToWinRTAdapterName, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(NCCEHWINRT_ASM_QUAL_TYPE_NAME, g_NotifyCollectionChangedEventHandler_WinRT, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+DEFINE_ASM_QUAL_TYPE_NAME(PCEHWINRT_ASM_QUAL_TYPE_NAME, g_PropertyChangedEventHandler_WinRT_Name, g_SystemAsmName, VER_ASSEMBLYVERSION_STR, g_ECMAKeyToken);
+
+#endif
+
 const WinRTInterfaceRedirector::NonMscorlibRedirectedInterfaceInfo WinRTInterfaceRedirector::s_rNonMscorlibInterfaceInfos[3] =
 {
-    { WinMDAdapter::FrameworkAssembly_System, W("System.Runtime.InteropServices.WindowsRuntime.INotifyCollectionChanged_WinRT"),
-                                              W("System.Runtime.InteropServices.WindowsRuntime.NotifyCollectionChangedToManagedAdapter"),
-                                              W("System.Runtime.InteropServices.WindowsRuntime.NotifyCollectionChangedToWinRTAdapter"),
-                                              s_stubNamesNotifyCollectionChanged },
-    { WinMDAdapter::FrameworkAssembly_System, W("System.Runtime.InteropServices.WindowsRuntime.INotifyPropertyChanged_WinRT"),
-                                              W("System.Runtime.InteropServices.WindowsRuntime.NotifyPropertyChangedToManagedAdapter"),
-                                              W("System.Runtime.InteropServices.WindowsRuntime.NotifyPropertyChangedToWinRTAdapter"),
-                                              s_stubNamesNotifyPropertyChanged },
-    { WinMDAdapter::FrameworkAssembly_System, W("System.Runtime.InteropServices.WindowsRuntime.ICommand_WinRT"),
-                                              W("System.Runtime.InteropServices.WindowsRuntime.ICommandToManagedAdapter"),
-                                              W("System.Runtime.InteropServices.WindowsRuntime.ICommandToWinRTAdapter"),
-                                              s_stubNamesICommand },
+    {
+        NCCWINRT_ASM_QUAL_TYPE_NAME,
+        NCCMA_ASM_QUAL_TYPE_NAME,
+        NCCWA_ASM_QUAL_TYPE_NAME,
+        s_stubNamesNotifyCollectionChanged 
+    },
+    {
+        NPCWINRT_ASM_QUAL_TYPE_NAME,
+        NPCMA_ASM_QUAL_TYPE_NAME,
+        NPCWA_ASM_QUAL_TYPE_NAME,
+        s_stubNamesNotifyPropertyChanged 
+    },
+    {
+        CMDWINRT_ASM_QUAL_TYPE_NAME,
+        CMDMA_ASM_QUAL_TYPE_NAME,
+        CMDWA_ASM_QUAL_TYPE_NAME,
+        s_stubNamesICommand 
+    },
 };
 
 #define SYSTEMDLL__INOTIFYCOLLECTIONCHANGED ((BinderClassID)(WinRTInterfaceRedirector::NON_MSCORLIB_MARKER | 0))
@@ -516,17 +549,15 @@ BOOL IsManagedObject(IUnknown *pIUnknown)
     }
     CONTRACTL_END;
 
-    if (AppX::IsAppXProcess())
+    //Check based on IUnknown slots, i.e. we'll see whether the IP maps to a CCW.
+    if (MapIUnknownToWrapper(pIUnknown) != NULL)
     {
-        //In AppX we don't support IManagedObject so we'll do the check based on
-        //IUnknown slots, i.e. we'll see whether the IP maps to a CCW.
-        if (MapIUnknownToWrapper(pIUnknown) != NULL)
-        {
-            // We found an existing CCW hence this is a managed exception.
-            return TRUE;
-        }
+        // We found an existing CCW hence this is a managed exception.
+        return TRUE;
     }
-    else
+    
+    // QI IManagedObject. Note AppX doesn't support IManagedObject
+    if (!AppX::IsAppXProcess())
     {
         SafeComHolder<IManagedObject> pManagedObject = NULL;
         HRESULT hrLocal = SafeQueryInterface(pIUnknown, IID_IManagedObject, (IUnknown**)&pManagedObject);
@@ -1509,7 +1540,7 @@ ULONG SafeReleasePreemp(IUnknown * pUnk, RCW * pRCW)
     return res;
 }
 
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_AMD64_) && defined(_MSC_VER)
 // codegen bug on amd64 causes BBT to fail for the following function.  as a
 // workaround I have disabled optimizations for it until we get an updated toolset.
 #pragma optimize( "", off )
@@ -1600,7 +1631,7 @@ ULONG SafeRelease(IUnknown* pUnk, RCW* pRCW)
 
     return res;
 }
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_AMD64_) && defined(_MSC_VER)
 // turn optimizations back on
 #pragma optimize( "", on )
 #endif
@@ -6065,12 +6096,14 @@ MethodTable *WinRTInterfaceRedirector::GetWinRTTypeForRedirectedInterfaceIndex(W
     {
         // the redirected interface lives in some other Framework assembly
         const NonMscorlibRedirectedInterfaceInfo *pInfo = &s_rNonMscorlibInterfaceInfos[id & ~NON_MSCORLIB_MARKER];
-        RETURN LoadTypeFromRedirectedAssembly(pInfo->m_AssemblyIndex, pInfo->m_wzWinRTInterfaceTypeName);
+        SString assemblyQualifiedTypeName(SString::Utf8, pInfo->m_szWinRTInterfaceAssemblyQualifiedTypeName);
+
+        RETURN TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
     }
 }
 
 //
-MethodTable *WinRTInterfaceRedirector::LoadTypeFromRedirectedAssembly(WinMDAdapter::FrameworkAssemblyIndex index, LPCWSTR wzTypeName)
+MethodDesc *WinRTInterfaceRedirector::LoadMethodFromRedirectedAssembly(LPCUTF8 szAssemblyQualifiedTypeName, LPCUTF8 szMethodName)
 {
     CONTRACTL
     {
@@ -6080,26 +6113,9 @@ MethodTable *WinRTInterfaceRedirector::LoadTypeFromRedirectedAssembly(WinMDAdapt
     }
     CONTRACTL_END;
 
-    Assembly *pAssembly;
+    SString assemblyQualifiedTypeName(SString::Utf8, szAssemblyQualifiedTypeName);
 
-    if (!::GetAppDomain()->FindRedirectedAssemblyFromIndexIfLoaded(index, &pAssembly))
-        return NULL;
-
-    return TypeName::GetTypeFromAssembly(wzTypeName, pAssembly).GetMethodTable();
-}
-
-//
-MethodDesc *WinRTInterfaceRedirector::LoadMethodFromRedirectedAssembly(WinMDAdapter::FrameworkAssemblyIndex index, LPCWSTR wzTypeName, LPCUTF8 szMethodName)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    MethodTable *pMT = LoadTypeFromRedirectedAssembly(index, wzTypeName);
+    MethodTable *pMT = TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
     return MemberLoader::FindMethodByName(pMT, szMethodName);
 }
 
@@ -6215,8 +6231,7 @@ MethodDesc *WinRTInterfaceRedirector::GetStubMethodForRedirectedInterface(WinMDA
         const NonMscorlibRedirectedInterfaceInfo *pInfo = &s_rNonMscorlibInterfaceInfos[pStubInfo->m_WinRTInterface & ~NON_MSCORLIB_MARKER];
 
         pMD = LoadMethodFromRedirectedAssembly(
-            pInfo->m_AssemblyIndex,
-            (interopKind == TypeHandle::Interop_NativeToManaged) ? pInfo->m_wzWinRTStubClassTypeName : pInfo->m_wzCLRStubClassTypeName,
+            (interopKind == TypeHandle::Interop_NativeToManaged) ? pInfo->m_szWinRTStubClassAssemblyQualifiedTypeName : pInfo->m_szCLRStubClassAssemblyQualifiedTypeName,
             pInfo->m_rszMethodNames[method]);
     }
 
@@ -6368,16 +6383,14 @@ MethodTable *WinRTDelegateRedirector::GetWinRTTypeForRedirectedDelegateIndex(Win
         
     case WinMDAdapter::RedirectedTypeIndex_System_Collections_Specialized_NotifyCollectionChangedEventHandler:
     {
-        Assembly *pAssembly;
-        VERIFY(::GetAppDomain()->FindRedirectedAssemblyFromIndexIfLoaded(WinMDAdapter::FrameworkAssembly_System, &pAssembly));
-        return TypeName::GetTypeFromAssembly(W("System.Runtime.InteropServices.WindowsRuntime.NotifyCollectionChangedEventHandler_WinRT"), pAssembly).GetMethodTable();
+        SString assemblyQualifiedTypeName(SString::Utf8, NCCEHWINRT_ASM_QUAL_TYPE_NAME);
+        return TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
     }
 
     case WinMDAdapter::RedirectedTypeIndex_System_ComponentModel_PropertyChangedEventHandler:
     {
-        Assembly *pAssembly;
-        VERIFY(::GetAppDomain()->FindRedirectedAssemblyFromIndexIfLoaded(WinMDAdapter::FrameworkAssembly_System, &pAssembly));
-        return TypeName::GetTypeFromAssembly(W("System.Runtime.InteropServices.WindowsRuntime.PropertyChangedEventHandler_WinRT"), pAssembly).GetMethodTable();
+        SString assemblyQualifiedTypeName(SString::Utf8, PCEHWINRT_ASM_QUAL_TYPE_NAME);
+        return TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
     }
 
     default:

@@ -46,7 +46,7 @@ void InitJITHelpers1();
 void InitJITHelpers2();
 
 PCODE UnsafeJitFunction(MethodDesc* ftn, COR_ILMETHOD_DECODER* header,
-                        DWORD flags, DWORD flags2);
+                        DWORD flags, DWORD flags2, ULONG* sizeOfCode = NULL);
 
 void getMethodInfoHelper(MethodDesc * ftn,
                          CORINFO_METHOD_HANDLE ftnHnd,
@@ -1069,6 +1069,19 @@ public:
 
     DWORD getExpectedTargetArchitecture();
 
+    int getIntConfigValue(
+        const wchar_t *name,
+        int defaultValue
+        );
+
+    wchar_t *getStringConfigValue(
+        const wchar_t *name
+        );
+
+    void freeStringConfigValue(
+        wchar_t *value
+        );
+
     CEEInfo(MethodDesc * fd = NULL, bool fVerifyOnly = false) :
         m_pOverride(NULL),
         m_pMethodBeingCompiled(fd),
@@ -1080,7 +1093,7 @@ public:
         LIMITED_METHOD_CONTRACT;
     }
 
-    ~CEEInfo()
+    virtual ~CEEInfo()
     {
         LIMITED_METHOD_CONTRACT;
     }
@@ -1603,7 +1616,7 @@ FCDECL0(VOID, JIT_PollGC);
 EXTERN_C FCDECL0(VOID, JIT_PollGC_Nop);
 #endif
 
-BOOL ObjIsInstanceOf(Object *pObject, TypeHandle toTypeHnd);
+BOOL ObjIsInstanceOf(Object *pObject, TypeHandle toTypeHnd, BOOL throwCastException = FALSE);
 EXTERN_C TypeHandle::CastResult STDCALL ObjIsInstanceOfNoGC(Object *pObject, TypeHandle toTypeHnd);
 
 #ifdef _WIN64

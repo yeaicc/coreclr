@@ -25,16 +25,17 @@ Revision History:
 #include "pal/dbgmsg.h"
 #include "pal/file.h"
 #include "pal/module.h"
+#include "pal/malloc.hpp"
 
 #include <errno.h>
 #include <unistd.h> 
 #include <time.h>
+#include <pthread.h>
+#include <dlfcn.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif // __APPLE__
-
-extern char g_szCoreCLRPath[MAX_PATH];
 
 SET_DEFAULT_DEBUG_CHANNEL(MISC);
 
@@ -68,6 +69,11 @@ PAL_GetPALDirectoryW( OUT LPWSTR lpDirectoryName, IN UINT cchDirectoryName )
     ENTRY( "PAL_GetPALDirectoryW( %p, %d )\n", lpDirectoryName, cchDirectoryName );
 
     lpFullPathAndName = pal_module.lib_name;
+    if (lpFullPathAndName == NULL)
+    {
+        SetLastError(ERROR_INTERNAL_ERROR);
+        goto EXIT;
+    }
     lpEndPoint = PAL_wcsrchr( lpFullPathAndName, '/' );
     if ( lpEndPoint )
     {
@@ -298,3 +304,4 @@ PAL_Random(
     PERF_EXIT(PAL_Random);
     return bRet;
 }
+

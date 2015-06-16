@@ -254,7 +254,7 @@ cpp_quote("EXTERN_GUID(IID_ITypeNameFactory, 0xB81FF171, 0x20F3, 0x11d2, 0x8d, 0
 #pragma midl_echo("DEPRECATED_CLR_STDAPI GetFileVersion(LPCWSTR szFilename, _Out_writes_to_opt_(cchBuffer, *dwLength) LPWSTR szBuffer, DWORD cchBuffer, DWORD* dwLength);")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI GetCORRequiredVersion(_Out_writes_to_(cchBuffer, *dwLength) LPWSTR pbuffer, DWORD cchBuffer, DWORD* dwLength);")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI GetRequestedRuntimeInfo(LPCWSTR pExe, LPCWSTR pwszVersion, LPCWSTR pConfigurationFile, DWORD startupFlags, DWORD runtimeInfoFlags, _Out_writes_opt_(dwDirectory) LPWSTR pDirectory, DWORD dwDirectory, _Out_opt_ DWORD *dwDirectoryLength, _Out_writes_opt_(cchBuffer) LPWSTR pVersion, DWORD cchBuffer, _Out_opt_ DWORD* dwlength);")
-#pragma midl_echo("DEPRECATED_CLR_STDAPI GetRequestedRuntimeVersion(_In_ LPWSTR pExe, _Out_writes_to_(cchBuffer, *pdwLength) LPWSTR pVersion, DWORD cchBuffer, _Out_ DWORD* dwLength);")
+#pragma midl_echo("DEPRECATED_CLR_STDAPI GetRequestedRuntimeVersion(_In_ LPWSTR pExe, _Out_writes_to_(cchBuffer, *dwLength) LPWSTR pVersion, DWORD cchBuffer, _Out_ DWORD* dwLength);")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI CorBindToRuntimeHost(LPCWSTR pwszVersion, LPCWSTR pwszBuildFlavor, LPCWSTR pwszHostConfigFile, VOID* pReserved, DWORD startupFlags, REFCLSID rclsid, REFIID riid, LPVOID FAR *ppv);")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI CorBindToRuntimeEx(LPCWSTR pwszVersion, LPCWSTR pwszBuildFlavor, DWORD startupFlags, REFCLSID rclsid, REFIID riid, LPVOID FAR *ppv);")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI CorBindToRuntimeByCfg(IStream* pCfgStream, DWORD reserved, DWORD startupFlags, REFCLSID rclsid,REFIID riid, LPVOID FAR* ppv);")
@@ -272,6 +272,7 @@ cpp_quote("EXTERN_GUID(IID_ITypeNameFactory, 0xB81FF171, 0x20F3, 0x11d2, 0x8d, 0
 #pragma midl_echo("DEPRECATED_CLR_STDAPI LoadStringRCEx(LCID lcid, UINT iResouceID, _Out_writes_z_(iMax) LPWSTR szBuffer, int iMax, int bQuiet, int *pcwchUsed);")
 #endif
 
+#ifndef FEATURE_CORECLR
 // Ideally we would like to make the function pointer definition below as DEPRECATED_CLR_STDAPI. However,
 // since it is referenced in the following definition of LockClrVersion, it will result in a build failure
 // in our own build (since we treat warnings as errors).
@@ -282,7 +283,10 @@ cpp_quote("EXTERN_GUID(IID_ITypeNameFactory, 0xB81FF171, 0x20F3, 0x11d2, 0x8d, 0
 #pragma midl_echo("typedef HRESULT (__stdcall *FLockClrVersionCallback) ();")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI LockClrVersion(FLockClrVersionCallback hostCallback,FLockClrVersionCallback *pBeginHostSetup,FLockClrVersionCallback *pEndHostSetup);")
 #pragma midl_echo("DEPRECATED_CLR_STDAPI CreateDebuggingInterfaceFromVersion(int iDebuggerVersion, LPCWSTR szDebuggeeVersion, IUnknown ** ppCordb);")
-#pragma midl_echo("DEPRECATED_CLR_STDAPI GetVersionFromProcess(HANDLE hProcess, _Out_writes_to_(cchBuffer, *pdwLength) LPWSTR pVersion, DWORD cchBuffer, _Out_ DWORD* dwLength);")
+#pragma midl_echo("DEPRECATED_CLR_STDAPI GetVersionFromProcess(HANDLE hProcess, _Out_writes_to_(cchBuffer, *dwLength) LPWSTR pVersion, DWORD cchBuffer, _Out_ DWORD* dwLength);")
+#endif
+
+
 #ifdef FEATURE_CORECLR
 #pragma midl_echo("typedef HRESULT  (STDAPICALLTYPE *FnGetCLRRuntimeHost)(REFIID riid, IUnknown **pUnk);")
 #endif
@@ -368,6 +372,8 @@ typedef enum
 
     APPDOMAIN_ENABLE_PLATFORM_SPECIFIC_APPS = 0x40,
     APPDOMAIN_ENABLE_ASSEMBLY_LOADFILE = 0x80,
+
+    APPDOMAIN_DISABLE_TRANSPARENCY_ENFORCEMENT = 0x100,
 #endif //FEATURE_CORECLR  
 } APPDOMAIN_SECURITY_FLAGS;
 
@@ -1980,11 +1986,8 @@ interface ICLRRuntimeHost : IUnknown
 };
 
 #ifdef FEATURE_CORECLR
-// This is the key that the host needs to pass to us in the call to ICLRRuntmeHost2::Authenticate.
-// This key is generated using the CalcFileTime utility under ndp\clr\src\coreclr\CalcFileTime.
-// See comments of CorHost2::Authenticate for details.
 
-// This key corresponds to 28th August 2006
+// Keys for ICLRRuntmeHost2::Authenticate. No longer required.
 cpp_quote("#define CORECLR_HOST_AUTHENTICATION_KEY 0x1C6CA6F94025800LL")
 cpp_quote("#define CORECLR_HOST_AUTHENTICATION_KEY_NONGEN 0x1C6CA6F94025801LL")
 
@@ -2018,8 +2021,7 @@ interface ICLRRuntimeHost2 : ICLRRuntimeHost
                                  [in] LPCWSTR wszMethodName,
                                  [out] INT_PTR* fnPtr);
 
-    // Authenticates a host based upon a key value. See CorHost2::Authenticate comments
-    // for details.
+    // Authenticates a host based upon a key value. No longer required.
     HRESULT Authenticate([in] ULONGLONG authKey);
 
     // Ensures CLR-set Mac (Mach) EH port is registered.

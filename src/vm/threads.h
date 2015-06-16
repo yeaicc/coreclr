@@ -236,6 +236,7 @@ public:
     }
 
     PTR_Frame GetFrame() { return NULL; }
+    void SetFrame(Frame *pFrame) { }
     DWORD CatchAtSafePoint() { return 0; }
     DWORD CatchAtSafePointOpportunistic() { return 0; }
 
@@ -2078,7 +2079,9 @@ public:
     // Destructor
     //--------------------------------------------------------------
 #ifndef DACCESS_COMPILE
-    ~Thread();
+    virtual ~Thread();
+#else    
+    virtual ~Thread() {}
 #endif
 
 #ifdef FEATURE_COMINTEROP_APARTMENT_SUPPORT
@@ -3544,7 +3547,7 @@ public:
     #define NOTIFY_ON_INITIAL_NATIVE_CONTEXT 0x4000
     
     // Indicates that we are enumerating GC references and should follow appropriate
-    // callback rules for parent methods vs funclets. Only supported on X64 and Evanesco.
+    // callback rules for parent methods vs funclets. Only supported on non-x86 platforms.
     // 
     // Refer to StackFrameIterator::Filter for detailed comments on this flag.
     #define GC_FUNCLET_REFERENCE_REPORTING 0x8000
@@ -5681,6 +5684,8 @@ public:
 
     // RemoveThread finds the thread in the ThreadStore and discards it.
     static BOOL RemoveThread(Thread *target);
+
+    static BOOL CanAcquireLock();
 
     // Transfer a thread from the unstarted to the started list.
     // WARNING : only GC calls this with bRequiresTSL set to FALSE.

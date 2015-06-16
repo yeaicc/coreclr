@@ -24,6 +24,7 @@ Abstract:
 #include "pal/dbgmsg.h"
 #include "pal/context.h"
 #include "pal/debug.h"
+#include "pal/thread.hpp"
 
 #include <sys/ptrace.h> 
 #include <errno.h>
@@ -31,12 +32,8 @@ Abstract:
 
 SET_DEFAULT_DEBUG_CHANNEL(DEBUG);
 
-
-void CONTEXT_CaptureContext(LPCONTEXT lpContext)
-{
-    // TODO: this needs to be implemented. See context2.s
-    _ASSERT(FALSE);
-}
+// in context2.S
+extern void CONTEXT_CaptureContext(LPCONTEXT lpContext);
 
 #ifdef _X86_
 #define CONTEXT_ALL_FLOATING (CONTEXT_FLOATING_POINT | CONTEXT_EXTENDED_REGISTERS)
@@ -55,126 +52,6 @@ void CONTEXT_CaptureContext(LPCONTEXT lpContext)
 #if HAVE_PT_REGS
 #include <asm/ptrace.h>
 #endif  // HAVE_PT_REGS
-
-#if HAVE_GREGSET_T
-
-#ifdef BIT64
-#define MCREG_Rbx(mc)       ((mc).gregs[REG_RBX])
-#define MCREG_Rcx(mc)       ((mc).gregs[REG_RCX])
-#define MCREG_Rdx(mc)       ((mc).gregs[REG_RDX])
-#define MCREG_Rsi(mc)       ((mc).gregs[REG_RSI])
-#define MCREG_Rdi(mc)       ((mc).gregs[REG_RDI])
-#define MCREG_Rbp(mc)       ((mc).gregs[REG_RBP])
-#define MCREG_Rax(mc)       ((mc).gregs[REG_RAX])
-#define MCREG_Rip(mc)       ((mc).gregs[REG_RIP])
-#define MCREG_Rsp(mc)       ((mc).gregs[REG_RSP])
-#define MCREG_SegCs(mc)     ((mc).gregs[REG_CSGSFS])
-#define MCREG_R8(mc)        ((mc).gregs[REG_R8])
-#define MCREG_R9(mc)        ((mc).gregs[REG_R9])
-#define MCREG_R10(mc)       ((mc).gregs[REG_R10])
-#define MCREG_R11(mc)       ((mc).gregs[REG_R11])
-#define MCREG_R12(mc)       ((mc).gregs[REG_R12])
-#define MCREG_R13(mc)       ((mc).gregs[REG_R13])
-#define MCREG_R14(mc)       ((mc).gregs[REG_R14])
-#define MCREG_R15(mc)       ((mc).gregs[REG_R15])
-
-#else // BIT64
-
-#define MCREG_Ebx(mc)       ((mc).gregs[REG_EBX])
-#define MCREG_Ecx(mc)       ((mc).gregs[REG_ECX])
-#define MCREG_Edx(mc)       ((mc).gregs[REG_EDX])
-#define MCREG_Esi(mc)       ((mc).gregs[REG_ESI])
-#define MCREG_Edi(mc)       ((mc).gregs[REG_EDI])
-#define MCREG_Ebp(mc)       ((mc).gregs[REG_EBP])
-#define MCREG_Eax(mc)       ((mc).gregs[REG_EAX])
-#define MCREG_Eip(mc)       ((mc).gregs[REG_EIP])
-#define MCREG_Esp(mc)       ((mc).gregs[REG_ESP])
-#define MCREG_SegCs(mc)     ((mc).gregs[REG_CS])
-#define MCREG_SegSs(mc)     ((mc).gregs[REG_SS])
-
-#endif // BIT64
-
-#define MCREG_EFlags(mc)    ((mc).gregs[REG_EFL])
-
-#else // HAVE_GREGSET_T
-
-#define MCREG_Ebx(mc)       ((mc).mc_ebx)
-#define MCREG_Ecx(mc)       ((mc).mc_ecx)
-#define MCREG_Edx(mc)       ((mc).mc_edx)
-#define MCREG_Esi(mc)       ((mc).mc_esi)
-#define MCREG_Edi(mc)       ((mc).mc_edi)
-#define MCREG_Ebp(mc)       ((mc).mc_ebp)
-#define MCREG_Eax(mc)       ((mc).mc_eax)
-#define MCREG_Eip(mc)       ((mc).mc_eip)
-#define MCREG_SegCs(mc)     ((mc).mc_cs)
-#define MCREG_EFlags(mc)    ((mc).mc_eflags)
-#define MCREG_Esp(mc)       ((mc).mc_esp)
-#define MCREG_SegSs(mc)     ((mc).mc_ss)
-
-#endif // HAVE_GREGSET_T
-
-
-#if HAVE_PT_REGS
-
-#ifdef BIT64
-#define PTREG_Rbx(ptreg)    ((ptreg).rbx)
-#define PTREG_Rcx(ptreg)    ((ptreg).rcx)
-#define PTREG_Rdx(ptreg)    ((ptreg).rdx)
-#define PTREG_Rsi(ptreg)    ((ptreg).rsi)
-#define PTREG_Rdi(ptreg)    ((ptreg).rdi)
-#define PTREG_Rbp(ptreg)    ((ptreg).rbp)
-#define PTREG_Rax(ptreg)    ((ptreg).rax)
-#define PTREG_Rip(ptreg)    ((ptreg).rip)
-#define PTREG_SegCs(ptreg)  ((ptreg).cs)
-#define PTREG_SegSs(ptreg)  ((ptreg).ss)
-#define PTREG_Rsp(ptreg)    ((ptreg).rsp)
-#define PTREG_R8(ptreg)     ((ptreg).r8)
-#define PTREG_R9(ptreg)     ((ptreg).r9)
-#define PTREG_R10(ptreg)    ((ptreg).r10)
-#define PTREG_R11(ptreg)    ((ptreg).r11)
-#define PTREG_R12(ptreg)    ((ptreg).r12)
-#define PTREG_R13(ptreg)    ((ptreg).r13)
-#define PTREG_R14(ptreg)    ((ptreg).r14)
-#define PTREG_R15(ptreg)    ((ptreg).r15)
-
-#else // BIT64
-
-#define PTREG_Ebx(ptreg)    ((ptreg).ebx)
-#define PTREG_Ecx(ptreg)    ((ptreg).ecx)
-#define PTREG_Edx(ptreg)    ((ptreg).edx)
-#define PTREG_Esi(ptreg)    ((ptreg).esi)
-#define PTREG_Edi(ptreg)    ((ptreg).edi)
-#define PTREG_Ebp(ptreg)    ((ptreg).ebp)
-#define PTREG_Eax(ptreg)    ((ptreg).eax)
-#define PTREG_Eip(ptreg)    ((ptreg).eip)
-#define PTREG_SegCs(ptreg)  ((ptreg).xcs)
-#define PTREG_SegSs(ptreg)  ((ptreg).xss)
-#define PTREG_Esp(ptreg)    ((ptreg).esp)
-
-#endif // BIT64
-
-
-#define PTREG_EFlags(ptreg) ((ptreg).eflags)
-
-#endif // HAVE_PT_REGS
-
-
-#if HAVE_BSD_REGS_T
-
-#define BSDREG_Ebx(reg)     ((reg).r_ebx)
-#define BSDREG_Ecx(reg)     ((reg).r_ecx)
-#define BSDREG_Edx(reg)     ((reg).r_edx)
-#define BSDREG_Esi(reg)     ((reg).r_esi)
-#define BSDREG_Edi(reg)     ((reg).r_edi)
-#define BSDREG_Ebp(reg)     ((reg).r_ebp)
-#define BSDREG_Eax(reg)     ((reg).r_eax)
-#define BSDREG_Eip(reg)     ((reg).r_eip)
-#define BSDREG_SegCs(reg)   ((reg).r_cs)
-#define BSDREG_EFlags(reg)  ((reg).r_eflags)
-#define BSDREG_Esp(reg)     ((reg).r_esp)
-#define BSDREG_SegSs(reg)   ((reg).r_ss)
-
-#endif // HAVE_BSD_REGS_T
 
 #ifdef BIT64
 #define ASSIGN_CONTROL_REGS \
@@ -287,11 +164,11 @@ BOOL CONTEXT_GetRegisters(DWORD processId, ucontext_t *registers)
     {
 #if HAVE_PT_REGS
         struct pt_regs ptrace_registers;
+        if (ptrace((__ptrace_request)PT_GETREGS, processId, (caddr_t) &ptrace_registers, 0) == -1)
 #elif HAVE_BSD_REGS_T
         struct reg ptrace_registers;
+        if (ptrace(PT_GETREGS, processId, (caddr_t) &ptrace_registers, 0) == -1)
 #endif
-
-        if (ptrace((__ptrace_request)PT_GETREGS, processId, (caddr_t) &ptrace_registers, 0) == -1)
         {
             ASSERT("Failed ptrace(PT_GETREGS, processId:%d) errno:%d (%s)\n",
                    processId, errno, strerror(errno));
@@ -326,11 +203,7 @@ See MSDN doc.
 BOOL
 CONTEXT_GetThreadContext(
          DWORD dwProcessId,
-#if !defined(_AMD64_)
-         DWORD dwThreadId,
-#else // defined(_AMD64_)
-         DWORD64 dwThreadId,
-#endif // !defined(_AMD64_)
+         pthread_t self,
          DWORD dwLwpId,
          LPCONTEXT lpContext)
 {    
@@ -344,7 +217,7 @@ CONTEXT_GetThreadContext(
         goto EXIT;
     }
     
-    /* How to consider the case when dwThreadId is different from the current
+    /* How to consider the case when self is different from the current
        thread of its owner process. Machine registers values could be retreived
        by a ptrace(pid, ...) call or from the "/proc/%pid/reg" file content. 
        Unfortunately, these two methods only depend on process ID, not on 
@@ -352,7 +225,7 @@ CONTEXT_GetThreadContext(
 
     if (dwProcessId == GetCurrentProcessId())
     {
-        if (dwThreadId != GetCurrentThreadId())
+        if (self != pthread_self())
         {
             DWORD flags;
             // There aren't any APIs for this. We can potentially get the
@@ -383,16 +256,7 @@ CONTEXT_GetThreadContext(
             goto EXIT;
         }
 
-#define ASSIGN_REG(reg) lpContext->reg = MCREG_##reg(registers.uc_mcontext);
-        if (lpContext->ContextFlags & CONTEXT_CONTROL)
-        {
-            ASSIGN_CONTROL_REGS
-        }
-        if (lpContext->ContextFlags & CONTEXT_INTEGER)
-        {
-            ASSIGN_INTEGER_REGS
-        }
-#undef ASSIGN_REG
+        CONTEXTFromNativeContext(&registers, lpContext, lpContext->ContextFlags);        
     }
 
     ret = TRUE;
@@ -410,11 +274,7 @@ See MSDN doc.
 BOOL
 CONTEXT_SetThreadContext(
            DWORD dwProcessId,
-#if !defined(_AMD64_)
-           DWORD dwThreadId,
-#else // defined(_AMD64_)
-           DWORD64 dwThreadId,
-#endif // !defined(_AMD64_)
+           pthread_t self,
            DWORD dwLwpId,
            CONST CONTEXT *lpContext)
 {
@@ -433,7 +293,7 @@ CONTEXT_SetThreadContext(
         goto EXIT;
     }
     
-    /* How to consider the case when dwThreadId is different from the current
+    /* How to consider the case when self is different from the current
        thread of its owner process. Machine registers values could be retreived
        by a ptrace(pid, ...) call or from the "/proc/%pid/reg" file content. 
        Unfortunately, these two methods only depend on process ID, not on 
@@ -453,7 +313,11 @@ CONTEXT_SetThreadContext(
     if (lpContext->ContextFlags  & 
         (CONTEXT_CONTROL | CONTEXT_INTEGER))
     {   
+#if HAVE_PT_REGS
         if (ptrace((__ptrace_request)PT_GETREGS, dwProcessId, (caddr_t)&ptrace_registers, 0) == -1)
+#elif HAVE_BSD_REGS_T
+        if (ptrace(PT_GETREGS, dwProcessId, (caddr_t)&ptrace_registers, 0) == -1)
+#endif
         {
             ASSERT("Failed ptrace(PT_GETREGS, processId:%d) errno:%d (%s)\n",
                    dwProcessId, errno, strerror(errno));
@@ -475,8 +339,12 @@ CONTEXT_SetThreadContext(
             ASSIGN_INTEGER_REGS
         }
 #undef ASSIGN_REG
-        
+
+#if HAVE_PT_REGS        
         if (ptrace((__ptrace_request)PT_SETREGS, dwProcessId, (caddr_t)&ptrace_registers, 0) == -1)
+#elif HAVE_BSD_REGS_T
+        if (ptrace(PT_SETREGS, dwProcessId, (caddr_t)&ptrace_registers, 0) == -1)
+#endif
         {
             ASSERT("Failed ptrace(PT_SETREGS, processId:%d) errno:%d (%s)\n",
                    dwProcessId, errno, strerror(errno));
@@ -506,17 +374,42 @@ Return value :
     None
 
 --*/
-void CONTEXTToNativeContext(CONST CONTEXT *lpContext, native_context_t *native,
-                            ULONG contextFlags)
+void CONTEXTToNativeContext(CONST CONTEXT *lpContext, native_context_t *native)
 {
-    if (contextFlags != (CONTEXT_CONTROL | CONTEXT_INTEGER))
-    {
-        ASSERT("Invalid contextFlags in CONTEXTToNativeContext!");
-    }
-    
 #define ASSIGN_REG(reg) MCREG_##reg(native->uc_mcontext) = lpContext->reg;
-    ASSIGN_ALL_REGS
+    if ((lpContext->ContextFlags & CONTEXT_CONTROL) == CONTEXT_CONTROL)
+    {
+        ASSIGN_CONTROL_REGS
+    }
+
+    if ((lpContext->ContextFlags & CONTEXT_INTEGER) == CONTEXT_INTEGER)
+    {
+        ASSIGN_INTEGER_REGS
+    }
 #undef ASSIGN_REG
+
+    if ((lpContext->ContextFlags & CONTEXT_FLOATING_POINT) == CONTEXT_FLOATING_POINT)
+    {
+        FPREG_ControlWord(native) = lpContext->FltSave.ControlWord;
+        FPREG_StatusWord(native) = lpContext->FltSave.StatusWord;
+        FPREG_TagWord(native) = lpContext->FltSave.TagWord;
+        FPREG_ErrorOffset(native) = lpContext->FltSave.ErrorOffset;
+        FPREG_ErrorSelector(native) = lpContext->FltSave.ErrorSelector;
+        FPREG_DataOffset(native) = lpContext->FltSave.DataOffset;
+        FPREG_DataSelector(native) = lpContext->FltSave.DataSelector;
+        FPREG_MxCsr(native) = lpContext->FltSave.MxCsr;
+        FPREG_MxCsr_Mask(native) = lpContext->FltSave.MxCsr_Mask;
+
+        for (int i = 0; i < 8; i++)
+        {
+            FPREG_St(native, i) = lpContext->FltSave.FloatRegisters[i];
+        }
+
+        for (int i = 0; i < 16; i++)
+        {
+            FPREG_Xmm(native, i) = lpContext->FltSave.XmmRegisters[i];
+        }        
+    }
 }
 
 /*++
@@ -538,15 +431,42 @@ Return value :
 void CONTEXTFromNativeContext(const native_context_t *native, LPCONTEXT lpContext,
                               ULONG contextFlags)
 {
-    if (contextFlags != (CONTEXT_CONTROL | CONTEXT_INTEGER))
-    {
-        ASSERT("Invalid contextFlags in CONTEXTFromNativeContext!");
-    }
     lpContext->ContextFlags = contextFlags;
 
 #define ASSIGN_REG(reg) lpContext->reg = MCREG_##reg(native->uc_mcontext);
-    ASSIGN_ALL_REGS
+    if ((contextFlags & CONTEXT_CONTROL) == CONTEXT_CONTROL)
+    {
+        ASSIGN_CONTROL_REGS
+    }
+
+    if ((contextFlags & CONTEXT_INTEGER) == CONTEXT_INTEGER)
+    {
+        ASSIGN_INTEGER_REGS
+    }
 #undef ASSIGN_REG
+    
+    if ((contextFlags & CONTEXT_FLOATING_POINT) == CONTEXT_FLOATING_POINT)
+    {
+        lpContext->FltSave.ControlWord = FPREG_ControlWord(native);
+        lpContext->FltSave.StatusWord = FPREG_StatusWord(native);
+        lpContext->FltSave.TagWord = FPREG_TagWord(native);
+        lpContext->FltSave.ErrorOffset = FPREG_ErrorOffset(native);
+        lpContext->FltSave.ErrorSelector = FPREG_ErrorSelector(native);
+        lpContext->FltSave.DataOffset = FPREG_DataOffset(native);
+        lpContext->FltSave.DataSelector = FPREG_DataSelector(native);
+        lpContext->FltSave.MxCsr = FPREG_MxCsr(native);
+        lpContext->FltSave.MxCsr_Mask = FPREG_MxCsr_Mask(native);
+
+        for (int i = 0; i < 8; i++)
+        {
+            lpContext->FltSave.FloatRegisters[i] = FPREG_St(native, i);
+        }
+
+        for (int i = 0; i < 16; i++)
+        {
+            lpContext->FltSave.XmmRegisters[i] = FPREG_Xmm(native, i);
+        }        
+    }
 }
 
 /*++
@@ -982,7 +902,7 @@ CONTEXT_GetThreadContextFromPort(
             // so we can simply memcpy them across.
             memcpy(lpContext->ExtendedRegisters + CONTEXT_EXREG_XMM_OFFSET, &State.fpu_xmm0, 8 * 16);
         }
-#endif _X86_
+#endif
     }
 
 EXIT:
@@ -998,11 +918,7 @@ See MSDN doc.
 BOOL
 CONTEXT_GetThreadContext(
          DWORD dwProcessId,
-#if !defined(_AMD64_)
-         DWORD dwThreadId,
-#else // defined(_AMD64_)
-         DWORD64 dwThreadId,
-#endif // !defined(_AMD64_)
+         pthread_t self,
          DWORD dwLwpId,
          LPCONTEXT lpContext)
 {
@@ -1017,12 +933,12 @@ CONTEXT_GetThreadContext(
     
     if (GetCurrentProcessId() == dwProcessId)
     {
-        if (dwThreadId != GetCurrentThreadId())
+        if (self != pthread_self())
         {
             // the target thread is in the current process, but isn't 
             // the current one: extract the CONTEXT from the Mach thread.            
             mach_port_t mptPort;
-            mptPort = pthread_mach_thread_np((pthread_t)dwThreadId);
+            mptPort = pthread_mach_thread_np(self);
    
             ret = (CONTEXT_GetThreadContextFromPort(mptPort, lpContext) == KERN_SUCCESS);
         }
@@ -1235,11 +1151,7 @@ See MSDN doc.
 BOOL
 CONTEXT_SetThreadContext(
            DWORD dwProcessId,
-#if !defined(_AMD64_)
-           DWORD dwThreadId,
-#else // defined(_AMD64_)
-           DWORD64 dwThreadId,
-#endif // !defined(_AMD64_)
+           pthread_t self,
            DWORD dwLwpId,
            CONST CONTEXT *lpContext)
 {
@@ -1260,14 +1172,14 @@ CONTEXT_SetThreadContext(
         goto EXIT;
     }
 
-    if (dwThreadId != GetCurrentThreadId()) 
+    if (self != pthread_self())
     {
         // hThread is in the current process, but isn't the current
         // thread.  Extract the CONTEXT from the Mach thread.
 
         mach_port_t mptPort;
 
-        mptPort = pthread_mach_thread_np((pthread_t)dwThreadId);
+        mptPort = pthread_mach_thread_np(self);
     
         ret = (CONTEXT_SetThreadContextOnPort(mptPort, lpContext) == KERN_SUCCESS);
     } 

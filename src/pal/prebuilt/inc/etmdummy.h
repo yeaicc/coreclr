@@ -88,6 +88,13 @@
 #define FireEtwThreadRunning(ID, ClrInstanceID) 0
 #define FireEtwExceptionThrown() 0
 #define FireEtwExceptionThrown_V1(ExceptionType, ExceptionMessage, ExceptionEIP, ExceptionHRESULT, ExceptionFlags, ClrInstanceID) 0
+#define FireEtwExceptionCatchStart(EntryEIP, MethodID, MethodName, ClrInstanceID) 0
+#define FireEtwExceptionCatchStop() 0
+#define FireEtwExceptionFinallyStart(EntryEIP, MethodID, MethodName, ClrInstanceID) 0
+#define FireEtwExceptionFinallyStop() 0
+#define FireEtwExceptionFilterStart(EntryEIP, MethodID, MethodName, ClrInstanceID) 0
+#define FireEtwExceptionFilterStop() 0
+#define FireEtwExceptionThrownStop() 0
 #define FireEtwContention() 0
 #define FireEtwContentionStart_V1(ContentionFlags, ClrInstanceID) 0
 #define FireEtwContentionStop(ContentionFlags, ClrInstanceID) 0
@@ -154,6 +161,10 @@
 #define FireEtwRuntimeInformationStart(ClrInstanceID, Sku, BclMajorVersion, BclMinorVersion, BclBuildNumber, BclQfeNumber, VMMajorVersion, VMMinorVersion, VMBuildNumber, VMQfeNumber, StartupFlags, StartupMode, CommandLine, ComObjectGuid, RuntimeDllPath) 0
 #define FireEtwIncreaseMemoryPressure(BytesAllocated, ClrInstanceID) 0
 #define FireEtwDecreaseMemoryPressure(BytesFreed, ClrInstanceID) 0
+#define FireEtwGCMarkWithType(HeapNum, ClrInstanceID, Type, Bytes) 0
+#define FireEtwGCJoin_V2(Heap, JoinTime, JoinType, ClrInstanceID, JoinID) 0
+#define FireEtwGCPerHeapHistory_V3(ClrInstanceID, FreeListAllocated, FreeListRejected, EndOfSegAllocated, CondemnedAllocated, PinnedAllocated, PinnedAllocatedAdvance, RunningFreeListEfficiency, CondemnReasons0, CondemnReasons1, CompactMechanisms, ExpandMechanisms, HeapIndex, ExtraGen0Commit, Count, Values_Len_, Values) 0
+#define FireEtwGCGlobalHeapHistory_V2(FinalYoungestDesired, NumHeaps, CondemnedGeneration, Gen0ReductionCount, Reason, GlobalMechanisms, ClrInstanceID, PauseMode, MemoryPressure) 0
 #define FireEtwDebugIPCEventStart() 0
 #define FireEtwDebugIPCEventEnd() 0
 #define FireEtwDebugExceptionProcessingStart() 0

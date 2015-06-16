@@ -5,7 +5,7 @@
   <!-- ********************************************************************************************* -->
 
   <PropertyGroup>
-    <BclRewriterCommand Condition="'$(BclRewriterCommand)'==''">$(ToolsDir)\$(BuildToolsPackageName).$(BuildToolsVersion)\BclRewriter.exe</BclRewriterCommand>
+    <BclRewriterCommand Condition="'$(BclRewriterCommand)'==''">$(BuildToolsCoreCLRLocation)\BclRewriter.exe</BclRewriterCommand>
     <BclRewriterModelFile>$(MscorlibDir)model.xml</BclRewriterModelFile>
     <BclRewriterWorkDir>$(IntermediateOutputPath)\BclRewriter</BclRewriterWorkDir>
     <BclRewriterSymbolOutput>$(IntermediateOutputPath)\BclRewriter\$(TargetName).pdb</BclRewriterSymbolOutput>
@@ -18,8 +18,13 @@
   
   <Target Name="RewriteWithBclRewriter" 
           Inputs="@(AnnotatedAssembly)" Outputs="@(RewrittenAssembly)">
+
+    <PropertyGroup>
+      <OSPlatform Condition="'$(TargetsWindows)' == 'true'">win</OSPlatform>
+      <OSPlatform Condition="'$(TargetsWindows)' != 'true'">unix</OSPlatform>
+    </PropertyGroup>
    
-    <Exec Command="$(BclRewriterCommand) @(AnnotatedAssembly) /out:$(BclRewriterOutput) /include:$(BclRewriterModelFile) /platform:win /architecture:$(Platform) /flavor:$(_BuildType) /define:$(DefineConstants) /keepTempFiles+" StandardOutputImportance="Normal" />
+    <Exec Command="&quot;$(BclRewriterCommand)&quot; &quot;@(AnnotatedAssembly)&quot; &quot;/out:$(BclRewriterOutput)&quot; &quot;/include:$(BclRewriterModelFile)&quot; /platform:$(OSPlatform) /architecture:$(Platform) /flavor:$(_BuildType) /define:$(DefineConstants) /keepTempFiles+" StandardOutputImportance="Normal" />
 
     <!-- Update the location of the symbol file-->
     <PropertyGroup>

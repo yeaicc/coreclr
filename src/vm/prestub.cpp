@@ -49,6 +49,10 @@
 #include "stacksampler.h"
 #endif
 
+#ifdef FEATURE_PERFMAP
+#include "perfmap.h"
+#endif
+
 #ifndef DACCESS_COMPILE 
 
 EXTERN_C void STDCALL ThePreStub();
@@ -262,6 +266,7 @@ PCODE MethodDesc::MakeJitWorker(COR_ILMETHOD_DECODER* ILHeader, DWORD flags, DWO
          m_pszDebugMethodName));
 
     PCODE pCode = NULL;
+    ULONG sizeOfCode = 0;
 #ifdef FEATURE_INTERPRETER
     PCODE pPreviousInterpStub = NULL;
     BOOL fInterpreted = FALSE;
@@ -454,7 +459,7 @@ PCODE MethodDesc::MakeJitWorker(COR_ILMETHOD_DECODER* ILHeader, DWORD flags, DWO
 
             EX_TRY
             {
-                pCode = UnsafeJitFunction(this, ILHeader, flags, flags2);
+                pCode = UnsafeJitFunction(this, ILHeader, flags, flags2, &sizeOfCode);
             }
             EX_CATCH
             {
@@ -514,6 +519,11 @@ PCODE MethodDesc::MakeJitWorker(COR_ILMETHOD_DECODER* ILHeader, DWORD flags, DWO
             {
                 // Fire an ETW event to mark the end of JIT'ing
                 ETW::MethodLog::MethodJitted(this, &namespaceOrClassName, &methodName, &methodSignature, pCode, 0 /* ReJITID */);
+
+#ifdef FEATURE_PERFMAP
+                // Save the JIT'd method information so that perf can resolve JIT'd call frames.
+                PerfMap::LogMethod(this, pCode, sizeOfCode);
+#endif
                 
                 mcJitManager.GetMulticoreJitCodeStorage().StoreMethodCode(this, pCode);
                 
@@ -593,6 +603,11 @@ GotNewCode:
             {
                 // Fire an ETW event to mark the end of JIT'ing
                 ETW::MethodLog::MethodJitted(this, &namespaceOrClassName, &methodName, &methodSignature, pCode, 0 /* ReJITID */);
+
+#ifdef FEATURE_PERFMAP
+                // Save the JIT'd method information so that perf can resolve JIT'd call frames.
+                PerfMap::LogMethod(this, pCode, sizeOfCode);
+#endif
             }
  
 
@@ -983,6 +998,26 @@ extern "C" PCODE STDCALL PreStubWorker(TransitionBlock * pTransitionBlock, Metho
         if (curobj != NULL) // Check for virtual function called non-virtually on a NULL object
         {
             pDispatchingMT = curobj->GetTrueMethodTable();
+
+#ifdef FEATURE_ICASTABLE
+            if (pDispatchingMT->IsICastable())
+            {
+                MethodTable *pMDMT = pMD->GetMethodTable();
+                TypeHandle objectType(pDispatchingMT);
+                TypeHandle methodType(pMDMT);
+
+                GCStress<cfg_any>::MaybeTrigger();
+                INDEBUG(curobj = NULL); // curobj is unprotected and CanCastTo() can trigger GC
+                if (!objectType.CanCastTo(methodType)) 
+                {
+                    // Apperantly ICastable magic was involved when we chose this method to be called
+                    // that's why we better stick to the MethodTable it belongs to, otherwise 
+                    // DoPrestub() will fail not being able to find implementation for pMD in pDispatchingMT.
+
+                    pDispatchingMT = pMDMT;
+                }
+            }
+#endif // FEATURE_ICASTABLE
 
             // For value types, the only virtual methods are interface implementations.
             // Thus pDispatching == pMT because there
@@ -1745,6 +1780,10 @@ EXTERN_C PCODE STDCALL ExternalMethodFixupWorker(TransitionBlock * pTransitionBl
 
     MAKE_CURRENT_THREAD_AVAILABLE();
 
+#ifdef _DEBUG
+    Thread::ObjectRefFlush(CURRENT_THREAD);
+#endif
+
     FrameWithCookie<ExternalMethodFrame> frame(pTransitionBlock);
     ExternalMethodFrame * pEMFrame = &frame;
 
@@ -1958,13 +1997,14 @@ EXTERN_C PCODE STDCALL ExternalMethodFixupWorker(TransitionBlock * pTransitionBl
             else
                 token = DispatchToken::CreateDispatchToken(slot);
 
-            OBJECTREF pObj = pEMFrame->GetThis();
-            if (pObj == NULL) {
+            OBJECTREF *protectedObj = pEMFrame->GetThisPtr();
+            _ASSERTE(protectedObj != NULL);
+            if (*protectedObj == NULL) {
                 COMPlusThrow(kNullReferenceException);
             }
-
+            
             StubCallSite callSite(pIndirection, pEMFrame->GetReturnAddress());
-            pCode = pMgr->ResolveWorker(&callSite, pObj, token, VirtualCallStubManager::SK_LOOKUP);
+            pCode = pMgr->ResolveWorker(&callSite, protectedObj, token, VirtualCallStubManager::SK_LOOKUP);
             _ASSERTE(pCode != NULL);
         }
         else
@@ -2577,21 +2617,17 @@ extern "C" SIZE_T STDCALL DynamicHelperWorker(TransitionBlock * pTransitionBlock
         {
         case ENCODE_ISINSTANCEOF_HELPER:
         case ENCODE_CHKCAST_HELPER:
-            if (*(Object **)pArgument == NULL || ObjIsInstanceOf(*(Object **)pArgument, th))
             {
-                result = (SIZE_T)(*(Object **)pArgument);
-            }
-            else
-            {
-                if (kind == ENCODE_CHKCAST_HELPER)
+                BOOL throwInvalidCast = (kind == ENCODE_CHKCAST_HELPER);
+                if (*(Object **)pArgument == NULL || ObjIsInstanceOf(*(Object **)pArgument, th, throwInvalidCast))
                 {
-                    OBJECTREF obj = ObjectToOBJECTREF(*(Object **)pArgument);
-                    GCPROTECT_BEGIN(obj);
-                    COMPlusThrowInvalidCastException(&obj, th);
-                    GCPROTECT_END();
+                    result = (SIZE_T)(*(Object **)pArgument);
                 }
- 
-                result = NULL;
+                else
+                {
+                    _ASSERTE (!throwInvalidCast);
+                    result = NULL;
+                }
             }
             break;
         case ENCODE_STATIC_BASE_NONGC_HELPER:

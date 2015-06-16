@@ -914,6 +914,10 @@ public:
 
         m_hasher.HashMore(pv, cb);
 
+        // We are calling with lpOverlapped == NULL so pcbWritten has to be present
+        // to prevent crashes in Win7 and below.
+        _ASSERTE(pcbWritten);
+
         if (!::WriteFile(m_hFile, pv, cb, pcbWritten, NULL))
         {
             hr = HRESULT_FROM_GetLastError();
@@ -1147,6 +1151,76 @@ HANDLE ZapImage::GenerateFile(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATU
     return hFile;
 }
 
+#ifdef FEATURE_FUSION
+#define WOF_PROVIDER_FILE           (0x00000002)
+
+typedef BOOL (WINAPI *WofShouldCompressBinaries_t) (
+    __in LPCWSTR Volume,
+    __out PULONG Algorithm
+    );
+
+typedef HRESULT (WINAPI *WofSetFileDataLocation_t) (
+    __in HANDLE hFile,
+    __out ULONG Provider,
+    __in PVOID FileInfo,
+    __in ULONG Length
+    );
+
+typedef struct _WOF_FILE_COMPRESSION_INFO {
+    ULONG Algorithm;
+} WOF_FILE_COMPRESSION_INFO, *PWOF_FILE_COMPRESSION_INFO;
+
+// Check if files on the volume identified by volumeLetter should be compressed.
+// If yes, compress the file associated with hFile.
+static void CompressFile(WCHAR volumeLetter, HANDLE hFile)
+{
+    if (IsNgenOffline())
+    {
+        return;
+    }
+
+    // Wofutil.dll is available on Windows 8.1 and above. Return on platforms without wofutil.dll.
+    HModuleHolder wofLibrary(WszLoadLibraryEx(L"wofutil.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32));
+    if (wofLibrary == nullptr)
+    {
+        return;
+    }
+
+    // WofShouldCompressBinaries is available on Windows 10 and above.
+    // Windows 8.1 version of wofutil.dll does not have this function.
+    WofShouldCompressBinaries_t WofShouldCompressBinaries
+        = (WofShouldCompressBinaries_t)GetProcAddress(wofLibrary, "WofShouldCompressBinaries");
+    if (WofShouldCompressBinaries == nullptr)
+    {
+        return;
+    }
+
+    WCHAR volume[4] = L"X:\\";
+    volume[0] = volumeLetter;
+    ULONG algorithm = 0;
+
+    bool compressionSuitable = (WofShouldCompressBinaries(volume, &algorithm) == TRUE);
+    if (compressionSuitable)
+    {
+        // WofSetFileDataLocation is available on Windows 8.1 and above, however, Windows 8.1 version
+        // of WofSetFileDataLocation works for WIM only, and Windows 10 is required for compression of
+        // normal files.  This isn't a problem for us, since the check for WofShouldCompressBinaries
+        // above should have already returned on Windows 8.1.
+        WofSetFileDataLocation_t WofSetFileDataLocation = 
+            (WofSetFileDataLocation_t)GetProcAddress(wofLibrary, "WofSetFileDataLocation");
+        if (WofSetFileDataLocation == nullptr)
+        {
+            return;
+        }
+
+        WOF_FILE_COMPRESSION_INFO fileInfo;
+        fileInfo.Algorithm = algorithm;
+
+        WofSetFileDataLocation(hFile, WOF_PROVIDER_FILE, &fileInfo, sizeof(WOF_FILE_COMPRESSION_INFO));
+    }
+}
+#endif
+
 HANDLE ZapImage::SaveImage(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATURE * pNativeImageSig)
 {
     if (!IsReadyToRunCompilation())
@@ -1172,6 +1246,10 @@ HANDLE ZapImage::SaveImage(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATURE 
 #ifndef FEATURE_CORECLR
     if (m_stats != NULL)
         PrintStats(wszOutputFileName);
+#endif
+
+#ifdef FEATURE_FUSION
+    CompressFile(wszOutputFileName[0], hFile);
 #endif
 
     return hFile;
@@ -1789,6 +1867,9 @@ void ZapImage::OutputTables()
         // 512 byte alignment, since there is no plan to compress data partitions.
         SetFileAlignment(0x1000);
     }
+#elif defined(FEATURE_PAL)
+    // PAL library requires native image sections to align to page bounaries.
+    SetFileAlignment(0x1000);
 #endif
 }
 
@@ -4023,7 +4104,7 @@ HRESULT ZapImage::LocateProfileData()
         return S_FALSE;
     }
 
-#if !defined(FEATURE_CORECLR) || defined(FEATURE_WINDOWSPHONE)
+#if !defined(FEATURE_PAL)
     //
     // See if there's profile data in the resource section of the PE
     //
@@ -5026,8 +5107,9 @@ bool ZapImage::canIntraModuleDirectCall(
 
 #ifdef _DEBUG
     const char* clsName, * methodName;
+    methodName = m_zapper->m_pEEJitInfo->getMethodName(targetFtn, &clsName);
     LOG((LF_ZAP, LL_INFO10000, "getIntraModuleDirectCallAddr: Success %s::%s\n",
-        clsName, (methodName = m_zapper->m_pEEJitInfo->getMethodName(targetFtn, &clsName), methodName)));
+        clsName, methodName));
 #endif
 
     return true;
@@ -5035,8 +5117,9 @@ bool ZapImage::canIntraModuleDirectCall(
 CALL_VIA_ENTRY_POINT:
 
 #ifdef _DEBUG
+    methodName = m_zapper->m_pEEJitInfo->getMethodName(targetFtn, &clsName);
     LOG((LF_ZAP, LL_INFO10000, "getIntraModuleDirectCallAddr: Via EntryPoint %s::%s\n",
-         clsName, (methodName = m_zapper->m_pEEJitInfo->getMethodName(targetFtn, &clsName), methodName)));
+         clsName, methodName));
 #endif
 
     return false;

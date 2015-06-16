@@ -383,6 +383,9 @@ FastFreeInProcessHeapFunc __ClrFreeInProcessHeap = (FastFreeInProcessHeapFunc) C
 
 const NoThrow nothrow = { 0 };
 
+#ifdef __llvm__
+__attribute__((visibility("hidden")))
+#endif
 void * __cdecl
 operator new(size_t n)
 {
@@ -404,7 +407,9 @@ operator new(size_t n)
     return result;
 }
 
-
+#ifdef __llvm__
+__attribute__((visibility("hidden")))
+#endif
 void * __cdecl
 operator new[](size_t n)
 {
@@ -426,6 +431,9 @@ operator new[](size_t n)
     return result;
 };
 
+#ifdef __llvm__
+__attribute__((visibility("hidden")))
+#endif
 void * __cdecl operator new(size_t n, const NoThrow&)
 {
     STATIC_CONTRACT_NOTHROW;
@@ -441,6 +449,9 @@ void * __cdecl operator new(size_t n, const NoThrow&)
     return result;
 }
 
+#ifdef __llvm__
+__attribute__((visibility("hidden")))
+#endif
 void * __cdecl operator new[](size_t n, const NoThrow&)
 {
     STATIC_CONTRACT_NOTHROW;
@@ -456,8 +467,11 @@ void * __cdecl operator new[](size_t n, const NoThrow&)
     return result;
 }
 
+#ifdef __llvm__
+__attribute__((visibility("hidden")))
+#endif
 void __cdecl
-operator delete(void *p)
+operator delete(void *p) NOEXCEPT
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
@@ -469,8 +483,11 @@ operator delete(void *p)
     TRASH_LASTERROR;
 }
 
+#ifdef __llvm__
+__attribute__((visibility("hidden")))
+#endif
 void __cdecl
-operator delete[](void *p)
+operator delete[](void *p) NOEXCEPT
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
@@ -581,10 +598,10 @@ void * __cdecl operator new[](size_t n, const CExecutable&, const NoThrow&)
 // This is a DEBUG routing to verify that a memory region complies with executable requirements
 BOOL DbgIsExecutable(LPVOID lpMem, SIZE_T length)
 {
-#if defined(CROSSGEN_COMPILE) 
+#if defined(CROSSGEN_COMPILE) || defined(FEATURE_PAL)
     // No NX support on PAL or for crossgen compilations.
     return TRUE;
-#else // !defined(CROSSGEN_COMPILE) 
+#else // !(CROSSGEN_COMPILE || FEATURE_PAL) 
     BYTE *regionStart = (BYTE*) ALIGN_DOWN((BYTE*)lpMem, OS_PAGE_SIZE);
     BYTE *regionEnd = (BYTE*) ALIGN_UP((BYTE*)lpMem+length, OS_PAGE_SIZE);
     _ASSERTE(length > 0);
@@ -606,7 +623,7 @@ BOOL DbgIsExecutable(LPVOID lpMem, SIZE_T length)
     }
 
     return TRUE;
-#endif // defined(CROSSGEN_COMPILE) 
+#endif // CROSSGEN_COMPILE || FEATURE_PAL
 }
 
 #endif //_DEBUG
@@ -647,7 +664,7 @@ IExecutionEngine *GetExecutionEngine()
         // Create a local copy on the stack and then copy it over to the static instance.
         // This avoids race conditions caused by multiple initializations of vtable in the constructor
         UtilExecutionEngine local;
-        memcpy(&g_ExecutionEngineInstance, &local, sizeof(UtilExecutionEngine));
+        memcpy((void*)&g_ExecutionEngineInstance, (void*)&local, sizeof(UtilExecutionEngine));
         pExecutionEngine = (IExecutionEngine*)(UtilExecutionEngine*)&g_ExecutionEngineInstance;
 #else
         // statically linked.

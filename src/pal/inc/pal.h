@@ -164,7 +164,6 @@ extern "C" {
 #endif // CORECLR
 #endif // !_MSC_VER
 
-
 #if defined(_MSC_VER) || defined(__llvm__)
 #define DECLSPEC_ALIGN(x)   __declspec(align(x))
 #else
@@ -359,6 +358,11 @@ PAL_IsDebuggerPresent();
 #endif
 #endif
 
+#if defined(PAL_STDCPP_COMPAT) && !defined(__cplusplus)
+#define nullptr NULL
+#endif // defined(PAL_STDCPP_COMPAT) && !defined(__cplusplus)
+
+#ifndef PAL_STDCPP_COMPAT
 typedef ULONG64   fpos_t;
 
 #if _WIN64 || _MSC_VER >= 1400
@@ -366,6 +370,7 @@ typedef __int64 time_t;
 #else
 typedef long time_t;
 #endif
+#endif // !PAL_STDCPP_COMPAT
 #define _TIME_T_DEFINED
 
 #if ENABLE_DOWNLEVEL_FOR_NLS
@@ -379,12 +384,15 @@ typedef long time_t;
 #define SUBLANG_NEUTRAL                  0x00    // language neutral
 #define SUBLANG_DEFAULT                  0x01    // user default
 #define SORT_DEFAULT                     0x0     // sorting default
+#define SUBLANG_SYS_DEFAULT              0x02    // system default
 
 #define MAKELANGID(p, s)       ((((WORD  )(s)) << 10) | (WORD  )(p))
 #define PRIMARYLANGID(lgid)    ((WORD  )(lgid) & 0x3ff)
 #define SUBLANGID(lgid)        ((WORD  )(lgid) >> 10)
 
+#define LANG_SYSTEM_DEFAULT    (MAKELANGID(LANG_NEUTRAL, SUBLANG_SYS_DEFAULT))
 #define LANG_USER_DEFAULT      (MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT))
+#define LOCALE_SYSTEM_DEFAULT  (MAKELCID(LANG_SYSTEM_DEFAULT, SORT_DEFAULT))
 #define LOCALE_USER_DEFAULT    (MAKELCID(LANG_USER_DEFAULT, SORT_DEFAULT))
 #define LOCALE_NEUTRAL         (MAKELCID(MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), SORT_DEFAULT))
 #define LOCALE_US_ENGLISH      (MAKELCID(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), SORT_DEFAULT))
@@ -439,6 +447,16 @@ typedef long time_t;
 #define DLL_THREAD_DETACH  3
 #define DLL_PROCESS_DETACH 0
 
+#define PAL_INITIALIZE_NONE            0x00
+#define PAL_INITIALIZE_SYNC_THREAD     0x01
+#define PAL_INITIALIZE_SIGNAL_THREAD   0x02
+
+// PAL_Initialize() flags
+#define PAL_INITIALIZE                 PAL_INITIALIZE_SYNC_THREAD | PAL_INITIALIZE_SIGNAL_THREAD
+
+// PAL_InitializeDLL() flags - don't start any of the helper threads
+#define PAL_INITIALIZE_DLL             PAL_INITIALIZE_NONE       
+
 typedef DWORD (PALAPI *PTHREAD_START_ROUTINE)(LPVOID lpThreadParameter);
 typedef PTHREAD_START_ROUTINE LPTHREAD_START_ROUTINE;
 
@@ -448,16 +466,21 @@ PALIMPORT
 int
 PALAPI
 PAL_Initialize(
-            int argc,
-            const char *argv[]);
+    int argc,
+    const char * const argv[]);
+
+PALIMPORT
+int
+PALAPI
+PAL_InitializeDLL();
 
 PALIMPORT
 DWORD
 PALAPI
 PAL_InitializeCoreCLR(
-            const char *szExePath,
-            const char *szCoreCLRPath,
-            BOOL fStayInPAL);
+    const char *szExePath,
+    const char *szCoreCLRPath,
+    BOOL fStayInPAL);
 
 PALIMPORT
 DWORD_PTR
@@ -473,7 +496,7 @@ PALIMPORT
 void
 PALAPI
 PAL_Terminate(
-          void);
+    void);
 
 /// <summary>
 /// This function shuts down PAL and exits the current process with
@@ -482,25 +505,38 @@ PAL_Terminate(
 PALIMPORT
 void
 PALAPI
-PAL_TerminateEx(int exitCode);
+PAL_TerminateEx(
+    int exitCode);
 
 PALIMPORT
 void
 PALAPI
 PAL_InitializeDebug(
-          void);
+    void);
+
+PALIMPORT
+HINSTANCE
+PALAPI
+PAL_RegisterModule(
+    IN LPCSTR lpLibFileName);
+
+PALIMPORT
+VOID 
+PALAPI
+PAL_UnregisterModule(
+    IN HINSTANCE hInstance);
 
 PALIMPORT
 HMODULE
 PALAPI
 PAL_RegisterLibraryW(
-         IN LPCWSTR lpLibFileName);
+    IN LPCWSTR lpLibFileName);
 
 PALIMPORT
 BOOL
 PALAPI
 PAL_UnregisterLibraryW(
-         IN HMODULE hLibModule);
+    IN HMODULE hLibModule);
 
 #ifdef UNICODE
 #define PAL_RegisterLibrary PAL_RegisterLibraryW
@@ -511,15 +547,15 @@ PALIMPORT
 BOOL
 PALAPI
 PAL_GetPALDirectoryW(
-             OUT LPWSTR lpDirectoryName,
-             IN UINT cchDirectoryName);
+    OUT LPWSTR lpDirectoryName,
+    IN UINT cchDirectoryName);
 
 PALIMPORT
 BOOL
 PALAPI
 PAL_GetPALDirectoryA(
-             OUT LPSTR lpDirectoryName,
-             IN UINT cchDirectoryName);
+    OUT LPSTR lpDirectoryName,
+    IN UINT cchDirectoryName);
 
 #ifdef UNICODE
 #define PAL_GetPALDirectory PAL_GetPALDirectoryW
@@ -531,9 +567,9 @@ PALIMPORT
 BOOL
 PALAPI
 PAL_Random(
-        IN BOOL bStrong,
-        IN OUT LPVOID lpBuffer,
-        IN DWORD dwLength);
+    IN BOOL bStrong,
+    IN OUT LPVOID lpBuffer,
+    IN DWORD dwLength);
 
 // This helper will be used *only* by the CoreCLR to determine
 // if an address lies inside CoreCLR or not.
@@ -566,9 +602,29 @@ PAL_DeleteExecWatchpoint(
 
 
 PALIMPORT
-BOOL
+DWORD
 PALAPI
-PAL_RegisterMacEHPort();
+PAL_PublishDacTableAddress(
+    IN PVOID baseAddress,
+    IN PVOID tableAddress,
+    IN ULONG tableSize
+    );
+
+PALIMPORT
+DWORD
+PALAPI
+PAL_GetDacTableAddress(
+    IN PVOID baseAddress,
+    OUT PVOID *tableAddress,
+    OUT PULONG tableSize
+    );
+
+PALIMPORT
+VOID
+PALAPI
+PAL_CleanupDacTableAddress(
+    IN PVOID baseAddress
+    );
 
 
 /******************* winuser.h Entrypoints *******************************/
@@ -667,8 +723,19 @@ MessageBoxW(
         IN LPCWSTR lpCaption,
         IN UINT uType);
 
+PALIMPORT
+int
+PALAPI
+MessageBoxA(
+        IN LPVOID hWnd,  // NOTE: diff from winuser.h
+        IN LPCSTR lpText,
+        IN LPCSTR lpCaption,
+        IN UINT uType);
+
 #ifdef UNICODE
 #define MessageBox MessageBoxW
+#else
+#define MessageBox MessageBoxA
 #endif
 
 /***************** wincon.h Entrypoints **********************************/
@@ -708,8 +775,12 @@ GenerateConsoleCtrlEvent(
 
 // From win32.h
 #ifndef _CRTIMP
+#ifdef __llvm__
+#define _CRTIMP
+#else // __llvm__
 #define _CRTIMP __declspec(dllimport)
-#endif
+#endif // __llvm__
+#endif // _CRTIMP
 
 /******************* winbase.h Entrypoints and defines ************************/
 PALIMPORT
@@ -747,6 +818,7 @@ typedef struct _SECURITY_ATTRIBUTES {
 #define FILE_ATTRIBUTE_SYSTEM                   0x00000004
 #define FILE_ATTRIBUTE_DIRECTORY                0x00000010
 #define FILE_ATTRIBUTE_ARCHIVE                  0x00000020
+#define FILE_ATTRIBUTE_DEVICE                   0x00000040
 #define FILE_ATTRIBUTE_NORMAL                   0x00000080
 
 #define FILE_FLAG_WRITE_THROUGH    0x80000000
@@ -1229,21 +1301,6 @@ GetFileTime(
         OUT LPFILETIME lpLastWriteTime);
 
 PALIMPORT
-BOOL
-PALAPI
-FileTimeToLocalFileTime(
-            IN CONST FILETIME *lpFileTime,
-            OUT LPFILETIME lpLocalFileTime);
-
-PALIMPORT
-BOOL
-PALAPI
-LocalFileTimeToFileTime(
-            IN CONST FILETIME *lpLocalFileTime,
-            OUT LPFILETIME lpFileTime);
-
-
-PALIMPORT
 VOID
 PALAPI
 GetSystemTimeAsFileTime(
@@ -1280,15 +1337,6 @@ FileTimeToDosDateTime(
     IN CONST FILETIME *lpFileTime,
     OUT LPWORD lpFatDate,
     OUT LPWORD lpFatTime
-    );
-
-PALIMPORT
-BOOL
-PALAPI
-DosDateTimeToFileTime(
-    IN WORD wFatDate,
-    IN WORD wFatTime,
-    OUT LPFILETIME lpFileTime
     );
 
 
@@ -1492,6 +1540,17 @@ CreateSemaphoreA(
 PALIMPORT
 HANDLE
 PALAPI
+CreateSemaphoreExA(
+         IN LPSECURITY_ATTRIBUTES lpSemaphoreAttributes,
+         IN LONG lInitialCount,
+         IN LONG lMaximumCount,
+         IN LPCSTR lpName,
+         IN /*_Reserved_*/  DWORD dwFlags,
+         IN DWORD dwDesiredAccess);
+
+PALIMPORT
+HANDLE
+PALAPI
 CreateSemaphoreW(
          IN LPSECURITY_ATTRIBUTES lpSemaphoreAttributes,
          IN LONG lInitialCount,
@@ -1508,6 +1567,14 @@ CreateSemaphoreExW(
         IN LPCWSTR lpName,
         IN /*_Reserved_*/  DWORD dwFlags,
         IN DWORD dwDesiredAccess);
+
+PALIMPORT
+HANDLE
+PALAPI
+OpenSemaphoreW(
+    IN DWORD dwDesiredAccess,
+    IN BOOL bInheritHandle,
+    IN LPCWSTR lpName);
 
 #ifdef UNICODE
 #define CreateSemaphore CreateSemaphoreW
@@ -2994,10 +3061,17 @@ void *
 PALAPI
 PAL_GetStackLimit();
 
+PALIMPORT
+DWORD
+PALAPI
+PAL_GetLogicalCpuCountFromOS();
+
 #ifdef PLATFORM_UNIX
 
 #if defined(__FreeBSD__) && defined(_X86_)
 #define PAL_CS_NATIVE_DATA_SIZE 12
+#elif defined(__FreeBSD__) && defined(__x86_64__)
+#define PAL_CS_NATIVE_DATA_SIZE 24
 #elif defined(__sun__)
 #define PAL_CS_NATIVE_DATA_SIZE 48
 #elif defined(__hpux__) && (defined(__hppa__) || defined (__ia64__))
@@ -3039,6 +3113,7 @@ typedef struct _CRITICAL_SECTION {
 PALIMPORT VOID PALAPI EnterCriticalSection(IN OUT LPCRITICAL_SECTION lpCriticalSection);
 PALIMPORT VOID PALAPI LeaveCriticalSection(IN OUT LPCRITICAL_SECTION lpCriticalSection);
 PALIMPORT VOID PALAPI InitializeCriticalSection(OUT LPCRITICAL_SECTION lpCriticalSection);
+PALIMPORT BOOL PALAPI InitializeCriticalSectionEx(LPCRITICAL_SECTION lpCriticalSection, DWORD dwSpinCount, DWORD Flags);
 PALIMPORT VOID PALAPI DeleteCriticalSection(IN OUT LPCRITICAL_SECTION lpCriticalSection);
 PALIMPORT BOOL PALAPI TryEnterCriticalSection(IN OUT LPCRITICAL_SECTION lpCriticalSection);
 
@@ -3238,22 +3313,22 @@ PALIMPORT
 FARPROC
 PALAPI
 GetProcAddress(
-           IN HMODULE hModule,
-           IN LPCSTR lpProcName);
+    IN HMODULE hModule,
+    IN LPCSTR lpProcName);
 
 PALIMPORT
 BOOL
 PALAPI
 FreeLibrary(
-        IN OUT HMODULE hLibModule);
+    IN OUT HMODULE hLibModule);
 
 PALIMPORT
 PAL_NORETURN
 VOID
 PALAPI
 FreeLibraryAndExitThread(
-             IN HMODULE hLibModule,
-             IN DWORD dwExitCode);
+    IN HMODULE hLibModule,
+    IN DWORD dwExitCode);
 
 PALIMPORT
 BOOL
@@ -3265,17 +3340,17 @@ PALIMPORT
 DWORD
 PALAPI
 GetModuleFileNameA(
-           IN HMODULE hModule,
-           OUT LPSTR lpFileName,
-           IN DWORD nSize);
+    IN HMODULE hModule,
+    OUT LPSTR lpFileName,
+    IN DWORD nSize);
 
 PALIMPORT
 DWORD
 PALAPI
 GetModuleFileNameW(
-           IN HMODULE hModule,
-           OUT LPWSTR lpFileName,
-           IN DWORD nSize);
+    IN HMODULE hModule,
+    OUT LPWSTR lpFileName,
+    IN DWORD nSize);
 
 #ifdef UNICODE
 #define GetModuleFileName GetModuleFileNameW
@@ -3283,10 +3358,10 @@ GetModuleFileNameW(
 #define GetModuleFileName GetModuleFileNameA
 #endif
 
-// Get base address of the coreclr module
+// Get base address of the module containing a given symbol 
 PALAPI
 LPCVOID
-PAL_GetCoreClrModuleBase();
+PAL_GetSymbolModuleBase(void *symbol);
 
 PALIMPORT
 LPVOID
@@ -3392,7 +3467,6 @@ GetProcessHeap(
 
 #define HEAP_ZERO_MEMORY 0x00000008
 
-#ifdef __APPLE__
 PALIMPORT
 HANDLE
 PALAPI
@@ -3400,7 +3474,14 @@ HeapCreate(
 	       IN DWORD flOptions,
 	       IN SIZE_T dwInitialSize,
 	       IN SIZE_T dwMaximumSize);
-#endif // __APPLE__
+
+PALIMPORT
+SIZE_T
+PALAPI
+HeapSize(
+    HANDLE hHeap,
+    DWORD dwFlags,
+    LPCVOID lpMem);
 
 PALIMPORT
 LPVOID
@@ -4012,37 +4093,6 @@ GetUserDefaultLocaleName(
            IN int cchLocaleName);
 
 
-
-
-#define TIME_ZONE_ID_INVALID ((DWORD)0xFFFFFFFF)
-#define TIME_ZONE_ID_UNKNOWN  0
-#define TIME_ZONE_ID_STANDARD 1
-#define TIME_ZONE_ID_DAYLIGHT 2
-
-
-typedef struct _TIME_ZONE_INFORMATION {
-    LONG Bias;
-    WCHAR StandardName[ 32 ];
-    SYSTEMTIME StandardDate;
-    LONG StandardBias;
-    WCHAR DaylightName[ 32 ];
-    SYSTEMTIME DaylightDate;
-    LONG DaylightBias;
-} TIME_ZONE_INFORMATION, *PTIME_ZONE_INFORMATION, *LPTIME_ZONE_INFORMATION;
-
-PALIMPORT
-DWORD
-PALAPI
-GetTimeZoneInformation(
-               OUT LPTIME_ZONE_INFORMATION lpTimeZoneInformation);
-
-PALIMPORT
-DWORD
-PALAPI
-PAL_GetTimeZoneInformation(
-               IN int year,
-               OUT LPTIME_ZONE_INFORMATION lpTimeZoneInformation);
-
 #define LCID_INSTALLED            0x00000001  // installed locale ids
 #define LCID_SUPPORTED            0x00000002  // supported locale ids
 #ifdef __APPLE__
@@ -4275,20 +4325,6 @@ PAL_NormalizeStringExW(
     OUT LPWSTR lpDestStr,
     IN int     cchDest);
 
-
-PALIMPORT
-int
-PALAPI
-PAL_FormatDateW(
-    IN LPCWSTR   lpLocaleName,
-    IN LPCWSTR   lpFormat,
-    IN BOOL fUseUTC,
-    IN BOOL fUseCustomTz,
-    IN int tzOffsetSeconds,
-    IN LPSYSTEMTIME lpTime,    
-    OUT LPWSTR lpDestStr,
-    IN int     cchDest);
-
 PALIMPORT
 int
 PALAPI
@@ -4382,6 +4418,21 @@ GetDateFormatEx(
 #ifdef UNICODE
 #define GetDateFormat GetDateFormatW
 #endif
+
+
+PALIMPORT
+int
+PALAPI
+PAL_GetResourceString(
+        IN LPCSTR lpDomain,
+        IN LPCSTR lpResourceStr,
+        OUT LPWSTR lpWideCharStr,
+        IN int cchWideChar);
+
+PALIMPORT
+BOOL
+PALAPI
+PAL_BindResources(IN LPCSTR lpDomain);
 
 #define EXCEPTION_NONCONTINUABLE 0x1
 #define EXCEPTION_UNWINDING 0x2
@@ -4726,18 +4777,6 @@ SetUnhandledExceptionFilter(
 typedef EXCEPTION_DISPOSITION (PALAPI *PVECTORED_EXCEPTION_HANDLER)(
                            struct _EXCEPTION_POINTERS *ExceptionPointers);
 
-PALIMPORT
-void
-PALAPI
-SetVectoredExceptionHandler(
-    IN PVECTORED_EXCEPTION_HANDLER lpHandler);
-
-PALIMPORT
-void
-PALAPI
-SetVectoredContinueHandler(
-    IN PVECTORED_EXCEPTION_HANDLER lpHandler);
-
 #endif // FEATURE_PAL_SXS
 
 // Define BitScanForward64 and BitScanForward
@@ -4820,6 +4859,20 @@ PALAPI
 InterlockedOr(
               IN OUT LONG volatile *Destination,
               IN LONG Value);
+
+PALIMPORT
+UCHAR
+PALAPI
+InterlockedBitTestAndReset(
+               IN OUT LONG volatile *Base,
+               IN LONG Bit);
+
+PALIMPORT
+UCHAR
+PALAPI
+InterlockedBitTestAndSet(
+               IN OUT LONG volatile *Base,
+               IN LONG Bit);
 
 PALIMPORT
 unsigned char
@@ -5189,7 +5242,7 @@ ReportEventW (
 
 /******************* C Runtime Entrypoints *******************************/
 
-#ifdef PLATFORM_UNIX
+#if defined(PLATFORM_UNIX) && !defined(PAL_STDCPP_COMPAT)
 /* Some C runtime functions needs to be reimplemented by the PAL.
    To avoid name collisions, those functions have been renamed using
    defines */
@@ -5278,9 +5331,6 @@ ReportEventW (
 #define mkstemp       PAL_mkstemp
 #define rename        PAL_rename
 #define unlink        PAL_unlink
-/* Note the TWO underscores. */
-#define _vsnprintf    PAL__vsnprintf
-#define _vsnwprintf   PAL__wvsnprintf
 #define _strdup       PAL__strdup
 #define _getcwd       PAL__getcwd
 #define _open         PAL__open
@@ -5293,6 +5343,12 @@ ReportEventW (
 #define _mm_setcsr    PAL__mm_setcsr
 #endif // _AMD64_
 
+#endif /* PLATFORM_UNIX */
+
+#ifdef PLATFORM_UNIX
+   /* Note the TWO underscores. */
+#define _vsnprintf    PAL__vsnprintf
+#define _vsnwprintf   PAL__wvsnprintf
 #endif /* PLATFORM_UNIX */
 
 #ifndef _CONST_RETURN
@@ -5311,6 +5367,13 @@ ReportEventW (
 
 typedef int errno_t;
 
+#ifdef PAL_STDCPP_COMPAT
+#include <string.h>
+
+PALIMPORT int __cdecl PAL__vsnprintf(char *, size_t, const char *, va_list);
+PALIMPORT errno_t __cdecl memcpy_s(void *, size_t, const void *, size_t);
+PALIMPORT errno_t __cdecl memmove_s(void *, size_t, const void *, size_t);
+#else // PAL_STDCPP_COMPAT
 typedef struct {
     int quot;
     int rem;
@@ -5347,13 +5410,10 @@ PALIMPORT int __cdecl vsprintf(char *, const char *, va_list);
 PALIMPORT int __cdecl _snprintf(char *, size_t, const char *, ...);
 PALIMPORT int __cdecl _vsnprintf(char *, size_t, const char *, va_list);
 PALIMPORT int __cdecl sscanf(const char *, const char *, ...);
-PALIMPORT char * __cdecl _strlwr(char *);
 PALIMPORT int __cdecl atoi(const char *);
 PALIMPORT LONG __cdecl atol(const char *);
 PALIMPORT ULONG __cdecl strtoul(const char *, char **, int);
 PALIMPORT double __cdecl atof(const char *);
-PALIMPORT char * __cdecl _gcvt_s(char *, int, double, int);
-PALIMPORT char * __cdecl _ecvt(double, int, int *, int *);
 PALIMPORT double __cdecl strtod(const char *, char **);
 PALIMPORT int __cdecl isprint(int);
 PALIMPORT int __cdecl isspace(int);
@@ -5363,65 +5423,70 @@ PALIMPORT int __cdecl isdigit(int);
 PALIMPORT int __cdecl isxdigit(int);
 PALIMPORT int __cdecl isupper(int);
 PALIMPORT int __cdecl islower(int);
-PALIMPORT int __cdecl __iscsym(int);
 PALIMPORT int __cdecl tolower(int);
 PALIMPORT int __cdecl toupper(int);
 
+#endif // PAL_STDCPP_COMPAT
+
+PALIMPORT char * __cdecl _strlwr(char *);
+PALIMPORT char * __cdecl _gcvt_s(char *, int, double, int);
+PALIMPORT char * __cdecl _ecvt(double, int, int *, int *);
+PALIMPORT int __cdecl __iscsym(int);
 PALIMPORT size_t __cdecl _mbslen(const unsigned char *);
 PALIMPORT unsigned char * __cdecl _mbsinc(const unsigned char *);
 PALIMPORT unsigned char * __cdecl _mbsninc(const unsigned char *, size_t);
 PALIMPORT unsigned char * __cdecl _mbsdec(const unsigned char *, const unsigned char *);
+PALIMPORT int __cdecl _wcsicmp(const WCHAR *, const WCHAR*);
+PALIMPORT int __cdecl _wcsnicmp(const WCHAR *, const WCHAR *, size_t);
+PALIMPORT int __cdecl _vsnwprintf(WCHAR *, size_t, const WCHAR *, va_list);
+PALIMPORT WCHAR * __cdecl _itow(int, WCHAR *, int);
 
-PALIMPORT size_t __cdecl wcslen(const wchar_t *);
-PALIMPORT int __cdecl wcscmp(const wchar_t*, const wchar_t*);
-PALIMPORT int __cdecl wcsncmp(const wchar_t *, const wchar_t *, size_t);
-PALIMPORT int __cdecl _wcsicmp(const wchar_t *, const wchar_t*);
-PALIMPORT int __cdecl _wcsnicmp(const wchar_t *, const wchar_t *, size_t);
-PALIMPORT wchar_t * __cdecl wcscat(wchar_t *, const wchar_t *);
-PALIMPORT wchar_t * __cdecl wcsncat(wchar_t *, const wchar_t *, size_t);
-PALIMPORT wchar_t * __cdecl wcscpy(wchar_t *, const wchar_t *);
-PALIMPORT wchar_t * __cdecl wcsncpy(wchar_t *, const wchar_t *, size_t);
-PALIMPORT const wchar_t * __cdecl wcschr(const wchar_t *, wchar_t);
-PALIMPORT const wchar_t * __cdecl wcsrchr(const wchar_t *, wchar_t);
-PALIMPORT wchar_t _WConst_return * __cdecl wcspbrk(const wchar_t *, const wchar_t *);
-PALIMPORT wchar_t _WConst_return * __cdecl wcsstr(const wchar_t *, const wchar_t *);
-PALIMPORT wchar_t * __cdecl wcstok(wchar_t *, const wchar_t *);
-PALIMPORT size_t __cdecl wcscspn(const wchar_t *, const wchar_t *);
-PALIMPORT int __cdecl swprintf(wchar_t *, const wchar_t *, ...);
-PALIMPORT int __cdecl vswprintf(wchar_t *, const wchar_t *, va_list);
-PALIMPORT int __cdecl _snwprintf(wchar_t *, size_t, const wchar_t *, ...);
-PALIMPORT int __cdecl _vsnwprintf(wchar_t *, size_t, const wchar_t *, va_list);
-PALIMPORT int __cdecl swscanf(const wchar_t *, const wchar_t *, ...);
-PALIMPORT wchar_t * __cdecl _wcslwr(wchar_t *);
-PALIMPORT LONG __cdecl wcstol(const wchar_t *, wchar_t **, int);
-PALIMPORT ULONG __cdecl wcstoul(const wchar_t *, wchar_t **, int);
-PALIMPORT ULONGLONG _wcstoui64(const wchar_t *, wchar_t **, int);
-PALIMPORT wchar_t * __cdecl _itow(int, wchar_t *, int);
-PALIMPORT wchar_t * __cdecl _i64tow(__int64, wchar_t *, int);
-PALIMPORT wchar_t * __cdecl _ui64tow(unsigned __int64, wchar_t *, int);
-PALIMPORT int __cdecl _wtoi(const wchar_t *);
-PALIMPORT size_t __cdecl wcsspn (const wchar_t *, const wchar_t *);
-PALIMPORT double __cdecl wcstod(const wchar_t *, wchar_t **);
-PALIMPORT int __cdecl iswalpha(wchar_t);
-PALIMPORT int __cdecl iswprint(wchar_t);
-PALIMPORT int __cdecl iswupper(wchar_t);
-PALIMPORT int __cdecl iswspace(wchar_t);
-PALIMPORT int __cdecl iswdigit(wchar_t);
-PALIMPORT int __cdecl iswxdigit(wchar_t);
-PALIMPORT wchar_t __cdecl towlower(wchar_t);
-PALIMPORT wchar_t __cdecl towupper(wchar_t);
+PALIMPORT size_t __cdecl PAL_wcslen(const WCHAR *);
+PALIMPORT int __cdecl PAL_wcscmp(const WCHAR*, const WCHAR*);
+PALIMPORT int __cdecl PAL_wcsncmp(const WCHAR *, const WCHAR *, size_t);
+PALIMPORT WCHAR * __cdecl PAL_wcscat(WCHAR *, const WCHAR *);
+PALIMPORT WCHAR * __cdecl PAL_wcsncat(WCHAR *, const WCHAR *, size_t);
+PALIMPORT WCHAR * __cdecl PAL_wcscpy(WCHAR *, const WCHAR *);
+PALIMPORT WCHAR * __cdecl PAL_wcsncpy(WCHAR *, const WCHAR *, size_t);
+PALIMPORT const WCHAR * __cdecl PAL_wcschr(const WCHAR *, WCHAR);
+PALIMPORT const WCHAR * __cdecl PAL_wcsrchr(const WCHAR *, WCHAR);
+PALIMPORT WCHAR _WConst_return * __cdecl PAL_wcspbrk(const WCHAR *, const WCHAR *);
+PALIMPORT WCHAR _WConst_return * __cdecl PAL_wcsstr(const WCHAR *, const WCHAR *);
+PALIMPORT WCHAR * __cdecl PAL_wcstok(WCHAR *, const WCHAR *);
+PALIMPORT size_t __cdecl PAL_wcscspn(const WCHAR *, const WCHAR *);
+PALIMPORT int __cdecl PAL_swprintf(WCHAR *, const WCHAR *, ...);
+PALIMPORT int __cdecl PAL_vswprintf(WCHAR *, const WCHAR *, va_list);
+PALIMPORT int __cdecl _snwprintf(WCHAR *, size_t, const WCHAR *, ...);
+PALIMPORT int __cdecl PAL_swscanf(const WCHAR *, const WCHAR *, ...);
+PALIMPORT LONG __cdecl PAL_wcstol(const WCHAR *, WCHAR **, int);
+PALIMPORT ULONG __cdecl PAL_wcstoul(const WCHAR *, WCHAR **, int);
+PALIMPORT size_t __cdecl PAL_wcsspn (const WCHAR *, const WCHAR *);
+PALIMPORT double __cdecl PAL_wcstod(const WCHAR *, WCHAR **);
+PALIMPORT int __cdecl PAL_iswalpha(WCHAR);
+PALIMPORT int __cdecl PAL_iswprint(WCHAR);
+PALIMPORT int __cdecl PAL_iswupper(WCHAR);
+PALIMPORT int __cdecl PAL_iswspace(WCHAR);
+PALIMPORT int __cdecl PAL_iswdigit(WCHAR);
+PALIMPORT int __cdecl PAL_iswxdigit(WCHAR);
+PALIMPORT WCHAR __cdecl PAL_towlower(WCHAR);
+PALIMPORT WCHAR __cdecl PAL_towupper(WCHAR);
 
+PALIMPORT WCHAR * __cdecl _wcslwr(WCHAR *);
+PALIMPORT ULONGLONG _wcstoui64(const WCHAR *, WCHAR **, int);
+PALIMPORT WCHAR * __cdecl _i64tow(__int64, WCHAR *, int);
+PALIMPORT WCHAR * __cdecl _ui64tow(unsigned __int64, WCHAR *, int);
+PALIMPORT int __cdecl _wtoi(const WCHAR *);
 
 #ifdef __cplusplus
 extern "C++" {
-inline wchar_t *wcschr(wchar_t *_S, wchar_t _C)
-        {return ((wchar_t *)wcschr((const wchar_t *)_S, _C)); }
-inline wchar_t *wcsrchr(wchar_t *_S, wchar_t _C)
-        {return ((wchar_t *)wcsrchr((const wchar_t *)_S, _C)); }
-inline wchar_t *wcspbrk(wchar_t *_S, const wchar_t *_P)
-        {return ((wchar_t *)wcspbrk((const wchar_t *)_S, _P)); }
-inline wchar_t *wcsstr(wchar_t *_S, const wchar_t *_P)
-        {return ((wchar_t *)wcsstr((const wchar_t *)_S, _P)); }
+inline WCHAR *PAL_wcschr(WCHAR *_S, WCHAR _C)
+        {return ((WCHAR *)PAL_wcschr((const WCHAR *)_S, _C)); }
+inline WCHAR *PAL_wcsrchr(WCHAR *_S, WCHAR _C)
+        {return ((WCHAR *)PAL_wcsrchr((const WCHAR *)_S, _C)); }
+inline WCHAR *PAL_wcspbrk(WCHAR *_S, const WCHAR *_P)
+        {return ((WCHAR *)PAL_wcspbrk((const WCHAR *)_S, _P)); }
+inline WCHAR *PAL_wcsstr(WCHAR *_S, const WCHAR *_P)
+        {return ((WCHAR *)PAL_wcsstr((const WCHAR *)_S, _P)); }
 }
 #endif
 
@@ -5434,7 +5499,11 @@ PALIMPORT unsigned int __cdecl _rotl(unsigned int, int);
 PALIMPORT unsigned int __cdecl _rotr(unsigned int, int);
 PALIMPORT int __cdecl abs(int);
 PALIMPORT double __cdecl fabs(double); 
+#ifndef PAL_STDCPP_COMPAT
 PALIMPORT LONG __cdecl labs(LONG);
+#endif // !PAL_STDCPP_COMPAT
+// clang complains if this is declared with __int64
+PALIMPORT long long __cdecl llabs(long long);
 
 PALIMPORT double __cdecl sqrt(double);
 PALIMPORT double __cdecl log(double);
@@ -5452,9 +5521,11 @@ PALIMPORT double __cdecl cosh(double);
 PALIMPORT double __cdecl sinh(double);
 PALIMPORT double __cdecl tanh(double);
 PALIMPORT double __cdecl fmod(double, double);
+PALIMPORT float __cdecl fmodf(float, float);
 PALIMPORT double __cdecl floor(double);
 PALIMPORT double __cdecl ceil(double);
 PALIMPORT double __cdecl fabs(double);
+PALIMPORT float __cdecl fabsf(float);
 PALIMPORT double __cdecl modf(double, double *);
 PALIMPORT float __cdecl modff(float, float *);
 
@@ -5464,9 +5535,12 @@ PALIMPORT double __cdecl _copysign(double, double);
 
 #ifdef __cplusplus
 extern "C++" {
-inline float fabsf(float _X)
-{
-    return ((float)fabs((double)_X)); }
+
+#if defined(BIT64) && !defined(PAL_STDCPP_COMPAT)
+inline __int64 abs(__int64 _X) {
+    return llabs(_X);
+}
+#endif // defined(BIT64) && !defined(PAL_STDCPP_COMPAT)
 }
 #endif
 
@@ -5494,8 +5568,10 @@ PALIMPORT char * __cdecl _strdup(const char *);
 #define alloca  __builtin_alloca
 #endif // __GNUC__
 
+#ifndef PAL_STDCPP_COMPAT
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 #define min(a, b) (((a) < (b)) ? (a) : (b))
+#endif // !PAL_STDCPP_COMPAT
 
 PALIMPORT PAL_NORETURN void __cdecl exit(int);
 int __cdecl atexit(void (__cdecl *function)(void));
@@ -5505,13 +5581,14 @@ PALIMPORT void * __cdecl bsearch(const void *, const void *, size_t, size_t,
 int (__cdecl *)(const void *, const void *));
 
 PALIMPORT void __cdecl _splitpath(const char *, char *, char *, char *, char *);
-PALIMPORT void __cdecl _wsplitpath(const wchar_t *, wchar_t *, wchar_t *, wchar_t *, wchar_t *);
+PALIMPORT void __cdecl _wsplitpath(const WCHAR *, WCHAR *, WCHAR *, WCHAR *, WCHAR *);
 PALIMPORT void __cdecl _makepath(char *, const char *, const char *, const char *, const char *);
-PALIMPORT void __cdecl _wmakepath(wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *);
+PALIMPORT void __cdecl _wmakepath(WCHAR *, const WCHAR *, const WCHAR *, const WCHAR *, const WCHAR *);
 PALIMPORT char * __cdecl _fullpath(char *, const char *, size_t);
 
 PALIMPORT void __cdecl _swab(char *, char *, int);
 
+#ifndef PAL_STDCPP_COMPAT
 PALIMPORT time_t __cdecl time(time_t *);
 
 struct tm {
@@ -5529,14 +5606,25 @@ struct tm {
 PALIMPORT struct tm * __cdecl localtime(const time_t *);
 PALIMPORT time_t __cdecl mktime(struct tm *);
 PALIMPORT char * __cdecl ctime(const time_t *);
+#endif // !PAL_STDCPP_COMPAT
 
 PALIMPORT int __cdecl _open_osfhandle(INT_PTR, int);
 PALIMPORT int __cdecl _close(int);
 
 PALIMPORT int __cdecl _flushall();
 
+#ifdef PAL_STDCPP_COMPAT
+
+struct _PAL_FILE;
+typedef struct _PAL_FILE PAL_FILE;
+
+#else // PAL_STDCPP_COMPAT
+
 struct _FILE;
 typedef struct _FILE FILE;
+typedef struct _FILE PAL_FILE;
+#endif // PAL_STDCPP_COMPAT
+
 
 #define SEEK_SET    0
 #define SEEK_CUR    1
@@ -5554,36 +5642,38 @@ typedef struct _FILE FILE;
 #define _IOLBF  1       /* setvbuf should set line buffered */
 #define _IONBF  2       /* setvbuf should set unbuffered */
 
-PALIMPORT int __cdecl fclose(FILE *);
-PALIMPORT void __cdecl setbuf(FILE *, char*);
-PALIMPORT int __cdecl fflush(FILE *);
-PALIMPORT size_t __cdecl fwrite(const void *, size_t, size_t, FILE *);
-PALIMPORT size_t __cdecl fread(void *, size_t, size_t, FILE *);
-PALIMPORT char * __cdecl fgets(char *, int, FILE *);
-PALIMPORT wchar_t * __cdecl fgetws(wchar_t *, int, FILE *);
-PALIMPORT int __cdecl fputs(const char *, FILE *);
-PALIMPORT int __cdecl fputc(int c, FILE *stream);
-PALIMPORT int __cdecl putchar(int c);
-PALIMPORT int __cdecl fprintf(FILE *, const char *, ...);
-PALIMPORT int __cdecl fwprintf(FILE *, const wchar_t *, ...);
-PALIMPORT int __cdecl vfprintf(FILE *, const char *, va_list);
-PALIMPORT int __cdecl vfwprintf(FILE *, const wchar_t *, va_list);
-PALIMPORT int __cdecl _getw(FILE *);
-PALIMPORT int __cdecl _putw(int, FILE *);
-PALIMPORT int __cdecl fseek(FILE *, LONG, int);
-PALIMPORT int __cdecl fgetpos(FILE *, fpos_t *);
-PALIMPORT int __cdecl fsetpos(FILE *, const fpos_t *);
-PALIMPORT LONG __cdecl ftell(FILE *);
-PALIMPORT int __cdecl feof(FILE *);
-PALIMPORT int __cdecl ferror(FILE *);
-PALIMPORT FILE * __cdecl fopen(const char *, const char *);
-PALIMPORT FILE * __cdecl _fdopen(int, const char *);
-PALIMPORT FILE * __cdecl _wfopen(const wchar_t *, const wchar_t *);
-PALIMPORT FILE * __cdecl _wfsopen(const wchar_t *, const wchar_t *, int);
-PALIMPORT int __cdecl getc(FILE *stream);
-PALIMPORT int __cdecl fgetc(FILE *stream);
-PALIMPORT int __cdecl ungetc(int c, FILE *stream);
-PALIMPORT int __cdecl setvbuf(FILE *stream, char *, int, size_t);
+PALIMPORT int __cdecl PAL_fclose(PAL_FILE *);
+PALIMPORT void __cdecl PAL_setbuf(PAL_FILE *, char*);
+PALIMPORT int __cdecl PAL_fflush(PAL_FILE *);
+PALIMPORT size_t __cdecl PAL_fwrite(const void *, size_t, size_t, PAL_FILE *);
+PALIMPORT size_t __cdecl PAL_fread(void *, size_t, size_t, PAL_FILE *);
+PALIMPORT char * __cdecl PAL_fgets(char *, int, PAL_FILE *);
+PALIMPORT int __cdecl PAL_fputs(const char *, PAL_FILE *);
+PALIMPORT int __cdecl PAL_fputc(int c, PAL_FILE *stream);
+PALIMPORT int __cdecl PAL_putchar(int c);
+PALIMPORT int __cdecl PAL_fprintf(PAL_FILE *, const char *, ...);
+PALIMPORT int __cdecl PAL_vfprintf(PAL_FILE *, const char *, va_list);
+PALIMPORT int __cdecl PAL_fseek(PAL_FILE *, LONG, int);
+PALIMPORT int __cdecl PAL_fgetpos(PAL_FILE *, fpos_t *);
+PALIMPORT int __cdecl PAL_fsetpos(PAL_FILE *, const fpos_t *);
+PALIMPORT LONG __cdecl PAL_ftell(PAL_FILE *);
+PALIMPORT int __cdecl PAL_feof(PAL_FILE *);
+PALIMPORT int __cdecl PAL_ferror(PAL_FILE *);
+PALIMPORT PAL_FILE * __cdecl PAL_fopen(const char *, const char *);
+PALIMPORT int __cdecl PAL_getc(PAL_FILE *stream);
+PALIMPORT int __cdecl PAL_fgetc(PAL_FILE *stream);
+PALIMPORT int __cdecl PAL_ungetc(int c, PAL_FILE *stream);
+PALIMPORT int __cdecl PAL_setvbuf(PAL_FILE *stream, char *, int, size_t);
+PALIMPORT WCHAR * __cdecl PAL_fgetws(WCHAR *, int, PAL_FILE *);
+PALIMPORT int __cdecl PAL_fwprintf(PAL_FILE *, const WCHAR *, ...);
+PALIMPORT int __cdecl PAL_vfwprintf(PAL_FILE *, const WCHAR *, va_list);
+PALIMPORT int __cdecl PAL_wprintf(const WCHAR*, ...);
+
+PALIMPORT int __cdecl _getw(PAL_FILE *);
+PALIMPORT int __cdecl _putw(int, PAL_FILE *);
+PALIMPORT PAL_FILE * __cdecl _fdopen(int, const char *);
+PALIMPORT PAL_FILE * __cdecl _wfopen(const WCHAR *, const WCHAR *);
+PALIMPORT PAL_FILE * __cdecl _wfsopen(const WCHAR *, const WCHAR *, int);
 
 /* Maximum value that can be returned by the rand function. */
 
@@ -5594,7 +5684,6 @@ PALIMPORT void   __cdecl srand(unsigned int);
 
 PALIMPORT int __cdecl printf(const char *, ...);
 PALIMPORT int __cdecl vprintf(const char *, va_list);
-PALIMPORT int __cdecl wprintf(const wchar_t*, ...);
 
 #ifdef _MSC_VER
 #define PAL_get_caller _MSC_VER
@@ -5602,15 +5691,22 @@ PALIMPORT int __cdecl wprintf(const wchar_t*, ...);
 #define PAL_get_caller 0
 #endif
 
-PALIMPORT FILE * __cdecl PAL_get_stdout(int caller);
-PALIMPORT FILE * __cdecl PAL_get_stdin(int caller);
-PALIMPORT FILE * __cdecl PAL_get_stderr(int caller);
+PALIMPORT PAL_FILE * __cdecl PAL_get_stdout(int caller);
+PALIMPORT PAL_FILE * __cdecl PAL_get_stdin(int caller);
+PALIMPORT PAL_FILE * __cdecl PAL_get_stderr(int caller);
 PALIMPORT int * __cdecl PAL_errno(int caller);
 
+#ifdef PAL_STDCPP_COMPAT
+#define PAL_stdout (PAL_get_stdout(PAL_get_caller))
+#define PAL_stdin  (PAL_get_stdin(PAL_get_caller))
+#define PAL_stderr (PAL_get_stderr(PAL_get_caller))
+#define PAL_errno   (*PAL_errno(PAL_get_caller))
+#else // PAL_STDCPP_COMPAT
 #define stdout (PAL_get_stdout(PAL_get_caller))
 #define stdin  (PAL_get_stdin(PAL_get_caller))
 #define stderr (PAL_get_stderr(PAL_get_caller))
 #define errno   (*PAL_errno(PAL_get_caller))
+#endif // PAL_STDCPP_COMPAT
 
 PALIMPORT char * __cdecl getenv(const char *);
 PALIMPORT int __cdecl _putenv(const char *);
@@ -5834,247 +5930,132 @@ public:
 class PAL_EnterHolder {
 public:
     // using constructor to suppress the "unused variable" warnings
-    PAL_EnterHolder(){}
+    PAL_EnterHolder() {}
 };
 class PAL_LeaveHolder {
 public:
     // using constructor to suppress the "unused variable" warnings
-    PAL_LeaveHolder(){}
+    PAL_LeaveHolder() {}
 };
 #endif // __cplusplus
 
 #endif // FEATURE_PAL_SXS
 
-#if FEATURE_PAL_SXS
+#ifdef __cplusplus
 
 #include "pal_unwind.h"
 
-// A pretend exception code that we use to stand for external exceptions,
-// such as a C++ exception leaking across a P/Invoke boundary into
-// COMPlusFrameHandler.
-#define EXCEPTION_FOREIGN 0xe0455874    // 0xe0000000 | 'EXT'
+struct PAL_SEHException
+{
+public:
+    // Note that the following two are actually embedded in this heap-allocated
+    // instance - in contrast to Win32, where the exception record would usually
+    // be allocated on the stack.  This is needed because foreign cleanup handlers
+    // partially unwind the stack on the second pass.
+    EXCEPTION_POINTERS ExceptionPointers;
+    EXCEPTION_RECORD ExceptionRecord;
+    CONTEXT ContextRecord;
 
-// Test whether the argument exceptionObject is an SEH exception.  If it is,
-// return the associated exception pointers.  If it is not, return NULL.
+    PAL_SEHException(EXCEPTION_RECORD *pExceptionRecord, CONTEXT *pContextRecord)
+    {
+        ExceptionPointers.ExceptionRecord = &ExceptionRecord;
+        ExceptionPointers.ContextRecord = &ContextRecord;
+        ExceptionRecord = *pExceptionRecord;
+        ContextRecord = *pContextRecord;
+    }
+};
+
+typedef VOID (PALAPI *PHARDWARE_EXCEPTION_HANDLER)(PAL_SEHException* ex);
+
 PALIMPORT
-EXCEPTION_POINTERS *
+VOID
 PALAPI
-PAL_GetExceptionPointers(struct _Unwind_Exception *exceptionObject);
+PAL_SetHardwareExceptionHandler(
+    IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler);
 
-typedef void (*PFN_PAL_BODY)(void *pvParam);
+class PAL_CatchHardwareExceptionHolder
+{
+public:
+    PAL_CatchHardwareExceptionHolder();
 
-typedef struct _PAL_DISPATCHER_CONTEXT {
-    _Unwind_Action actions;
-    struct _Unwind_Exception *exception_object;
-    struct _Unwind_Context *context;
-} PAL_DISPATCHER_CONTEXT;
+    ~PAL_CatchHardwareExceptionHolder();
 
-typedef EXCEPTION_DISPOSITION (*PFN_PAL_EXCEPTION_FILTER)(
-    EXCEPTION_POINTERS *ExceptionPointers,
-    PAL_DISPATCHER_CONTEXT *DispatcherContext,
-    void *pvParam);
+    static bool IsEnabled();
+};
 
-struct _Unwind_Exception *PAL_TryExcept(
-    PFN_PAL_BODY pfnBody,
-    PFN_PAL_EXCEPTION_FILTER pfnFilter,
-    void *pvParam,
-    BOOL *pfExecuteHandler);
-
-//
-// Possible results from PAL_TryExcept:
-//
-//   returned exception  pfExecuteHandler  means
-//   ------------------  ----------------  ----------------------------------------
-//   NULL                any               No exception escaped from the try block.
-//   non-NULL            FALSE             An exception escaped from the try block,
-//                                           but the filter did not want to handle it.
-//   non-NULL            TRUE              An exception escaped from the try block,
-//                                           and the filter wanted to handle it.
-//
-
-#define DEBUG_OK_TO_RETURN_BEGIN(arg)
-#define DEBUG_OK_TO_RETURN_END(arg)
-
-#ifdef _PPC_
-// This function does not do anything.  It is just here to be called by
-// PAL_TRY, so we can avoid the body of PAL_TRY being translated by the
-// compiler into a leaf function (i.e., one that does not set up its
-// own frame), because on a hardware fault in a leaf function, we would
-// get a stack that would not be unwindable.
-PALIMPORT VOID PALAPI PAL_DummyCall();
-#define PAL_DUMMY_CALL PAL_DummyCall();
+#ifdef FEATURE_ENABLE_HARDWARE_EXCEPTIONS
+#define HardwareExceptionHolder PAL_CatchHardwareExceptionHolder __catchHardwareException;
 #else
-#define PAL_DUMMY_CALL
-#endif
+#define HardwareExceptionHolder
+#endif // FEATURE_ENABLE_HARDWARE_EXCEPTIONS
 
-#ifdef __cplusplus
-class PAL_CatchHolder
-{
-public:
-    PAL_CatchHolder(_Unwind_Exception *exceptionObject)
-    {
-        __cxa_begin_catch(exceptionObject);
-    }
+#ifdef FEATURE_PAL_SXS
 
-    ~PAL_CatchHolder()
-    {
-        __cxa_end_catch();
-    }
-};
-
-class PAL_ExceptionHolder
-{
-private:
-    _Unwind_Exception *m_exceptionObject;
-public:
-    PAL_ExceptionHolder(_Unwind_Exception *exceptionObject)
-    {
-        m_exceptionObject = exceptionObject;
-    }
-
-    ~PAL_ExceptionHolder()
-    {
-        if (m_exceptionObject)
-        {
-            _Unwind_DeleteException(m_exceptionObject);
-        }
-    }
-
-    void SuppressRelease()
-    {
-        m_exceptionObject = NULL;
-    }
-};
-
-class PAL_NoHolder
-{
-public:
-    void SuppressRelease() {}
-};
-#endif // __cplusplus
-
+// Start of a try block for exceptions raised by RaiseException
 #define PAL_TRY(__ParamType, __paramDef, __paramRef)                            \
 {                                                                               \
-    struct __HandlerData                                                        \
+    __ParamType __param = __paramRef;                                           \
+    auto tryBlock = [](__ParamType __paramDef)                                  \
     {                                                                           \
-        __ParamType __param;                                                    \
-        EXCEPTION_DISPOSITION __handlerDisposition;                             \
-        __HandlerData(__ParamType param) : __param(param) {}                    \
+        HardwareExceptionHolder
+
+// Start of an exception handler. If an exception raised by the RaiseException 
+// occurs in the try block and the disposition is EXCEPTION_EXECUTE_HANDLER, 
+// the handler code is executed. If the disposition is EXCEPTION_CONTINUE_SEARCH,
+// the exception is rethrown. The EXCEPTION_CONTINUE_EXECUTION disposition is
+// not supported.
+#define PAL_EXCEPT(dispositionExpression)                                       \
     };                                                                          \
-    __HandlerData __handlerData(__paramRef);                                    \
-    class __Body                                                                \
+    const bool isFinally = false;                                               \
+    auto finallyBlock = []() {};                                                \
+    try                                                                         \
     {                                                                           \
-    public:                                                                     \
-        static void Run(void *__pvHandlerData)					                \
+        tryBlock(__param);                                                      \
+    }                                                                           \
+    catch (PAL_SEHException& ex)                                                \
+    {                                                                           \
+        EXCEPTION_DISPOSITION disposition = dispositionExpression;              \
+        _ASSERTE(disposition != EXCEPTION_CONTINUE_EXECUTION);                  \
+        if (disposition == EXCEPTION_CONTINUE_SEARCH)                           \
         {                                                                       \
-            __ParamType __paramDef = ((__HandlerData *)__pvHandlerData)->__param;	\
-            PAL_DUMMY_CALL;
+            throw;                                                              \
+        }
 
-// On Windows 32bit, we dont invoke filters on the second pass.
-// To ensure the same happens on the Mac, we check if we are 
-// in the first phase or not. If we are, we invoke the
-// filter and save the disposition in a local static. 
-//
-// However, if we are not in the first phase but in the second,
-// and thus unwinding, then we return the disposition saved 
-// from the first pass back (similar to how CRT
-// does it on x86).
-#define PAL_EXCEPT(dispositionExpression)				\
-        }                                                               \
-        static EXCEPTION_DISPOSITION Handler(							\
-            EXCEPTION_POINTERS *ExceptionPointers,                      \
-            PAL_DISPATCHER_CONTEXT *DispatcherContext,                  \
-            void *pvHandlerData)								\
-        {                                                               \
-            DEBUG_OK_TO_RETURN_BEGIN(PAL_EXCEPT)                        \
-            __HandlerData *pHandlerData = (__HandlerData *)pvHandlerData;                       \
-            void *pvParam = NULL;                                                               \
-            pvParam = pHandlerData->__param;                                                    \
-            if (!(ExceptionPointers->ExceptionRecord->ExceptionFlags & EXCEPTION_UNWINDING))	\
-                pHandlerData->__handlerDisposition = (EXCEPTION_DISPOSITION) (dispositionExpression);			\
-            return pHandlerData->__handlerDisposition;						\
-            DEBUG_OK_TO_RETURN_END(PAL_EXCEPT)                          \
-        }                                                               \
-    };                                                                  \
-    BOOL __fExecuteHandler;                                             \
-    _Unwind_Exception *__exception =                                    \
-        PAL_TryExcept(__Body::Run, __Body::Handler, &__handlerData, &__fExecuteHandler);	\
-    PAL_NoHolder __exceptionHolder;                                     \
-    if (__exception && __fExecuteHandler)                               \
-    {                                                                   \
-        PAL_CatchHolder __catchHolder(__exception);                     \
-        __exception = NULL;
+// Start of an exception handler. It works the same way as the PAL_EXCEPT except
+// that the disposition is obtained by calling the specified filter.
+#define PAL_EXCEPT_FILTER(filter) PAL_EXCEPT(filter(&ex.ExceptionPointers, __param))
 
-#define PAL_EXCEPT_FILTER(filter) PAL_EXCEPT(filter(ExceptionPointers, pvParam))
+// Start of a finally block. The finally block is executed both when the try block
+// finishes or when an exception is raised using the RaiseException in it.
+#define PAL_FINALLY                     \
+    };                                  \
+    const bool isFinally = true;        \
+    auto finallyBlock = [&]()           \
+    {                       
 
-// Executes the handler if the specified exception code matches
-// the one in the exception. Otherwise, returns EXCEPTION_CONTINUE_SEARCH.
-#define PAL_EXCEPT_IF_EXCEPTION_CODE(dwExceptionCode) \
-        PAL_EXCEPT(((ExceptionPointers->ExceptionRecord->ExceptionCode == dwExceptionCode)?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH))
-
-#define PAL_FINALLY                                                     \
-        }                                                               \
-        static EXCEPTION_DISPOSITION Filter(                            \
-            EXCEPTION_POINTERS *ExceptionPointers,                      \
-            PAL_DISPATCHER_CONTEXT *DispatcherContext,                  \
-            void *pvHandlerData)                                        \
-        {                                                               \
-            DEBUG_OK_TO_RETURN_BEGIN(PAL_FINALLY)                       \
-            return EXCEPTION_CONTINUE_SEARCH;                           \
-            DEBUG_OK_TO_RETURN_END(PAL_FINALLY)                         \
-        }                                                               \
-    };                                                                  \
-    BOOL __fExecuteHandler;                                             \
-    _Unwind_Exception *__exception =                                    \
-        PAL_TryExcept(__Body::Run, __Body::Filter, &__handlerData, &__fExecuteHandler); \
-    PAL_ExceptionHolder __exceptionHolder(__exception);                 \
-    {
-
-#define PAL_ENDTRY                              \
-    }                                           \
-    if (__exception)                            \
-    {                                           \
-        __exceptionHolder.SuppressRelease();    \
-        PAL_Leave(PAL_BoundaryBottom);          \
-        _Unwind_Resume(__exception);            \
-    }                                           \
+// End of an except or a finally block.
+#define PAL_ENDTRY                      \
+    };                                  \
+    if (isFinally)                      \
+    {                                   \
+        try                             \
+        {                               \
+            tryBlock(__param);          \
+        }                               \
+        catch (...)                     \
+        {                               \
+            finallyBlock();             \
+            throw;                      \
+        }                               \
+        finallyBlock();                 \
+    }                                   \
 }
-
-#if _DEBUG
-void PAL_CheckVirtualUnwind();
-#else // _DEBUG
-#define PAL_CheckVirtualUnwind()
-#endif // _DEBUG
-
 
 #endif // FEATURE_PAL_SXS
 
-PALIMPORT
-PAL_NORETURN
-VOID
-PALAPI
-PAL_CppRethrow();
-
-// Define PAL_CPP_THROW in terms of PAL_CPP_RETHROW, which does not throw
-// using the C++ runtime, but our own implementation that will also call
-// vectored handlers.
-#define PAL_CPP_THROW(type,expr)                \
-    {                                           \
-        type __exn = expr;                      \
-        PAL_Leave(PAL_BoundaryBottom);          \
-        PAL_CPP_TRY                             \
-        {                                       \
-            throw __exn;              \
-        }                                       \
-        PAL_CPP_CATCH_ALL                       \
-        {                                       \
-            PAL_CPP_RETHROW;                    \
-        }                                       \
-        PAL_CPP_ENDTRY                          \
-    }
-#define PAL_CPP_RETHROW                 PAL_CppRethrow();
-
-#define PAL_CPP_TRY                     try {
+#define PAL_CPP_THROW(type, obj) { throw obj; }
+#define PAL_CPP_RETHROW { throw; }
+#define PAL_CPP_TRY                     try { HardwareExceptionHolder
 #define PAL_CPP_CATCH_EXCEPTION(ident)  } catch (Exception *ident) { PAL_Reenter(PAL_BoundaryBottom);
 #define PAL_CPP_CATCH_EXCEPTION_NOARG   } catch (Exception *) { PAL_Reenter(PAL_BoundaryBottom);
 #define PAL_CPP_CATCH_DERIVED(type, ident) } catch (type *ident) { PAL_Reenter(PAL_BoundaryBottom);
@@ -6095,17 +6076,23 @@ PAL_CppRethrow();
     {                                                                   \
         ParamType __param = paramRef;                                   \
         ParamType paramDef; paramDef = __param;                         \
-        try {
+        try {                                                           \
+            HardwareExceptionHolder
+
 #define PAL_TRY_FOR_DLLMAIN(ParamType, paramDef, paramRef, _reason)     \
     {                                                                   \
         ParamType __param = paramRef;                                   \
         ParamType paramDef; paramDef = __param;                         \
-        try {
+        try {                                                           \
+            HardwareExceptionHolder
+
 #define PAL_ENDTRY                                                      \
         }                                                               \
     }
 
 #endif // FEATURE_PAL_SXS
+
+#endif // __cplusplus
 
 #define EXCEPTION_CONTINUE_SEARCH   0
 #define EXCEPTION_EXECUTE_HANDLER   1

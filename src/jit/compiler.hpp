@@ -1341,7 +1341,8 @@ void                GenTree::CopyFrom(const GenTree* src, Compiler* comp)
     assert((gtFlags & GTF_NODE_LARGE) || GenTree::s_gtNodeSizes[src->gtOper] == TREE_NODE_SZ_SMALL);
     GenTreePtr prev = gtPrev;
     GenTreePtr next = gtNext;
-    memcpy(this, src, src->GetNodeSize());
+    // The VTable pointer is copied intentionally here
+    memcpy((void*)this, (void*)src, src->GetNodeSize());
     this->gtPrev = prev;
     this->gtNext = next;
 #ifdef DEBUG
@@ -2791,6 +2792,7 @@ Compiler::fgWalkResult  Compiler::fgWalkTreePost(GenTreePtr    *pTree,
  * Returns true if the block was added to throw one of:
  *    range-check exception
  *    divide by zero exception  (Not used on X86/X64)
+ *    null reference exception (Not currently used)
  *    overflow exception
  */
 
@@ -2810,6 +2812,9 @@ bool                Compiler::fgIsThrowHlpBlk(BasicBlock * block)
 
     if (!((call->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_RNGCHKFAIL))   ||
           (call->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_THROWDIVZERO)) ||
+#ifndef RYUJIT_CTPBUILD
+          (call->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_THROWNULLREF)) ||
+#endif
           (call->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_OVERFLOW))))
         return false;
 

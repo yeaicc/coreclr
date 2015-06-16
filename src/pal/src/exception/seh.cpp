@@ -55,6 +55,17 @@ SET_DEFAULT_DEBUG_CHANNEL(EXCEPT);
 /* Bit 28 of exception codes is reserved. */
 const UINT RESERVED_SEH_BIT = 0x800000;
 
+/* Internal variables definitions **********************************************/
+
+PHARDWARE_EXCEPTION_HANDLER g_hardwareExceptionHandler = NULL;
+
+#ifdef __llvm__
+__thread 
+#else // __llvm__
+__declspec(thread)
+#endif // !__llvm__
+int t_holderCount = 0;
+
 /* Internal function declarations *********************************************/
 
 BOOL SEHInitializeConsole();
@@ -73,18 +84,18 @@ Function :
 
     Initialize all SEH-related stuff (signals, etc)
 
-    (no parameters)
+Parameters :
+    CPalThread * pthrCurrent : reference to the current thread.
+    PAL initialize flags
 
 Return value :
     TRUE  if SEH support initialization succeeded
     FALSE otherwise
 --*/
-BOOL SEHInitialize (CPalThread *pthrCurrent)
+BOOL 
+SEHInitialize (CPalThread *pthrCurrent, DWORD flags)
 {
     BOOL bRet = FALSE;
-#if !HAVE_MACH_EXCEPTIONS
-    PAL_ERROR palError = NO_ERROR;
-#endif // !HAVE_MACH_EXCEPTIONS
 
     if (!SEHInitializeConsole())
     {
@@ -94,13 +105,22 @@ BOOL SEHInitialize (CPalThread *pthrCurrent)
     }
 
 #if !HAVE_MACH_EXCEPTIONS
-    SEHInitializeSignals();
-    palError = StartExternalSignalHandlerThread(pthrCurrent);
-    if (NO_ERROR != palError)
+    if (!SEHInitializeSignals())
     {
-        ERROR("StartExternalSignalHandlerThread returned %d\n", palError);
+        ERROR("SEHInitializeSignals failed!\n");
         SEHCleanup();
         goto SEHInitializeExit;
+    }
+
+    if (flags & PAL_INITIALIZE_SIGNAL_THREAD)
+    {
+        PAL_ERROR palError = StartExternalSignalHandlerThread(pthrCurrent);
+        if (NO_ERROR != palError)
+        {
+            ERROR("StartExternalSignalHandlerThread returned %d\n", palError);
+            SEHCleanup();
+            goto SEHInitializeExit;
+        }
     }
 #endif
     bRet = TRUE;
@@ -115,10 +135,14 @@ Function :
 
     Undo work done by SEHInitialize
 
-    (no parameters, no return value)
+Parameters :
+    None
+
+    (no return value)
     
 --*/
-void SEHCleanup (void)
+VOID 
+SEHCleanup()
 {
     TRACE("Cleaning up SEH\n");
 
@@ -129,14 +153,56 @@ void SEHCleanup (void)
 #endif
 }
 
-#ifdef FEATURE_PAL_SXS
-BOOL
-PALAPI
-PAL_RegisterMacEHPort()
+/*++
+Function:
+    PAL_SetHardwareExceptionHandler
+
+    Register a hardware exception handler.
+
+Parameters:
+    handler - exception handler
+
+Return value:
+    None
+--*/
+VOID
+PALAPI 
+PAL_SetHardwareExceptionHandler(
+    IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler)
+
 {
-    return SEHEnable(InternalGetCurrentThread()) == ERROR_SUCCESS;
+    g_hardwareExceptionHandler = exceptionHandler;
 }
 
+/*++
+Function:
+    SEHProcessException
+
+    Build the PAL exception and sent it to any handler registered.
+
+Parameters:
+    PEXCEPTION_POINTERS pointers
+
+Return value:
+    Returns only if the exception is unhandled
+--*/
+VOID
+SEHProcessException(PEXCEPTION_POINTERS pointers)
+{
+    PAL_SEHException exception(pointers->ExceptionRecord, pointers->ContextRecord);
+
+    if (g_hardwareExceptionHandler != NULL)
+    {
+        g_hardwareExceptionHandler(&exception);
+    }
+
+    if (PAL_CatchHardwareExceptionHolder::IsEnabled())
+    {
+        throw exception;
+    }
+
+    TRACE("Unhandled hardware exception %08x\n", pointers->ExceptionRecord->ExceptionCode);
+}
 
 /*++
 Function :
@@ -156,7 +222,7 @@ PAL_ERROR SEHEnable(CPalThread *pthrCurrent)
 {
 #if HAVE_MACH_EXCEPTIONS
     return pthrCurrent->EnableMachExceptions();
-#elif __LINUX__
+#elif __LINUX__ || defined(__FreeBSD__)
     // TODO: This needs to be implemented. Cannot put an ASSERT here
     // because it will make other parts of PAL fail.
     return NO_ERROR;
@@ -185,12 +251,32 @@ PAL_ERROR SEHDisable(CPalThread *pthrCurrent)
     return pthrCurrent->DisableMachExceptions();
     // TODO: This needs to be implemented. Cannot put an ASSERT here
     // because it will make other parts of PAL fail.
-#elif __LINUX__
+#elif __LINUX__ || defined(__FreeBSD__)
     return NO_ERROR;
 #else // HAVE_MACH_EXCEPTIONS
 #error not yet implemented
 #endif // HAVE_MACH_EXCEPTIONS
 }
-#endif // FEATURE_PAL_SXS
+
+/*++
+
+PAL_HandlerExceptionHolder implementation
+
+--*/
+
+PAL_CatchHardwareExceptionHolder::PAL_CatchHardwareExceptionHolder()
+{
+    ++t_holderCount;
+}
+
+PAL_CatchHardwareExceptionHolder::~PAL_CatchHardwareExceptionHolder()
+{
+    --t_holderCount;
+}
+
+bool PAL_CatchHardwareExceptionHolder::IsEnabled()
+{
+    return t_holderCount > 0;
+}
 
 #include "seh-unwind.cpp"

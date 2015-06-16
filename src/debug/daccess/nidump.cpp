@@ -2836,7 +2836,7 @@ IMetaDataImport2 * NativeImageDumper::TypeToString(PTR_CCOR_SIGNATURE &sig,
     {
         buf.AppendPrintf( "%s", elementNames[type] );
     }
-    else switch (type)
+    else switch ((DWORD)type)
     {
     case ELEMENT_TYPE_CANON_ZAPSIG:
         buf.Append( W("System.__Canon") );
@@ -5355,6 +5355,7 @@ const NativeImageDumper::EnumMnemonics s_CorCompileHdrFlags[] =
 #define CCHF_ENTRY(f) NativeImageDumper::EnumMnemonics(f, W(#f))
     CCHF_ENTRY(CORCOMPILE_HEADER_HAS_SECURITY_DIRECTORY),
     CCHF_ENTRY(CORCOMPILE_HEADER_IS_IBC_OPTIMIZED),
+    CCHF_ENTRY(CORCOMPILE_HEADER_IS_READY_TO_RUN),
 #undef CCHF_ENTRY
 };
 
@@ -5669,7 +5670,7 @@ NativeImageDumper::EnumMnemonics s_MTFlagsLow[] =
 #if defined(FEATURE_REMOTING)
     MTFLAG_ENTRY(ContextStatic),
 #endif
-    MTFLAG_ENTRY(UNUSED_ComponentSize_2),
+    MTFLAG_ENTRY(HasRemotingVtsInfo),
     MTFLAG_ENTRY(HasVariance),
     MTFLAG_ENTRY(HasDefaultCtor),
     MTFLAG_ENTRY(HasPreciseInitCctors),
@@ -5717,7 +5718,9 @@ NativeImageDumper::EnumMnemonics s_MTFlagsHigh[] =
 #if defined(FEATURE_COMINTEROP)
     MTFLAG_ENTRY(IfInterfaceThenHasGuidInfo),
 #endif
-    MTFLAG_ENTRY(HasRemotingVtsInfo),
+#if defined(FEATURE_ICASTABLE)    
+    MTFLAG_ENTRY(ICastable),
+#endif    
     MTFLAG_ENTRY(HasIndirectParent),
     MTFLAG_ENTRY(ContainsPointers),
     MTFLAG_ENTRY(HasTypeEquivalence),

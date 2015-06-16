@@ -1093,6 +1093,7 @@ public:
     // Initialization/shutdown routines for every instance of an BaseDomain.
 
     BaseDomain();
+    virtual ~BaseDomain() {}
     void Init();
     void Stop();
     void Terminate();
@@ -2032,6 +2033,7 @@ public:
 #ifndef FEATURE_CORECLR
     inline BOOL AppDomainManagerSetFromConfig();
     Assembly *GetAppDomainManagerEntryAssembly();
+    void ComputeTargetFrameworkName();
 #endif // FEATURE_CORECLR
 
 #if defined(FEATURE_CORECLR) && defined(FEATURE_COMINTEROP)
@@ -2103,7 +2105,6 @@ public:
     HRESULT GetComIPForExposedObject(IUnknown **pComIP);
 
     MethodTable *GetRedirectedType(WinMDAdapter::RedirectedTypeIndex index);
-    bool FindRedirectedAssembly(Assembly* pAssembly, WinMDAdapter::FrameworkAssemblyIndex* pIndex);
 #endif // FEATURE_COMINTEROP
 
 
@@ -2936,7 +2937,21 @@ public:
         LIMITED_METHOD_CONTRACT;
 
         return (m_dwFlags & ENABLE_ASSEMBLY_LOADFILE);
-     }
+    }
+
+    void DisableTransparencyEnforcement()
+    {
+        LIMITED_METHOD_CONTRACT;
+
+        m_dwFlags |= DISABLE_TRANSPARENCY_ENFORCEMENT;
+    }
+
+    BOOL IsTransparencyEnforcementDisabled()
+    {
+        LIMITED_METHOD_CONTRACT;
+
+        return (m_dwFlags & DISABLE_TRANSPARENCY_ENFORCEMENT);
+    }
 #endif // defined(FEATURE_CORECLR)
 
     void SetPassiveDomain()
@@ -3395,20 +3410,6 @@ private:
     COMorRemotingFlag m_COMorRemotingFlag;
     OBJECTHANDLE  m_hndMissing;     //Handle points to Missing.Value Object which is used for [Optional] arg scenario during IDispatch CCW Call
 
-    PTR_DomainAssembly m_pSystemDll;                            // System.dll loaded into this domain
-    PTR_DomainAssembly m_pSystemRuntimeWindowsRuntimeDll;       // System.Runtime.WindowsRuntime.dll loaded into this domain
-    PTR_DomainAssembly m_pSystemRuntimeWindowsRuntimeUIXamlDll; // System.Runtime.WindowsRuntime.UI.Xaml.dll loaded into this domain
-    PTR_DomainAssembly m_pSystemNumericsVectors;                // System.Numerics.Vectors.dll loaded into this domain
-public:
-    BOOL FindRedirectedAssemblyFromIndexIfLoaded(WinMDAdapter::FrameworkAssemblyIndex index, Assembly** ppAssembly);
-
-    BOOL IsSystemDll(Assembly *pAssembly)
-    {
-        LIMITED_METHOD_CONTRACT;
-        return (m_pSystemDll != NULL && m_pSystemDll->GetCurrentAssembly() == pAssembly);
-    }
-private:
-    
     MethodTable* m_rpCLRTypes[WinMDAdapter::RedirectedTypeIndex_Count];
 
     MethodTable* LoadRedirectedType(WinMDAdapter::RedirectedTypeIndex index, WinMDAdapter::FrameworkAssemblyIndex assembly);
@@ -3997,6 +3998,7 @@ public:
 #ifdef FEATURE_CORECLR
         ENABLE_SKIP_PLAT_CHECKS         = 0x200000, // Skip various assembly checks (like platform check)
         ENABLE_ASSEMBLY_LOADFILE        = 0x400000, // Allow Assembly.LoadFile in CoreCLR
+        DISABLE_TRANSPARENCY_ENFORCEMENT= 0x800000, // Disable enforcement of security transparency rules
 #endif        
     };
 
@@ -4520,7 +4522,7 @@ public:
 #endif // DACCESS_COMPILE
 
 #ifndef FEATURE_CORECLR    
-    static void ExecuteMainMethod(HMODULE hMod, __in_opt LPWSTR path = NULL);
+	static void ExecuteMainMethod(HMODULE hMod, __in_opt LPWSTR path = NULL);
 #endif
     static void ActivateApplication(int *pReturnValue);
 
@@ -5162,8 +5164,7 @@ typedef VPTR(class SharedDomain) PTR_SharedDomain;
 
 class SharedDomain : public BaseDomain
 {
-
-    VPTR_VTABLE_CLASS(SharedDomain, BaseDomain)
+    VPTR_VTABLE_CLASS_AND_CTOR(SharedDomain, BaseDomain)
 
 public:
 

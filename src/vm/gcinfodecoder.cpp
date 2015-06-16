@@ -53,6 +53,22 @@
     } while (0)
 #endif // !VALIDATE_ROOT
 
+#ifndef LOG_PIPTR
+#define LOG_PIPTR(pObjRef, gcFlags, hCallBack)                                                                                                  \
+    {                                                                                                                                           \
+        GCCONTEXT* pGCCtx = (GCCONTEXT*)(hCallBack);                                                                                            \
+        if (pGCCtx->sc->promotion)                                                                                                              \
+        {                                                                                                                                       \
+            LOG((LF_GCROOTS, LL_INFO1000, /* Part Three */                                                                                      \
+                LOG_PIPTR_OBJECT_CLASS(OBJECTREF_TO_UNCHECKED_OBJECTREF(*pObjRef), (gcFlags & GC_CALL_PINNED), (gcFlags & GC_CALL_INTERIOR)))); \
+        }                                                                                                                                       \
+        else                                                                                                                                    \
+        {                                                                                                                                       \
+            LOG((LF_GCROOTS, LL_INFO1000, /* Part Three */                                                                                      \
+                LOG_PIPTR_OBJECT(OBJECTREF_TO_UNCHECKED_OBJECTREF(*pObjRef), (gcFlags & GC_CALL_PINNED), (gcFlags & GC_CALL_INTERIOR))));       \
+        }                                                                                                                                       \
+    }
+#endif // !LOG_PIPTR
 
 bool GcInfoDecoder::SetIsInterruptibleCB (UINT32 startOffset, UINT32 stopOffset, LPVOID hCallback)
 {
@@ -1450,6 +1466,24 @@ OBJECTREF* GcInfoDecoder::GetRegisterSlot(
     return (OBJECTREF*)*(ppRax + regNum);
 }
 
+#ifdef FEATURE_PAL
+OBJECTREF* GcInfoDecoder::GetCapturedRegister(
+    int             regNum,
+    PREGDISPLAY     pRD
+    )
+{
+    _ASSERTE(regNum >= 0 && regNum <= 16);
+    _ASSERTE(regNum != 4);  // rsp
+
+    // The fields of CONTEXT are in the same order as
+    // the processor encoding numbers.
+
+    ULONGLONG *pRax;
+    pRax = &pRD->pCurrentContext->Rax;
+
+    return (OBJECTREF*)(pRax + regNum);
+}
+#endif // FEATURE_PAL
 
 bool GcInfoDecoder::IsScratchRegister(int regNum,  PREGDISPLAY pRD)
 {
@@ -1459,8 +1493,10 @@ bool GcInfoDecoder::IsScratchRegister(int regNum,  PREGDISPLAY pRD)
     UINT16 PreservedRegMask =
           (1 << 3)  // rbx
         | (1 << 5)  // rbp
+#ifndef UNIX_AMD64_ABI
         | (1 << 6)  // rsi
         | (1 << 7)  // rdi
+#endif // UNIX_AMD64_ABI
         | (1 << 12)  // r12
         | (1 << 13)  // r13
         | (1 << 14)  // r14
@@ -1505,6 +1541,28 @@ void GcInfoDecoder::ReportRegisterToGC(  // AMD64
 
     OBJECTREF* pObjRef = GetRegisterSlot( regNum, pRD );
 
+#ifdef FEATURE_PAL
+    // On PAL, we don't always have the context pointers available due to
+    // a limitation of an unwinding library. In such case, the context
+    // pointers for some nonvolatile registers are NULL.
+    // In such case, we let the pObjRef point to the captured register
+    // value in the context and pin the object itself.
+    if (pObjRef == NULL)
+    {
+        // Report a pinned object to GC only in the promotion phase when the
+        // GC is scanning roots. 
+        GCCONTEXT* pGCCtx = (GCCONTEXT*)(hCallBack);
+        if (!pGCCtx->sc->promotion)
+        {
+            return;
+        }
+        
+        pObjRef = GetCapturedRegister(regNum, pRD);
+
+        gcFlags |= GC_CALL_PINNED;
+    }
+#endif // FEATURE_PAL
+
 #ifdef _DEBUG
     if(IsScratchRegister(regNum, pRD))
     {
@@ -1517,8 +1575,7 @@ void GcInfoDecoder::ReportRegisterToGC(  // AMD64
 
     VALIDATE_ROOT((gcFlags & GC_CALL_INTERIOR), hCallBack, pObjRef);
 
-    LOG((LF_GCROOTS, LL_INFO1000, /* Part Three */
-         LOG_PIPTR_OBJECT_CLASS(OBJECTREF_TO_UNCHECKED_OBJECTREF(*pObjRef), (gcFlags & GC_CALL_PINNED), (gcFlags & GC_CALL_INTERIOR))));
+    LOG_PIPTR(pObjRef, gcFlags, hCallBack);
 #endif //_DEBUG
 
     gcFlags |= CHECK_APP_DOMAIN;
@@ -1615,8 +1672,7 @@ void GcInfoDecoder::ReportRegisterToGC(  // ARM
 
     VALIDATE_ROOT((gcFlags & GC_CALL_INTERIOR), hCallBack, pObjRef);
 
-    LOG((LF_GCROOTS, LL_INFO1000, /* Part Three */
-         LOG_PIPTR_OBJECT_CLASS(OBJECTREF_TO_UNCHECKED_OBJECTREF(*pObjRef), (gcFlags & GC_CALL_PINNED), (gcFlags & GC_CALL_INTERIOR))));
+    LOG_PIPTR(pObjRef, gcFlags, hCallBack);
 #endif //_DEBUG
 
     gcFlags |= CHECK_APP_DOMAIN;
@@ -1710,8 +1766,7 @@ void GcInfoDecoder::ReportRegisterToGC( // ARM64
 
     VALIDATE_ROOT((gcFlags & GC_CALL_INTERIOR), hCallBack, pObjRef);
 
-    LOG((LF_GCROOTS, LL_INFO1000, /* Part Three */
-         LOG_PIPTR_OBJECT_CLASS(OBJECTREF_TO_UNCHECKED_OBJECTREF(*pObjRef), (gcFlags & GC_CALL_PINNED), (gcFlags & GC_CALL_INTERIOR))));
+    LOG_PIPTR(pObjRef, gcFlags, hCallBack);
 #endif //_DEBUG
 
     gcFlags |= CHECK_APP_DOMAIN;
@@ -1781,7 +1836,19 @@ OBJECTREF* GcInfoDecoder::GetStackSlot(
         _ASSERTE( GC_FRAMEREG_REL == spBase );
         _ASSERTE( NO_STACK_BASE_REGISTER != m_StackBaseRegister );
 
-        pObjRef = (OBJECTREF*)((*((SIZE_T*)(GetRegisterSlot( m_StackBaseRegister, pRD )))) + spOffset);
+        SIZE_T * pFrameReg = (SIZE_T*) GetRegisterSlot(m_StackBaseRegister, pRD);
+
+#ifdef FEATURE_PAL
+        // On PAL, we don't always have the context pointers available due to
+        // a limitation of an unwinding library. In such case, the context
+        // pointers for some nonvolatile registers are NULL.
+        if (pFrameReg == NULL)
+        {
+            pFrameReg = (SIZE_T*) GetCapturedRegister(m_StackBaseRegister, pRD);
+        }
+#endif // FEATURE_PAL
+
+        pObjRef = (OBJECTREF*)(*pFrameReg + spOffset);
     }
 
     return pObjRef;
@@ -1839,8 +1906,7 @@ void GcInfoDecoder::ReportStackSlotToGC(
 
     VALIDATE_ROOT((gcFlags & GC_CALL_INTERIOR), hCallBack, pObjRef);
 
-    LOG((LF_GCROOTS, LL_INFO1000, /* Part Three */
-         LOG_PIPTR_OBJECT_CLASS(OBJECTREF_TO_UNCHECKED_OBJECTREF(*pObjRef), (gcFlags & GC_CALL_PINNED), (gcFlags & GC_CALL_INTERIOR))));
+    LOG_PIPTR(pObjRef, gcFlags, hCallBack);
 #endif
 
     gcFlags |= CHECK_APP_DOMAIN;

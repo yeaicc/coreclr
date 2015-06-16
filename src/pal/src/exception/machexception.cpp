@@ -238,7 +238,7 @@ PAL_ERROR CorUnix::CPalThread::EnableMachExceptions()
         
         NONPAL_TRACE("Enabling %s handlers for thread %08X\n",
                      hExceptionPort == s_TopExceptionPort ? "top" : "bottom",
-                     pthread_mach_thread_np((pthread_t)GetThreadId()));
+                     pthread_mach_thread_np(GetPThreadSelf()));
 
         // Swap current handlers into temporary storage first. That's because it's possible (even likely) that
         // some or all of the handlers might still be ours. In those cases we don't want to overwrite the
@@ -514,109 +514,6 @@ BOOL SEHDisableMachExceptions()
 void PAL_DispatchException(PCONTEXT pContext, PEXCEPTION_RECORD pExRecord)
 #else // defined(_AMD64_)
 
-//
-// REX prefix byte
-//
-#define REX_PREFIX_BASE         0x40        // 0100xxxx
-#define REX_OPERAND_SIZE_64BIT  0x08        // xxxx1xxx
-#define REX_MODRM_REG_EXT       0x04        // xxxxx1xx     // use for 'middle' 3 bit field of mod/r/m
-#define REX_SIB_INDEX_EXT       0x02        // xxxxxx10
-#define REX_MODRM_RM_EXT        0x01        // XXXXXXX1     // use for low 3 bit field of mod/r/m
-#define REX_SIB_BASE_EXT        0x01        // XXXXXXX1
-#define REX_OPCODE_REG_EXT      0x01        // XXXXXXX1
-
-bool IsDivByZeroAnIntegerOverflow(EXCEPTION_POINTERS *pExceptionPointers)
-{
-    _ASSERTE(pExceptionPointers->ExceptionRecord->ExceptionCode  == EXCEPTION_INT_DIVIDE_BY_ZERO);
-
-    PCONTEXT pContext = pExceptionPointers->ContextRecord;
-    
-    BYTE * pCode = (BYTE*)(size_t)pContext->Rip;
-    INT64  divisor  = 0;
-    bool fIsOperand64bit = false;
-    bool fCanUseExtendedRegisters = false;
-    
-    // Check if RIP points at a "idiv ..." instruction
-    if (*pCode != 0xF7)
-    {
-        // Its possible that we may have the REX byte at RIP.
-        if (*pCode & REX_PREFIX_BASE)
-        {
-            fIsOperand64bit = (*pCode & REX_OPERAND_SIZE_64BIT)?true:false;
-            fCanUseExtendedRegisters = (*pCode & REX_MODRM_REG_EXT)?true:false;
-            
-            // Move to the next instruction byte and see if it represents IDIV instruction.
-            pCode++;
-            if (*pCode != 0xF7)
-            {
-                return false;
-            }
-        }
-        else
-        {
-             return false;
-        }
-    }
-
-    pCode++;
-
-    switch (*pCode++)
-    {
-        /* idiv reg        F7 F8..FF */
-    case 0xF8:
-        divisor = (DWORD64) pContext->Rax;
-        break;
-
-    case 0xF9:
-        divisor = (DWORD64) pContext->Rcx;
-        break;
-
-    case 0xFA:
-        divisor = (DWORD64) pContext->Rdx;
-        break;
-
-    case 0xFB:
-        divisor = (DWORD64) pContext->Rbx;
-        break;
-
-#ifdef _DEBUG
-    case 0xFC: //div esp will not be issued
-        _ASSERTE(FALSE);
-#endif // _DEBUG
-
-    case 0xFD:
-        divisor = (DWORD64) pContext->Rbp;
-        break;
-
-    case 0xFE:
-        divisor = (DWORD64) pContext->Rsi;
-        break;
-
-    case 0xFF:
-        divisor = (DWORD64) pContext->Rdi;
-        break;
-
-    default:
-        break;
-    }
-
-    if ((divisor != -1) && (fCanUseExtendedRegisters == true))
-    {
-    	// None of the regular registers indicated a divisor of -1.
-    	// Check if R12-R15 hold that value as the REX prefix indicated
-    	// that they could have been used.
-    	if ((pContext->R12 == (DWORD64)-1) || (pContext->R13 == (DWORD64)-1) || (pContext->R14 == (DWORD64)-1) || (pContext->R15 == (DWORD64)-1))
-    	{
-             divisor = -1;
-    	}
-    }
-    
-    if (divisor != -1)
-        return false;
-
-    return true;
-}
-
 // Since catch_exception_raise pushed the context and exception record on the stack, we need to adjust the signature
 // of PAL_DispatchException such that the corresponding arguments are considered to be on the stack per GCC64 calling
 // convention rules. Hence, the first 6 dummy arguments (corresponding to RDI, RSI, RDX,RCX, R8, R9).
@@ -639,27 +536,7 @@ void PAL_DispatchException(DWORD64 dwRDI, DWORD64 dwRSI, DWORD64 dwRDX, DWORD64 
     pointers.ExceptionRecord = pExRecord;
     pointers.ContextRecord = pContext;
 
-#if defined(_AMD64_)
-    // MACTODO_Future: Pull the x86 version here as well.
-    if (pExRecord->ExceptionCode == EXCEPTION_INT_DIVIDE_BY_ZERO)
-    {
-        // Its possible that an overflow may also have been mapped to a divide-by-zero
-        // exception. This happens when we try to divide the maximum negative value of a
-        // signed integer with -1. For such a case, Mach kernel is not documented to leave
-        // any hint of whether it was a real divide-by-zero or an integer overflow.
-        //
-        // Thus, we will attempt to decode the instruction @ RIP to determine if that
-        // is the case using the faulting context.
-        if (IsDivByZeroAnIntegerOverflow(&pointers))
-        {
-            // Yes, it is. So change the exception code to reflect that.
-            pointers.ExceptionRecord->ExceptionCode = EXCEPTION_INT_OVERFLOW;
-        }
-    }
-#endif // defined(_AMD64_)
-
-    // Raise the exception
-    SEHRaiseException(pThread, &pointers, 0);
+    SEHProcessException(&pointers);
 }
 
 #if defined(_X86_) || defined(_AMD64_)
@@ -1025,40 +902,7 @@ catch_exception_raise(
 
     void **FramePointer = (void **)ThreadState.esp;
 
-    // ThreadState.eip points to the instruction that caused the fault.
-    // In the frame we're constructing, we'll pretend PAL_DispatchExceptionWrapper
-    // was called by eip+1 instead of eip to work around a quirk in the
-    // stack unwinding logic of the gcc runtime.
-    //
-    // The quirk is the following.  The stack unwinder of the gcc runtime
-    // has been designed for unwinding stack frames created by ordinary
-    // function calls, so it expects that every return address on the
-    // stack points to an instruction following a call instruction.  If
-    // the target of a given call is a function declared to never return,
-    // gcc can generate code where this call is the very last instruction
-    // in a function, in which case the return address points to the first
-    // instruction of the function that happens to be laid out immediately
-    // after the calling function in the binary.  To ensure it gets the
-    // exception handling table for the right function, the stack unwinder
-    // therefore always subtracts one from any return address.  (Note that
-    // gdb isn't as smart in this case and actually shows the wrong symbol
-    // in a backtrace!)  Similarly, gcc's personality routine uses eip-1
-    // when looking up which try block we're in, since the call could have
-    // been the last instruction in the try block.
-    //
-    // This logic breaks down for the stack frame we are constructing here
-    // if our faulting instruction is the first instruction in a try block,
-    // since eip-1 would point outside the range of instructions that make
-    // up said block.  We fix this by storing eip+1 as the return address.
-    //
-    // Do we expect this to cause any problems to other code?  No - since
-    // we never actually return from PAL_DispatchException, this value
-    // should only ever be examined by the exception unwinder and gcc's
-    // personality routine.  At worst, this can cause some confusion to
-    // developers looking at stack traces produced by tools such as gdb
-    // and CrashReporter, who may see an eip that points in the middle of
-    // an instruction.
-    *--FramePointer = (void *)((ULONG_PTR)ThreadState.eip + 1);
+    *--FramePointer = (void *)((ULONG_PTR)ThreadState.eip);
 
     // Construct a stack frame for a pretend activation of the function
     // PAL_DispatchExceptionWrapper that serves only to make the stack
@@ -1106,40 +950,7 @@ catch_exception_raise(
 
     void **FramePointer = (void **)ThreadState.__rsp;
 
-    // ThreadState.eip points to the instruction that caused the fault.
-    // In the frame we're constructing, we'll pretend PAL_DispatchExceptionWrapper
-    // was called by eip+1 instead of eip to work around a quirk in the
-    // stack unwinding logic of the gcc runtime.
-    //
-    // The quirk is the following.  The stack unwinder of the gcc runtime
-    // has been designed for unwinding stack frames created by ordinary
-    // function calls, so it expects that every return address on the
-    // stack points to an instruction following a call instruction.  If
-    // the target of a given call is a function declared to never return,
-    // gcc can generate code where this call is the very last instruction
-    // in a function, in which case the return address points to the first
-    // instruction of the function that happens to be laid out immediately
-    // after the calling function in the binary.  To ensure it gets the
-    // exception handling table for the right function, the stack unwinder
-    // therefore always subtracts one from any return address.  (Note that
-    // gdb isn't as smart in this case and actually shows the wrong symbol
-    // in a backtrace!)  Similarly, gcc's personality routine uses eip-1
-    // when looking up which try block we're in, since the call could have
-    // been the last instruction in the try block.
-    //
-    // This logic breaks down for the stack frame we are constructing here
-    // if our faulting instruction is the first instruction in a try block,
-    // since eip-1 would point outside the range of instructions that make
-    // up said block.  We fix this by storing eip+1 as the return address.
-    //
-    // Do we expect this to cause any problems to other code?  No - since
-    // we never actually return from PAL_DispatchException, this value
-    // should only ever be examined by the exception unwinder and gcc's
-    // personality routine.  At worst, this can cause some confusion to
-    // developers looking at stack traces produced by tools such as gdb
-    // and CrashReporter, who may see an eip that points in the middle of
-    // an instruction.
-    *--FramePointer = (void *)((ULONG_PTR)ThreadState.__rip + 1);
+    *--FramePointer = (void *)((ULONG_PTR)ThreadState.__rip);
 
     // Construct a stack frame for a pretend activation of the function
     // PAL_DispatchExceptionWrapper that serves only to make the stack

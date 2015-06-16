@@ -1094,6 +1094,10 @@ private:
 class StgBlobPool : public StgPool
 {
     friend class VerifyLayoutsMD;
+
+    using StgPool::InitNew;
+    using StgPool::InitOnMem;
+    
 public:
     StgBlobPool(ULONG ulGrowInc=DFT_BLOB_HEAP_SIZE) :
         StgPool(ulGrowInc),
@@ -1246,6 +1250,8 @@ public:
         m_cRef(1),
         m_dataCopy(NULL)
     { LIMITED_METHOD_CONTRACT; }
+
+    virtual ~CInMemoryStream() {}
 
     void InitNew(
         void        *pMem,
@@ -1405,7 +1411,7 @@ public:
     CGrowableStream(float multiplicativeGrowthRate = 2.0, DWORD additiveGrowthRate = 4096);
 
 #ifndef DACCESS_COMPILE  
-    ~CGrowableStream();
+    virtual ~CGrowableStream();
 #endif
 
     // Expose the total raw buffer.

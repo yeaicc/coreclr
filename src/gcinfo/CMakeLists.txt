@@ -6,11 +6,14 @@ set( GCINFO_SOURCES
   dbggcinfoencoder.cpp
 )
 
+convert_to_absolute_path(GCINFO_SOURCES ${GCINFO_SOURCES})
+
 if(CLR_CMAKE_PLATFORM_UNIX)
     add_compile_options(-fPIC)
 endif(CLR_CMAKE_PLATFORM_UNIX)
 
-add_library(gcinfo
-    STATIC
-    ${GCINFO_SOURCES}
-)
+add_subdirectory(lib)
+add_subdirectory(crossgen)
+
+install (FILES gcinfoencoder.cpp
+               DESTINATION gcinfo)

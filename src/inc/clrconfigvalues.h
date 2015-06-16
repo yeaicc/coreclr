@@ -242,7 +242,7 @@ CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_DbgTransportLog, W("DbgTransportLog"), 
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_DbgTransportLogClass, W("DbgTransportLogClass"), "mask to control what is logged in DbgTransportLog")
 RETAIL_CONFIG_STRING_INFO_EX(UNSUPPORTED_DbgTransportProxyAddress, W("DbgTransportProxyAddress"), "allows specifying the transport proxy address", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_DbgTrapOnSkip, W("DbgTrapOnSkip"), 0, "allows breaking when we skip a breakpoint", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_DbgUseTransport, W("DbgUseTransport"), 0, "Allows using the debug transport (1) or regular mscordbi debugging (0)")
+RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_DbgWaitForDebuggerAttach, W("DbgWaitForDebuggerAttach"), 0, "Makes CoreCLR wait for a managed debugger to attach on process start (1) or regular process start (0)")
 CONFIG_DWORD_INFO_EX(INTERNAL_DbgWaitTimeout, W("DbgWaitTimeout"), 1, "specifies the timeout value for waits", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_DbgWFDETimeout, W("DbgWFDETimeout"), 25, "specifies the timeout value for wait when waiting for a debug event", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_RaiseExceptionOnAssert, W("RaiseExceptionOnAssert"), 0, "Raise a first chance (if set to 1) or second chance (if set to 2) exception on asserts.", CLRConfig::REGUTIL_default)
@@ -596,6 +596,7 @@ RETAIL_CONFIG_STRING_INFO(INTERNAL_WinMDPath, W("WinMDPath"), "Path for Windows 
 // Loader heap
 // 
 CONFIG_DWORD_INFO_EX(INTERNAL_LoaderHeapCallTracing, W("LoaderHeapCallTracing"), 0, "Loader heap troubleshooting", CLRConfig::REGUTIL_default)
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_CodeHeapReserveForJumpStubs, W("CodeHeapReserveForJumpStubs"), 2, "Percentage of code heap to reserve for jump stubs")
 
 // 
 // Log
@@ -764,7 +765,7 @@ CONFIG_DWORD_INFO(INTERNAL_NoASLRForNgen, W("NoASLRForNgen"), 0, "Turn off IMAGE
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_NgenAllowOutput, W("NgenAllowOutput"), 0, "If set to 1, the NGEN worker will bind to the parent console, thus allowing stdout output to work", CLRConfig::REGUTIL_default)
 
 #ifdef CROSSGEN_COMPILE
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_CrossGenAssumeInputSigned, L"CrossGenAssumeInputSigned", 1, "CrossGen should assume that its input assemblies will be signed before deployment")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_CrossGenAssumeInputSigned, W("CrossGenAssumeInputSigned"), 1, "CrossGen should assume that its input assemblies will be signed before deployment")
 #endif
 
 // 
@@ -817,9 +818,13 @@ RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_ProcessNameFormat, W("ProcessNameFormat"), 
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_COR_ENABLE_PROFILING, W("COR_ENABLE_PROFILING"), 0, "Flag to indicate whether profiling should be enabled for the currently running process.", CLRConfig::DontPrependCOMPLUS_ | CLRConfig::IgnoreConfigFiles)
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_COR_PROFILER, W("COR_PROFILER"), "Specifies GUID of profiler to load into currently running process", CLRConfig::DontPrependCOMPLUS_)
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_COR_PROFILER_PATH, W("COR_PROFILER_PATH"), "Specifies the path to the DLL of profiler to load into currently running process", CLRConfig::DontPrependCOMPLUS_)
+RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_COR_PROFILER_PATH_32, W("COR_PROFILER_PATH_32"), "Specifies the path to the DLL of profiler to load into currently running 32 bits process", CLRConfig::DontPrependCOMPLUS_)
+RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_COR_PROFILER_PATH_64, W("COR_PROFILER_PATH_64"), "Specifies the path to the DLL of profiler to load into currently running 64 bits process", CLRConfig::DontPrependCOMPLUS_)
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_CORECLR_ENABLE_PROFILING, W("CORECLR_ENABLE_PROFILING"), 0, "CoreCLR only: Flag to indicate whether profiling should be enabled for the currently running process.", CLRConfig::DontPrependCOMPLUS_ | CLRConfig::IgnoreConfigFiles)
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_CORECLR_PROFILER, W("CORECLR_PROFILER"), "CoreCLR only: Specifies GUID of profiler to load into currently running process", CLRConfig::DontPrependCOMPLUS_)
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_CORECLR_PROFILER_PATH, W("CORECLR_PROFILER_PATH"), "CoreCLR only: Specifies the path to the DLL of profiler to load into currently running process", CLRConfig::DontPrependCOMPLUS_)
+RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_CORECLR_PROFILER_PATH_32, W("CORECLR_PROFILER_PATH_32"), "CoreCLR only: Specifies the path to the DLL of profiler to load into currently running 32 process", CLRConfig::DontPrependCOMPLUS_)
+RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_CORECLR_PROFILER_PATH_64, W("CORECLR_PROFILER_PATH_64"), "CoreCLR only: Specifies the path to the DLL of profiler to load into currently running 64 process", CLRConfig::DontPrependCOMPLUS_)
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_ProfAPI_ProfilerCompatibilitySetting, W("ProfAPI_ProfilerCompatibilitySetting"), "Specifies the profiler loading policy (the default is not to load a V2 profiler in V4)", CLRConfig::REGUTIL_default | CLRConfig::TrimWhiteSpaceFromStringValue)
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_AttachThreadAlwaysOn, W("AttachThreadAlwaysOn"), "Forces profapi attach thread to be created on startup, instead of on-demand.")
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_MsBetweenAttachCheck, W("MsBetweenAttachCheck"), 500, "")
@@ -838,6 +843,10 @@ RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_PreVistaETWEnabled, W("ETWEnabled"), 0, "Th
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_VistaAndAboveETWEnabled, W("ETWEnabled"), 1, "This flag is used on OSes >= Vista to enable/disable ETW. It is enabled by default", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_STRING_INFO_EX(UNSUPPORTED_ETW_ObjectAllocationEventsPerTypePerSec, W("ETW_ObjectAllocationEventsPerTypePerSec"), "Desired number of GCSampledObjectAllocation ETW events to be logged per type per second.  If 0, then the default built in to the implementation for the enabled event (e.g., High, Low), will be used.", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_ProfAPI_ValidateNGENInstrumentation, W("ProfAPI_ValidateNGENInstrumentation"), 0, "This flag enables additional validations when using the IMetaDataEmit APIs for NGEN'ed images to ensure only supported edits are made.")
+
+#ifdef FEATURE_PERFMAP
+RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_PerfMapEnabled, W("PerfMapEnabled"), 0, "This flag is used on Linux to enable writing /tmp/perf-$pid.map. It is disabled by default", CLRConfig::REGUTIL_default)
+#endif
 
 //
 // Shim

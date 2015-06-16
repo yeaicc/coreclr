@@ -210,7 +210,7 @@ FCIMPL2_IV(void, COMDecimal::DoToCurrency, CY * result, DECIMAL d)
 }
 FCIMPLEND
 
-FCIMPL1(double, COMDecimal::ToDouble, DECIMAL d)
+FCIMPL1(double, COMDecimal::ToDouble, FC_DECIMAL d)
 {
     FCALL_CONTRACT;
 
@@ -223,12 +223,7 @@ FCIMPL1(double, COMDecimal::ToDouble, DECIMAL d)
 }
 FCIMPLEND
 
-#ifdef _MSC_VER
-// C4702: unreachable code on IA64 retail
-#pragma warning(push)
-#pragma warning(disable:4702)
-#endif
-FCIMPL1(INT32, COMDecimal::ToInt32, DECIMAL d)
+FCIMPL1(INT32, COMDecimal::ToInt32, FC_DECIMAL d)
 {
     FCALL_CONTRACT;
 
@@ -259,11 +254,8 @@ FCIMPL1(INT32, COMDecimal::ToInt32, DECIMAL d)
     FCThrowRes(kOverflowException, W("Overflow_Int32"));    
 }
 FCIMPLEND
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
 
-FCIMPL1(float, COMDecimal::ToSingle, DECIMAL d)
+FCIMPL1(float, COMDecimal::ToSingle, FC_DECIMAL d)
 {
     FCALL_CONTRACT;
 
@@ -343,10 +335,10 @@ int COMDecimal::NumberToDecimal(NUMBER* number, DECIMAL* value)
         }
     } else {
         if (e > DECIMAL_PRECISION) return 0;
-        while ((e > 0 || *p && e > -28) &&
-                (DECIMAL_HI32(d) < 0x19999999 || DECIMAL_HI32(d) == 0x19999999 &&
-                    (DECIMAL_MID32(d) < 0x99999999 || DECIMAL_MID32(d) == 0x99999999 &&
-                        (DECIMAL_LO32(d) < 0x99999999 || DECIMAL_LO32(d) == 0x99999999 && *p <= '5')))) {
+        while ((e > 0 || (*p && e > -28)) &&
+                (DECIMAL_HI32(d) < 0x19999999 || (DECIMAL_HI32(d) == 0x19999999 &&
+                    (DECIMAL_MID32(d) < 0x99999999 || (DECIMAL_MID32(d) == 0x99999999 &&
+                        (DECIMAL_LO32(d) < 0x99999999 || (DECIMAL_LO32(d) == 0x99999999 && *p <= '5'))))))) {
             DecMul10(&d);
             if (*p) DecAddInt32(&d, *p++ - '0');
             e--;
@@ -1314,10 +1306,10 @@ HaveScale64:
         rgulRem[1] = (rgulRem[1] << 1) + ulTmp;
         rgulRem[2] = (rgulRem[2] << 1) + ulTmp1;
 
-        if (rgulRem[2] > rgulDivisor[2] || rgulRem[2] == rgulDivisor[2] &&
-        (rgulRem[1] > rgulDivisor[1] || rgulRem[1] == rgulDivisor[1] &&
-        (rgulRem[0] > rgulDivisor[0] || rgulRem[0] == rgulDivisor[0] &&
-        (rgulQuo[0] & 1))))
+        if (rgulRem[2] > rgulDivisor[2] || (rgulRem[2] == rgulDivisor[2] &&
+        (rgulRem[1] > rgulDivisor[1] || (rgulRem[1] == rgulDivisor[1] &&
+        (rgulRem[0] > rgulDivisor[0] || (rgulRem[0] == rgulDivisor[0] &&
+        (rgulQuo[0] & 1)))))))
           goto RoundUp;
         break;
       }
@@ -1715,10 +1707,10 @@ HaveScale64:
         rgulRem[1] = (rgulRem[1] << 1) + ulTmp;
         rgulRem[2] = (rgulRem[2] << 1) + ulTmp1;
 
-        if (rgulRem[2] > rgulDivisor[2] || rgulRem[2] == rgulDivisor[2] &&
-        (rgulRem[1] > rgulDivisor[1] || rgulRem[1] == rgulDivisor[1] &&
-        (rgulRem[0] > rgulDivisor[0] || rgulRem[0] == rgulDivisor[0] &&
-        (rgulQuo[0] & 1))))
+        if (rgulRem[2] > rgulDivisor[2] || (rgulRem[2] == rgulDivisor[2] &&
+        (rgulRem[1] > rgulDivisor[1] || (rgulRem[1] == rgulDivisor[1] &&
+        (rgulRem[0] > rgulDivisor[0] || (rgulRem[0] == rgulDivisor[0] &&
+        (rgulQuo[0] & 1)))))))
           goto RoundUp;
         break;
       }

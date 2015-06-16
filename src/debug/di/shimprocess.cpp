@@ -19,7 +19,9 @@
 #include <limits.h>
 #include "shimpriv.h"
 
+#if !defined(FEATURE_CORESYSTEM)
 #include <tlhelp32.h>
+#endif
 
 //---------------------------------------------------------------------------------------
 //
@@ -1083,8 +1085,8 @@ HRESULT ShimProcess::QueueFakeThreadAttachEventsNoOrder()
 HRESULT ShimProcess::QueueFakeThreadAttachEventsNativeOrder() 
 { 
 #ifdef FEATURE_CORESYSTEM
-	_ASSERTE("NYI");
-	return E_FAIL;
+    _ASSERTE("NYI");
+    return E_FAIL;
 #else
     ICorDebugProcess * pProcess = GetProcess();
 
@@ -1731,22 +1733,23 @@ void ShimProcess::PreDispatchEvent(bool fRealCreateProcessEvent /*= false*/)
 
 }
 
-#if !defined(FEATURE_CORESYSTEM)
-
 // ----------------------------------------------------------------------------
 // ShimProcess::GetCLRInstanceBaseAddress
-// Finds the base address of mscorwks.dll 
+// Finds the base address of [core]clr.dll 
 // Arguments: none
-// Return value: returns the base address of mscorwks.dll if possible or NULL otherwise
+// Return value: returns the base address of [core]clr.dll if possible or NULL otherwise
 // 
 CORDB_ADDRESS ShimProcess::GetCLRInstanceBaseAddress()
 {
-    // get a "snapshot" of all modules in the target
+    CORDB_ADDRESS baseAddress = CORDB_ADDRESS(NULL);
     DWORD dwPid = m_pLiveDataTarget->GetPid();
+#if defined(FEATURE_CORESYSTEM)
+    // Debugger attaching to CoreCLR via CoreCLRCreateCordbObject should have already specified CLR module address.
+    // Code that help to find it now lives in dbgshim.
+#else
+    // get a "snapshot" of all modules in the target
     HandleHolder hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, dwPid);
     MODULEENTRY32 moduleEntry = { 0 };
-    CORDB_ADDRESS baseAddress = CORDB_ADDRESS(NULL);
-
 
     if (hSnapshot == INVALID_HANDLE_VALUE)
     {
@@ -1775,10 +1778,9 @@ CORDB_ADDRESS ShimProcess::GetCLRInstanceBaseAddress()
             } while (Module32Next(hSnapshot, &moduleEntry));
         }
     }
-
+#endif
     return baseAddress;
 } // ShimProcess::GetCLRInstanceBaseAddress
-#endif
 
 // ----------------------------------------------------------------------------
 // ShimProcess::FindLoadedCLR
@@ -1799,18 +1801,7 @@ CORDB_ADDRESS ShimProcess::GetCLRInstanceBaseAddress()
 //    
 HRESULT ShimProcess::FindLoadedCLR(CORDB_ADDRESS * pClrInstanceId)
 {
-    //
-    // Look up the image base of mscorwks from shared memory.
-    // Note that we could instead use OS facilities to look at the real module list,
-    // such as CreateToolHelp32Snapshot, and LoadModuleFirst
-    //
-
-#if !defined(FEATURE_CORESYSTEM)
     *pClrInstanceId = GetCLRInstanceBaseAddress();
-#else
-    _ASSERTE(!"Attempting to get CLR base address on non-Windows platform");
-    return E_NOTIMPL;
-#endif
     
     if (*pClrInstanceId == 0)
     {
@@ -1820,48 +1811,6 @@ HRESULT ShimProcess::FindLoadedCLR(CORDB_ADDRESS * pClrInstanceId)
     return S_OK;
 }
 
-//---------------------------------------------------------------------------------------
-//
-// If a debugger calls ICDRemote::CreateProcessEx() or ICDRemote::DebugActiveProcessEx(), 
-// then an ICDRemoteTarget should have been passed to us. We can query this port to find 
-// out the remote IP address (and possibly port) that the user wants to connect to.
-//
-// Arguments:
-//    pRemoteTarget - provided by the debugger for us to query the host name of the target machine
-//
-// Return Value:
-//    None.  Throws on errors.
-//
- 
-void ShimProcess::CheckForPortInfo(ICorDebugRemoteTarget * pRemoteTarget)
-{
-#if defined(FEATURE_DBGIPC_TRANSPORT_DI)
-    if (pRemoteTarget != NULL)
-    {
-        DWORD dwIPAddress = ResolveHostName(pRemoteTarget);
-        m_machineInfo.Init(dwIPAddress, 0);
-    }
-#endif // FEATURE_DBGIPC_TRANSPORT_DI
-}
-
-//---------------------------------------------------------------------------------------
-//
-// Resolve the host name given by the ICorDebugRemote to an IP address.  Currently only IPv4 and fully
-// qualified domain name are supported.
-//
-// Arguments:
-//    pRemoteTarget - provides the host name
-//
-// Return Value:
-//    Returns the IPv4 address of the target machine.
-//    Throws on errors.
-//
-
-DWORD ShimProcess::ResolveHostName(ICorDebugRemoteTarget * pRemoteTarget)
-{
-    DWORD dwIPAddress = 0;
-    return dwIPAddress;
-}
 
 //---------------------------------------------------------------------------------------
 //
@@ -1874,9 +1823,16 @@ DWORD ShimProcess::ResolveHostName(ICorDebugRemoteTarget * pRemoteTarget)
 
 HMODULE ShimProcess::GetDacModule()
 {
-    WCHAR wszAccessDllPath[MAX_PATH];
+    
     HModuleHolder hDacDll;
 
+#ifdef FEATURE_PAL
+    // For now on Unix we'll just search for DAC in the default location.
+    // Debugger can always control it by setting LD_LIBRARY_PATH env var.
+    WCHAR wszAccessDllPath[MAX_PATH] = MAKEDLLNAME_W(W("mscordaccore"));
+
+#else    
+    WCHAR wszAccessDllPath[MAX_PATH];
     //
     // Load the access DLL from the same directory as the the current CLR Debugging Services DLL.
     //
@@ -1911,6 +1867,7 @@ HMODULE ShimProcess::GetDacModule()
     {
         ThrowHR(E_INVALIDARG);
     }
+#endif //!FEATURE_PAL  
 
     hDacDll.Assign(WszLoadLibrary(wszAccessDllPath));
     if (!hDacDll)

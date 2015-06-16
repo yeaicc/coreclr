@@ -108,16 +108,22 @@ void __stdcall sxsJitStartup(CoreClrCallbacks const & cccallbacks)
 
 /*****************************************************************************/
 
-// placement new is normally hidden but just use it this once...
-void *__cdecl operator new(size_t, void *_P);
+struct CILJitSingletonAllocator { int x; };
+const CILJitSingletonAllocator CILJitSingleton = { 0 };
+
+void *__cdecl operator new(size_t, const CILJitSingletonAllocator&)
+{
+    static char CILJitBuff[sizeof(CILJit)];
+    return CILJitBuff;
+}
+
 ICorJitCompiler* g_realJitCompiler = nullptr;
 
 ICorJitCompiler* __stdcall getJit()
 {
-    static char CILJitBuff[sizeof(CILJit)];
     if (ILJitter == 0)
     {
-        ILJitter = new (CILJitBuff) CILJit();
+        ILJitter = new (CILJitSingleton) CILJit();
 #ifdef FEATURE_MERGE_JIT_AND_ENGINE
         Compiler::compStartup();
 #endif
@@ -563,11 +569,11 @@ void                Compiler::eeDispVar(ICorDebugInfo::NativeVarInfo* var)
     case VLT_REG_BYREF:
     case VLT_REG_FP:
         printf("%s", getRegName(var->loc.vlReg.vlrReg));
-        if (var->loc.vlType == VLT_REG_BYREF)
+        if (var->loc.vlType == (ICorDebugInfo::VarLocType)VLT_REG_BYREF)
         {
             printf(" byref");
         }
-        break; 
+        break;
 
     case VLT_STK:
     case VLT_STK_BYREF:
@@ -580,7 +586,7 @@ void                Compiler::eeDispVar(ICorDebugInfo::NativeVarInfo* var)
         {
             printf(STR_SPBASE "'[%d] (1 slot)",  var->loc.vlStk.vlsOffset);
         }
-        if (var->loc.vlType == VLT_REG_BYREF)
+        if (var->loc.vlType == (ICorDebugInfo::VarLocType)VLT_REG_BYREF)
         {
             printf(" byref");
         }
@@ -882,14 +888,14 @@ CORINFO_FIELD_HANDLE Compiler::eeFindJitDataOffs(unsigned dataOffs)
 {
     // Data offsets are marked by the fact that the low two bits are 0b01 0x1
     assert(dataOffs < 0x40000000);
-    return (CORINFO_FIELD_HANDLE)((dataOffs << iaut_SHIFT) | iaut_DATA_OFFSET);
+    return (CORINFO_FIELD_HANDLE)(size_t)((dataOffs << iaut_SHIFT) | iaut_DATA_OFFSET);
 }
 
 bool Compiler::eeIsJitDataOffs(CORINFO_FIELD_HANDLE field)
 {
     // if 'field' is a jit data offset it has to fit into a 32-bit unsigned int
     unsigned value = (unsigned) field;
-    if (((CORINFO_FIELD_HANDLE ) value) != field)
+    if (((CORINFO_FIELD_HANDLE)(size_t)value) != field)
     {
         return false;   // upper bits were set, not a jit data offset
     }
@@ -903,7 +909,7 @@ int Compiler::eeGetJitDataOffs(CORINFO_FIELD_HANDLE  field)
     if (eeIsJitDataOffs(field))
     {
         unsigned dataOffs = (unsigned) field;
-        assert(((CORINFO_FIELD_HANDLE ) dataOffs) == field);
+        assert(((CORINFO_FIELD_HANDLE)(size_t)dataOffs) == field);
         assert(dataOffs < 0x40000000);
         return ((int) field) >> iaut_SHIFT;
     }
@@ -936,7 +942,7 @@ const char* jitHlpFuncTable[CORINFO_HELP_COUNT] =
 *  On Unix compilers don't support SEH.
 */
 
-static struct FilterSuperPMIExceptionsParam_ee_il
+struct FilterSuperPMIExceptionsParam_ee_il
 {
     Compiler*               pThis;
     Compiler::Info*         pJitInfo;

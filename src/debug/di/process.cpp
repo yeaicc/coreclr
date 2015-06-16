@@ -682,9 +682,7 @@ CordbProcess::CreateDacDbiInterface()
         IDacDbiInterface **);
 
     IDacDbiInterface* pInterfacePtr = NULL;
-    PFN_DacDbiInterfaceInstance pfnEntry = (PFN_DacDbiInterfaceInstance)
-    GetProcAddress(m_hDacModule, "DacDbiInterfaceInstance");
-
+    PFN_DacDbiInterfaceInstance pfnEntry = (PFN_DacDbiInterfaceInstance)GetProcAddress(m_hDacModule, "DacDbiInterfaceInstance");
     if (!pfnEntry)
     {
         ThrowLastError();
@@ -1047,8 +1045,7 @@ CordbProcess::~CordbProcess()
     // We shouldn't still be in Cordb's list of processes. Unfortunately, our root Cordb object
     // may have already been deleted b/c we're at the mercy of ref-counting, so we can't check.
     
-    if (m_sharedAppDomain)
-        delete m_sharedAppDomain;
+	_ASSERTE(m_sharedAppDomain == NULL);
         
     m_processMutex.Destroy();
     m_StopGoLock.Destroy();
@@ -1115,8 +1112,6 @@ HRESULT ShimProcess::CreateProcess(
     {
         pShim.Assign(new ShimProcess());
 
-        pShim->CheckForPortInfo(pRemoteTarget);
-
         // Indicate that this process was started under the debugger as opposed to attaching later.
         pShim->m_attached = false;
 
@@ -1181,8 +1176,6 @@ HRESULT ShimProcess::DebugActiveProcess(
     {
         pShim.Assign(new ShimProcess());
 
-        pShim->CheckForPortInfo(pRemoteTarget);
-
         // Indicate that this process was attached to, asopposed to being started under the debugger.
         pShim->m_attached = true;
        
@@ -1198,6 +1191,7 @@ HRESULT ShimProcess::DebugActiveProcess(
 
         _ASSERTE(SUCCEEDED(hr));
 
+#if !defined(FEATURE_DBGIPC_TRANSPORT_DI)
         // Don't do this when we are remote debugging since we won't be getting the loader breakpoint.
         // We don't support JIT attach in remote debugging scenarios anyway.
         //
@@ -1229,6 +1223,7 @@ HRESULT ShimProcess::DebugActiveProcess(
             // Wait for the completion of marking pending attach bit or debugger detaching
             WaitForMultipleObjectsEx(dwHandles, arrHandles, FALSE, INFINITE, FALSE);
         }
+#endif //!FEATURE_DBGIPC_TRANSPORT_DI
     }
     EX_CATCH_HRESULT(hr);
     
@@ -1278,11 +1273,17 @@ void CordbProcess::NeuterChildren()
     m_ContinueNeuterList.NeuterAndClear(this);
 
     m_userThreads.NeuterAndClear(GetProcessLock());
-
+    
     m_pDefaultAppDomain = NULL;
 
     // Frees per-appdomain left-side resources. See assumptions above.
     m_appDomains.NeuterAndClear(GetProcessLock());
+    if (m_sharedAppDomain != NULL)
+    {
+        m_sharedAppDomain->Neuter();
+        m_sharedAppDomain->InternalRelease();
+        m_sharedAppDomain = NULL;
+    }
 
     m_steppers.NeuterAndClear(GetProcessLock());
 
@@ -2138,10 +2139,10 @@ HRESULT CordbProcess::QueryInterface(REFIID id, void **pInterface)
     {
         *pInterface = static_cast<ICorDebugProcess7*>(this);
     }
-	else if (id == IID_ICorDebugProcess8)
-	{
-		*pInterface = static_cast<ICorDebugProcess8*>(this);
-	}
+    else if (id == IID_ICorDebugProcess8)
+    {
+        *pInterface = static_cast<ICorDebugProcess8*>(this);
+    }
 #ifdef FEATURE_LEGACYNETCF_DBG_HOST_CONTROL
     else if (id == IID_ICorDebugLegacyNetCFHostCallbackInvoker_PrivateWindowsPhoneOnly)
     {
@@ -7491,7 +7492,7 @@ void CordbProcess::GetEventBlock(BOOL * pfBlockExists)
             // Verify that the control block is valid.
             // This  will throw on error. 
             VerifyControlBlock();   
-			
+            
             *pfBlockExists = true;
         }
         else 
@@ -7654,8 +7655,8 @@ HRESULT CordbProcess::GetRuntimeOffsets()
 #elif FEATURE_PAL
         m_hHelperThread = NULL; //RS is supposed to be able to live without a helper thread handle.
 #else
-		m_hHelperThread = OpenThread(SYNCHRONIZE, FALSE, dwHelperTid);
-		CONSISTENCY_CHECK_MSGF(m_hHelperThread != NULL, ("Failed to get helper-thread handle. tid=0x%x\n", dwHelperTid));
+        m_hHelperThread = OpenThread(SYNCHRONIZE, FALSE, dwHelperTid);
+        CONSISTENCY_CHECK_MSGF(m_hHelperThread != NULL, ("Failed to get helper-thread handle. tid=0x%x\n", dwHelperTid));
 #endif
     }
 
@@ -8751,6 +8752,7 @@ CordbAppDomain * CordbProcess::GetSharedAppDomain()
         {
             delete pAD;
         }
+		m_sharedAppDomain->InternalAddRef();
     }
     
     return m_sharedAppDomain;
@@ -9742,6 +9744,12 @@ void CordbProcess::MarshalManagedEvent(DebuggerIPCEvent * pManagedEvent)
 //    The event still needs to be Marshaled before being used. (see code:CordbProcess::MarshalManagedEvent)
 //
 //---------------------------------------------------------------------------------------
+#if defined(_MSC_VER) && defined(_TARGET_ARM_) 
+// This is a temporary workaround for an ARM specific MS C++ compiler bug (internal LKG build 18.1).
+// Branch < if (ptrRemoteManagedEvent == NULL) > was always taken and the function always returned false.
+// TODO: It should be removed once the bug is fixed.
+#pragma optimize("", off)
+#endif
 bool CordbProcess::CopyManagedEventFromTarget(
     const EXCEPTION_RECORD * pRecord, 
     DebuggerIPCEvent * pLocalManagedEvent)
@@ -9788,6 +9796,9 @@ bool CordbProcess::CopyManagedEventFromTarget(
 
     return true;
 }
+#if defined(_MSC_VER) && defined(_TARGET_ARM_) 
+#pragma optimize("", on)
+#endif
 
 //---------------------------------------------------------------------------------------
 // EnsureClrInstanceIdSet - Ensure we have a CLR Instance ID to debug
@@ -9816,12 +9827,11 @@ HRESULT CordbProcess::EnsureClrInstanceIdSet()
     {
 
 #ifdef FEATURE_CORESYSTEM
-		_ASSERTE(m_cordb->GetTargetCLR() != 0);
-		if(m_cordb->GetTargetCLR() != 0)
-		{
-			m_clrInstanceId = PTR_TO_CORDB_ADDRESS(m_cordb->GetTargetCLR());
-			return S_OK;
-		}
+        if(m_cordb->GetTargetCLR() != 0)
+        {
+            m_clrInstanceId = PTR_TO_CORDB_ADDRESS(m_cordb->GetTargetCLR());
+            return S_OK;
+        }
 #endif
 
         // The only case in which we're allowed to request the "default" CLR instance
@@ -11818,26 +11828,26 @@ CordbUnmanagedThread * CordbProcess::GetUnmanagedThreadFromEvent(const DEBUG_EVE
 
             this->GetEventBlock(&fBlockExists);
 
-	        // If we have the debugger control block, and if that control block has the address of the thread proc for
-	        // the helper thread, then we're initialized enough on the Left Side to recgonize the helper thread based on
-	        // its thread proc's address.
-	        if (this->GetDCB() != NULL) 
-	        {
-	            // get the latest LS DCB information
-	            UpdateRightSideDCB();
-	            if ((this->GetDCB()->m_helperThreadStartAddr != NULL) && (pUnmanagedThread != NULL))
-	            {
-	                void * pStartAddr = GetThreadUserStartAddr(pEvent);
+            // If we have the debugger control block, and if that control block has the address of the thread proc for
+            // the helper thread, then we're initialized enough on the Left Side to recgonize the helper thread based on
+            // its thread proc's address.
+            if (this->GetDCB() != NULL) 
+            {
+                // get the latest LS DCB information
+                UpdateRightSideDCB();
+                if ((this->GetDCB()->m_helperThreadStartAddr != NULL) && (pUnmanagedThread != NULL))
+                {
+                    void * pStartAddr = GetThreadUserStartAddr(pEvent);
 
-	                if (pStartAddr == this->GetDCB()->m_helperThreadStartAddr)
-	                {
-	                    // Remember the ID of the helper thread.
-	                    this->m_helperThreadId = pEvent->dwThreadId;
+                    if (pStartAddr == this->GetDCB()->m_helperThreadStartAddr)
+                    {
+                        // Remember the ID of the helper thread.
+                        this->m_helperThreadId = pEvent->dwThreadId;
 
-	                    LOG((LF_CORDB, LL_INFO1000, "W32ET::W32EL: Left Side Helper Thread is 0x%x\n", pEvent->dwThreadId));
-	                }
-	            }
-	        }
+                        LOG((LF_CORDB, LL_INFO1000, "W32ET::W32EL: Left Side Helper Thread is 0x%x\n", pEvent->dwThreadId));
+                    }
+                }
+            }
         }
         EX_CATCH_HRESULT(hr)
         {
@@ -13085,9 +13095,31 @@ void CordbProcess::HandleDebugEventForInteropDebugging(const DEBUG_EVENT * pEven
                     fcd.action = HIJACK_ACTION_EXIT_UNHANDLED;
                 }
 
-                // if the user changed the context during this hijack or if it had the SingleStep flag set on it,
-                // then update the LS context
-                if (pUnmanagedThread->IsContextSet() || IsSSFlagEnabled(&tempContext))
+                //
+                // LS context is restored here so that execution continues from next instruction that caused the hijack.
+                // We shouldn't always restore the LS context though.
+                // Consider the following case where this can cause issues:
+                // Debuggee process hits an exception and calls KERNELBASE!RaiseException, debugger gets the notification and
+                // prepares for first-chance hijack. Debugger(DBI) saves the current thread context (see SetupFirstChanceHijackForSync) which is restored
+                // later below (see SafeWriteThreadContext call) when the process is in VEH (CLRVectoredExceptionHandlerShim->FirstChanceSuspendHijackWorker).
+                // The thread context that got saved(by SetupFirstChanceHijackForSync) was for when the thread was executing RaiseException and when
+                // this context gets restored in VEH, the thread resumes after the exception handler with a context that is not same as one with which
+                // it entered. This inconsistency can lead to bad execution code-paths or even a debuggee crash.
+                //
+                // Example case where we should definitely update the LS context:
+                // After a DbgBreakPoint call, IP gets updated to point to the instruction after int 3 and this is the context saved by debugger.
+                // The IP in context passed to VEH still points to int 3 though and if we don't update the LS context in VEH, the breakpoint
+                // instruction will get executed again.
+                //
+                // Here's a list of cases when we update the LS context:
+                // * we know that context was explicitly updated during this hijack, OR
+                // * if single-stepping flag was set on it originally, OR
+                // * if this was a breakpoint event
+                // Note that above list is a heuristic and it is possible that we need to add more such cases in future.
+                //
+                BOOL isBreakPointEvent = (pUnmanagedEvent->m_currentDebugEvent.dwDebugEventCode == EXCEPTION_DEBUG_EVENT &&
+                    pUnmanagedEvent->m_currentDebugEvent.u.Exception.ExceptionRecord.ExceptionCode == STATUS_BREAKPOINT);
+                if (pUnmanagedThread->IsContextSet() || IsSSFlagEnabled(&tempContext) || isBreakPointEvent)
                 {
                     _ASSERTE(fcd.pLeftSideContext != NULL);
                     LOG((LF_CORDB, LL_INFO10000, "W32ET::W32EL: updating LS context at 0x%p\n", fcd.pLeftSideContext));

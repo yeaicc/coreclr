@@ -1813,6 +1813,24 @@ void                Compiler::optFindNaturalLoops()
                     goto NO_LOOP;
                 }
 
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+                // Disqualify loops where the first block of the loop is a finally target.
+                // The main problem is when multiple loops share a 'first' block that is a finally
+                // target and we canonicalize the loops by adding a new loop head. In that case, we
+                // need to update the blocks so the finally target bit is moved to the newly created
+                // block, and removed from the old 'first' block. This is 'hard', so at this point
+                // in the RyuJIT codebase (when we don't expect to keep the "old" ARM32 code generator
+                // long-term), it's easier to disallow the loop than to update the flow graph to
+                // support this case.
+
+                if ((first->bbFlags & BBF_FINALLY_TARGET) != 0)
+                {
+                    JITDUMP("Loop 'first' BB%02u is a finally target. Rejecting loop.\n",
+                           first->bbNum);
+                    goto NO_LOOP;
+                }
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+
                 /* At this point we have a loop - record it in the loop table
                  * If we found only one exit, record it in the table too
                  * (otherwise an exit = 0 in the loop table means multiple exits) */
@@ -1900,7 +1918,10 @@ NO_LOOP: ;
             continue;
 
         // Otherwise...
-        mod = mod || optCanonicalizeLoopNest(loopInd);
+        if (optCanonicalizeLoopNest(loopInd))
+        {
+            mod = true;
+        }
     }
     if (mod)
     {
@@ -1954,7 +1975,6 @@ void Compiler::optRedirectBlock(BasicBlock* blk, BlockToBlockMap* redirectMap)
                 {
                     blk->bbJumpSwt->bbsDstTab[i] = newJumpDest;
                     redirected = true;
-                
                 }
             }
             // If any redirections happend, invalidate the switch table map for the switch.
@@ -2002,21 +2022,32 @@ void Compiler::optCopyBlkDest(BasicBlock* from, BasicBlock* to)
     }
 }
 
+// Canonicalize the loop nest rooted at parent loop 'loopInd'.
+// Returns 'true' if the flow graph is modified.
 bool Compiler::optCanonicalizeLoopNest(unsigned char loopInd)
 {
-    bool res = false;
+    bool modified = false;
+
     // Is the top of the current loop not in any nested loop?
     if (optLoopTable[loopInd].lpTop->bbNatLoopNum != loopInd)
     {
-        res = res || optCanonicalizeLoop(loopInd);
+        if (optCanonicalizeLoop(loopInd))
+        {
+            modified = true;
+        }
     }
+
     for (unsigned char child = optLoopTable[loopInd].lpChild; 
          child != BasicBlock::NOT_IN_LOOP; 
          child = optLoopTable[child].lpSibling)
     {
-        res = res || optCanonicalizeLoopNest(child);
+        if (optCanonicalizeLoopNest(child))
+        {
+            modified = true;
+        }
     }
-    return res;
+
+    return modified;
 }
 
 bool Compiler::optCanonicalizeLoop(unsigned char loopInd)
@@ -2026,6 +2057,9 @@ bool Compiler::optCanonicalizeLoop(unsigned char loopInd)
 
     if (t->bbNatLoopNum == loopInd)
         return false;
+
+    JITDUMP("in optCanonicalizeLoop: L%02u has top BB%02u (bottom BB%02u) with natural loop number L%02u: need to canonicalize\n",
+            loopInd, t->bbNum, optLoopTable[loopInd].lpBottom->bbNum, t->bbNatLoopNum);
 
     // Otherwise, the top of this loop is also part of a nested loop.
     //
@@ -2063,6 +2097,29 @@ bool Compiler::optCanonicalizeLoop(unsigned char loopInd)
     // BB10 BBJ_ALWAYS => BB08
     // ...
     // BB12 BBJ_ALWAYS => BB30
+    //
+    // Another possibility is that the "first" block of the loop nest can be the first block
+    // of a "try" region that also has other predecessors than those in the loop, or even in
+    // the "try" region (since blocks can target the first block of a "try" region). For example:
+    //
+    // BB08 try {
+    // ...
+    // BB10 BBJ_ALWAYS => BB08
+    // ...
+    // BB12 BBJ_ALWAYS => BB08
+    // BB13 }
+    // ...
+    // BB20 BBJ_ALWAYS => BB08
+    // ...
+    // BB25 BBJ_ALWAYS => BB08
+    //
+    // Here, BB08 has 4 flow graph predecessors: BB10, BB12, BB20, BB25. These are all potential loop
+    // bottoms, for four possible nested loops. However, we require all the loop bottoms to be in the
+    // same EH region. For loops BB08..BB10 and BB08..BB12, we need to add a new "top" block within
+    // the try region, immediately before BB08. The bottom of the loop BB08..BB10 loop will target the
+    // old BB08, and the bottom of the BB08..BB12 loop will target the new loop header. The other branches
+    // (BB20, BB25) must target the new loop header, both for correctness, and to avoid the illegal
+    // situation of branching to a non-first block of a 'try' region.
     //
     // We can also have a loop nest where the "first" block is outside of a "try" region
     // and the back edges are inside a "try" region, for example:
@@ -2105,6 +2162,35 @@ bool Compiler::optCanonicalizeLoop(unsigned char loopInd)
     BlockToBlockMap* blockMap = new (getAllocatorLoopHoist()) BlockToBlockMap(getAllocatorLoopHoist());
     blockMap->Set(t, newT);
     optRedirectBlock(b, blockMap);
+
+    // Redirect non-loop preds of "t" to also go to "newT". Inner loops that also branch to "t" should continue
+    // to do so. However, there maybe be other predecessors from outside the loop nest that need to be updated
+    // to point to "newT". This normally wouldn't happen, since they too would be part of the loop nest. However,
+    // they might have been prevented from participating in the loop nest due to different EH nesting, or some
+    // other reason.
+    //
+    // Note that optRedirectBlock doesn't update the predecessors list. So, if the same 't' block is processed
+    // multiple times while canonicalizing multiple loop nests, we'll attempt to redirect a predecessor multiple times.
+    // This is ok, because after the first redirection, the topPredBlock branch target will no longer match the source
+    // edge of the blockMap, so nothing will happen.
+    for (flowList* topPred = t->bbPreds; topPred != nullptr; topPred = topPred->flNext)
+    {
+        BasicBlock* topPredBlock = topPred->flBlock;
+
+        // Skip if topPredBlock is in the loop.
+        // Note that this uses block number to detect membership in the loop. We are adding blocks during canonicalization,
+        // and those block numbers will be new, and larger than previous blocks. However, we work outside-in, so we
+        // shouldn't encounter the new blocks at the loop boundaries, or in the predecessor lists.
+        if (t->bbNum <= topPredBlock->bbNum && topPredBlock->bbNum <= b->bbNum)
+        {
+            JITDUMP("in optCanonicalizeLoop: 'top' predecessor BB%02u is in the range of L%02u (BB%02u..BB%02u); not redirecting its bottom edge\n",
+                    topPredBlock->bbNum, loopInd, t->bbNum, b->bbNum);
+            continue;
+        }
+
+        JITDUMP("in optCanonicalizeLoop: redirect top predecessor BB%02u to BB%02u\n", topPredBlock->bbNum, newT->bbNum);
+        optRedirectBlock(topPredBlock, blockMap);
+    }
 
     assert(newT->bbNext == f);
     if (f != t)
@@ -4699,6 +4785,10 @@ bool                Compiler::optNarrowTree(GenTreePtr     tree,
             {
                 tree->gtType = TYP_INT;
                 tree->gtIntCon.gtIconVal = (int) ival;
+                if (vnStore != nullptr)
+                {
+                    fgValueNumberTreeConst(tree);
+                }
             }
 #endif // _TARGET_64BIT_
 
@@ -4744,6 +4834,8 @@ bool                Compiler::optNarrowTree(GenTreePtr     tree,
                 if  (doit)
                 {
                     tree->gtType = genActualType(dstt);
+                    tree->ClearVN();
+
                     optNarrowTree(op2, srct, dstt, true);
                     // We may also need to cast away the upper bits of op1
                     if (srcSize == 8) 
@@ -4777,8 +4869,10 @@ COMMON_BINOP:
             noway_assert(genActualType(tree->gtType) == genActualType(op1->gtType));
             noway_assert(genActualType(tree->gtType) == genActualType(op2->gtType));
 
-            if  (!optNarrowTree(op1, srct, dstt, doit) ||
-                 !optNarrowTree(op2, srct, dstt, doit))
+            if (gtIsActiveCSE_Candidate(op1)          ||
+                gtIsActiveCSE_Candidate(op2)          ||
+                !optNarrowTree(op1, srct, dstt, doit) ||
+                !optNarrowTree(op2, srct, dstt, doit)   )
             {
                 noway_assert(doit == false);
                 return  false;
@@ -4792,6 +4886,7 @@ COMMON_BINOP:
                     tree->gtFlags &= ~GTF_MUL_64RSLT;
 
                 tree->gtType = genActualType(dstt);
+                tree->ClearVN();
             }
 
             return true;
@@ -4804,6 +4899,7 @@ NARROW_IND:
             if  (doit && (dstSize <= genTypeSize(tree->gtType)))
             {
                 tree->gtType = genSignedType(dstt);
+                tree->ClearVN();
 
                 /* Make sure we don't mess up the variable type */
                 if  ((oper == GT_LCL_VAR) || (oper == GT_LCL_FLD))
@@ -4853,6 +4949,7 @@ NARROW_IND:
                             tree->ChangeOper         (GT_NOP);
                             tree->gtType            = dstt;
                             tree->gtOp.gtOp2        = nullptr;
+                            tree->gtVNPair          = op1->gtVNPair;   // Set to op1's ValueNumber
                         }
                         else
                         {
@@ -4865,6 +4962,7 @@ NARROW_IND:
                             // The result type of a GT_CAST is never a small type.
                             // Use genActualType to widen dstt when it is a small types.
                             tree->gtType = genActualType(dstt);
+                            tree->ClearVN();
                         }
                     }
 
@@ -4874,12 +4972,16 @@ NARROW_IND:
             return  false;
 
         case GT_COMMA:
-            if (optNarrowTree(op2, srct, dstt, doit)) 
+            if (!gtIsActiveCSE_Candidate(op2)  &&
+                optNarrowTree(op2, srct, dstt, doit))
             {               
                 /* Simply change the type of the tree */
 
                 if  (doit)
+                {
                     tree->gtType = genActualType(dstt);
+                    tree->ClearVN();
+                }
                 return true;
             }
             return false;
@@ -5169,8 +5271,6 @@ void                    Compiler::optPerformHoistExpr(GenTreePtr origExpr, unsig
         hoist = gtUnusedValNode(hoistExpr);
     }
 
-    gtSetEvalOrder(hoist);
-
     /* Put the statement in the preheader */
 
     fgCreateLoopPreHeader(lnum);
@@ -5178,8 +5278,15 @@ void                    Compiler::optPerformHoistExpr(GenTreePtr origExpr, unsig
     BasicBlock *  preHead = optLoopTable[lnum].lpHead;
     assert (preHead->bbJumpKind == BBJ_NONE);
 
-    compCurBB = preHead; // fgMorphTree requires that compCurBB be the block that contains
-                         // (or in this case, will contain) the expression.
+    // fgMorphTree and lvaRecursiveIncRefCounts requires that compCurBB be the block that contains
+    // (or in this case, will contain) the expression.
+    compCurBB = preHead; 
+    
+    // Increment the ref counts of any local vars appearing in "hoist".
+    // Note that we need to do this before fgMorphTree() as fgMorph() could constant
+    // fold away some of the lcl vars referenced by "hoist".
+    lvaRecursiveIncRefCounts(hoist);
+
     hoist = fgMorphTree(hoist);
 
     GenTreePtr hoistStmt = gtNewStmt(hoist);
@@ -5218,11 +5325,9 @@ void                    Compiler::optPerformHoistExpr(GenTreePtr origExpr, unsig
     }
 #endif
 
-    // Update the ref counts of any local vars appearing in "hoist".
-    fgUpdateRefCntForClone(preHead, hoist);
-
     if (fgStmtListThreaded)
     {
+        gtSetStmtInfo(hoistStmt);
         fgSetStmtSeq(hoistStmt);
     }
 
@@ -6172,6 +6277,37 @@ void                 Compiler::fgCreateLoopPreHeader(unsigned   lnum)
     // Link in the preHead block.
     fgInsertBBbefore(top, preHead);
 
+    // Ideally we would re-run SSA and VN if we optimized by doing loop hoisting.
+    // However, that is too expensive at this point. Instead, we update the phi
+    // node block references, if we created pre-header block due to hoisting.
+    // This is sufficient because any definition participating in SSA that flowed
+    // into the phi via the loop header block will now flow through the preheader
+    // block from the header block.
+
+    for (GenTreePtr stmt = top->bbTreeList; stmt; stmt = stmt->gtNext)
+    {
+        GenTreePtr tree = stmt->gtStmt.gtStmtExpr;
+        if (tree->OperGet() != GT_ASG)
+        {
+            break;
+        }
+        GenTreePtr op2 = tree->gtGetOp2();
+        if (op2->OperGet() != GT_PHI)
+        {
+            break;
+        }
+        GenTreeArgList* args = op2->gtGetOp1()->AsArgList();
+        while (args != nullptr)
+        {
+            GenTreePhiArg* phiArg = args->Current()->AsPhiArg();
+            if (phiArg->gtPredBB == head)
+            {
+                phiArg->gtPredBB = preHead;
+            }
+            args = args->Rest();
+        }
+    }
+
     // The handler can't begin at the top of the loop.  If it did, it would be incorrect
     // to set the handler index on the pre header without updating the exception table.
     noway_assert(!top->hasHndIndex() || fgFirstBlockOfHandler(top) != top);
@@ -6592,7 +6728,12 @@ void                Compiler::optComputeLoopSideEffectsOfBlock(BasicBlock* blk)
                         {
                             heapHavoc = true;
                         }
+                        break;
                     }
+
+                default:
+                    // All other gtOper node kinds, leave 'heapHavoc' unchanged (i.e. false)
+                    break;
                 }
             }
         }

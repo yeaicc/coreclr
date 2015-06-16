@@ -459,8 +459,8 @@ void                Compiler::optAddCopies()
             tree->gtOp.gtOp1  = newAsgn;
             tree->gtOp.gtOp2  = copyAsgn;
 
-            tree->gtFlags    |= ( newAsgn->gtFlags & GTF_GLOB_EFFECT);
-            tree->gtFlags    |= (copyAsgn->gtFlags & GTF_GLOB_EFFECT);
+            tree->gtFlags    |= ( newAsgn->gtFlags & GTF_ALL_EFFECT);
+            tree->gtFlags    |= (copyAsgn->gtFlags & GTF_ALL_EFFECT);
         }
 
 #ifdef DEBUG
@@ -1449,6 +1449,10 @@ void Compiler::optDebugCheckAssertions(unsigned index)
                }
            }
            break;
+
+        default:
+            // for all other 'assertion->op2.kind' values we don't check anything
+           break;
         }
     }
 }
@@ -1743,7 +1747,7 @@ void Compiler::optAssertionGen(GenTreePtr tree)
     // For most of the assertions that we create below 
     // the assertion is true after the tree is processed
     bool assertionProven = true;
-    unsigned assertionIndex  = 0;  
+    unsigned assertionIndex = NO_ASSERTION_INDEX; 
     switch (tree->gtOper)
     {
     case GT_ASG:
@@ -1813,6 +1817,10 @@ void Compiler::optAssertionGen(GenTreePtr tree)
 
     case GT_JTRUE:
         assertionIndex = optAssertionGenJtrue(tree);
+        break;
+
+    default:
+        // All other gtOper node kinds, leave 'assertionIndex' = NO_ASSERTION_INDEX
         break;
     }
 
@@ -2708,8 +2716,7 @@ GenTreePtr Compiler::optAssertionPropGlobal_RelOp(EXPSET_TP assertions, const Ge
             printf("Assertion index=#%02u: ", index);
             printTreeID(op1);
             printf(" %s ", (curAssertion->assertionKind == OAK_EQUAL) ? "==" : "!=");
-            if (op1->TypeGet() == TYP_INT || op1->TypeGet() == TYP_BYTE || op1->TypeGet() == TYP_SHORT ||
-                op1->TypeGet() == TYP_UINT || op1->TypeGet() == TYP_UBYTE || op1->TypeGet() == TYP_USHORT)
+            if (genActualType(op1->TypeGet()) == TYP_INT)
             {
                 printf("%d\n", vnStore->ConstantValue<int>(vnCns));
             }
@@ -2742,8 +2749,7 @@ GenTreePtr Compiler::optAssertionPropGlobal_RelOp(EXPSET_TP assertions, const Ge
         lvaTable[op1->gtLclVar.gtLclNum].decRefCnts(compCurBB->getBBWeight(this), this);
 
         // Change the oper to const.
-        if (op1->TypeGet() == TYP_INT || op1->TypeGet() == TYP_BYTE || op1->TypeGet() == TYP_SHORT ||
-            op1->TypeGet() == TYP_UINT || op1->TypeGet() == TYP_UBYTE || op1->TypeGet() == TYP_USHORT)
+        if (genActualType(op1->TypeGet()) == TYP_INT)
         {
             op1->ChangeOperConst(GT_CNS_INT);
             op1->gtIntCon.gtIconVal = vnStore->ConstantValue<int>(vnCns);
@@ -3383,12 +3389,12 @@ GenTreePtr Compiler::optAssertionProp_BndsChk(EXPSET_TP assertions, const GenTre
                     assert(index1 != index2);
 
                     // It can always be considered as redundant with any previous higher constant value
-                    //       a[K1] followed by a[K2], with K1 > K2
-                    if (index1 >= index2)
+                    //       a[K1] followed by a[K2], with K2 >= 0 and K1 >= K2
+                    if (index2 >= 0 && index1 >= index2)
                     {
                         isRedundant = true;
 #ifdef  DEBUG
-                        dbgMsg = "a[K1] followed by a[K2], with K1 > K2";
+                        dbgMsg = "a[K1] followed by a[K2], with K2 >= 0 and K1 >= K2";
 #endif
                     }
                 }
@@ -3771,7 +3777,11 @@ EXPSET_TP Compiler::optImpliedByConstAssertion(AssertionDsc* constAssertion)
         case O2K_CONST_INT:
             // Is the const assertion's constant equal/not equal to the implied assertion?
             usable = ((impAssertion->assertionKind == OAK_EQUAL) && (impAssertion->op2.u1.iconVal == iconVal)) ||
-                      (impAssertion->assertionKind == OAK_NOT_EQUAL) && (impAssertion->op2.u1.iconVal != iconVal);
+                     ((impAssertion->assertionKind == OAK_NOT_EQUAL) && (impAssertion->op2.u1.iconVal != iconVal));
+            break;
+
+        default:
+            // leave 'usable' = false;
             break;
         }
 
@@ -3933,6 +3943,10 @@ EXPSET_TP Compiler::optImpliedByCopyAssertion(AssertionDsc* copyAssertion, Asser
                 usable = ((copyAssertLclNum == impAssertion->op2.lcl.lclNum && copyAssertSsaNum == impAssertion->op2.lcl.ssaNum) && 
                           (depAssertLclNum == impAssertion->op1.lcl.lclNum && depAssertSsaNum == impAssertion->op1.lcl.ssaNum));
             }
+            break;
+
+        default:
+            // leave 'usable' = false;
             break;
         }
             

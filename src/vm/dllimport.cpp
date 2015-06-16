@@ -185,6 +185,8 @@ public:
     virtual void EmitInvokeTarget(MethodDesc *pStubMD) = 0;
 
     virtual void FinishEmit(MethodDesc* pMD) = 0;
+
+    virtual ~StubState() {}
 };
 
 class ILStubState : public StubState
@@ -906,13 +908,23 @@ public:
         }
 #endif // MDA_SUPPORTED
 
+#ifdef FEATURE_CORECLR
+        // For CoreClr, clear the last error before calling the target that returns last error.
+        // There isn't always a way to know the function have failed without checking last error,
+        // in particular on Unix.
+        if (m_fSetLastError && SF_IsForwardStub(m_dwStubFlags))
+        {
+            pcsDispatch->EmitCALL(METHOD__STUBHELPERS__CLEAR_LAST_ERROR, 0, 0);
+        }
+#endif // FEATURE_CORECLR
+
         // Invoke the target (calli, call method, call delegate, get/set field, etc.)
         EmitInvokeTarget(pStubMD);
 
         // Saving last error must be the first thing we do after returning from the target
         if (m_fSetLastError && SF_IsForwardStub(m_dwStubFlags))
         {
-            m_slIL.EmitSetLastError(pcsDispatch);
+            pcsDispatch->EmitCALL(METHOD__STUBHELPERS__SET_LAST_ERROR, 0, 0);
         }
 
 #if defined(_TARGET_X86_)
@@ -2445,14 +2457,6 @@ void NDirectStubLinker::End(DWORD dwStubFlags)
     {
         pcs->EmitLDLOC(m_dwRetValLocalNum);
     }
-}
-
-
-void NDirectStubLinker::EmitSetLastError(ILCodeStream* pcsEmit)
-{
-    STANDARD_VM_CONTRACT;
-
-    pcsEmit->EmitCALL(METHOD__STUBHELPERS__SET_LAST_ERROR, 0, 0);
 }
 
 void NDirectStubLinker::DoNDirect(ILCodeStream *pcsEmit, DWORD dwStubFlags, MethodDesc * pStubMD)
@@ -6772,12 +6776,14 @@ HMODULE NDirect::LoadLibraryModuleViaHost(NDirectMethodDesc * pMD, AppDomain* pD
     //Dynamic Pinvoke Support:
     //Check if we  need to provide the host a chance to provide the unmanaged dll 
 
+#ifndef PLATFORM_UNIX
     // Prevent Overriding of Windows API sets.
     // This is replicating quick check from the OS implementation of api sets.
     if (SString::_wcsnicmp(wszLibName, W("api-"), 4) == 0 || SString::_wcsnicmp(wszLibName, W("ext-"), 4) == 0)
     {
         return NULL;
     }
+#endif
 
     LPVOID hmod = NULL;
     CLRPrivBinderCoreCLR *pTPABinder = pDomain->GetTPABinderContext();
@@ -6796,12 +6802,25 @@ HMODULE NDirect::LoadLibraryModuleViaHost(NDirectMethodDesc * pMD, AppDomain* pD
     IfFailThrow(pBindingContext->GetBinderID(&assemblyBinderID));
         
     ICLRPrivBinder *pCurrentBinder = reinterpret_cast<ICLRPrivBinder *>(assemblyBinderID);
-   
+
+    // For assemblies bound via TPA binder, we should use the standard mechanism to make the pinvoke call.
     if (AreSameBinderInstance(pCurrentBinder, pTPABinder))
     {
         return NULL;
     }
 
+#ifdef FEATURE_COMINTEROP
+    CLRPrivBinderWinRT *pWinRTBinder = pDomain->GetWinRtBinder();
+    if (AreSameBinderInstance(pCurrentBinder, pWinRTBinder))
+    {
+        // We could be here when a non-WinRT assembly load is triggerred by a winmd (e.g. System.Runtime being loaded due to
+        // types being referenced from Windows.Foundation.Winmd) or when dealing with a winmd (which is bound using WinRT binder).
+        //
+        // For this, we should use the standard mechanism to make pinvoke call as well.
+        return NULL;
+    }
+#endif // FEATURE_COMINTEROP
+    
     //Step 1: If the assembly was not bound using TPA,
     //        Call System.Runtime.Loader.AssemblyLoadContext.ResolveUnamanagedDll to give
     //        The custom assembly context a chance to load the unmanaged dll.
@@ -6855,9 +6874,16 @@ HINSTANCE NDirect::LoadLibraryModule( NDirectMethodDesc * pMD, LoadLibErrorTrack
     AppDomain* pDomain = GetAppDomain();
 
 #if defined(FEATURE_HOST_ASSEMBLY_RESOLVER)
-    hmod = LoadLibraryModuleViaHost(pMD, pDomain, wszLibName);
+    // AssemblyLoadContext is not supported in AppX mode and thus,
+    // we should not perform PInvoke resolution via it when operating in
+    // AppX mode.
+    if (!AppX::IsAppXProcess())
+    {
+        hmod = LoadLibraryModuleViaHost(pMD, pDomain, wszLibName);
+    }
 #endif  //FEATURE_HOST_ASSEMBLY_RESOLVER
-
+    
+    
     if(hmod == NULL)
     {
        hmod = pDomain->FindUnmanagedImageInCache(wszLibName);
@@ -6938,7 +6964,7 @@ HINSTANCE NDirect::LoadLibraryModule( NDirectMethodDesc * pMD, LoadLibErrorTrack
         hmod = GetCLRModule();
 #endif // FEATURE_PAL
 
-#if defined(FEATURE_CORESYSTEM) && !defined(FEATURE_PAL)
+#if defined(FEATURE_CORESYSTEM) && !defined(PLATFORM_UNIX)
     if (hmod == NULL)
     {
         // Try to go straight to System32 for Windows API sets. This is replicating quick check from
@@ -7294,6 +7320,10 @@ VOID NDirect::NDirectLink(NDirectMethodDesc *pMD)
 
 EXTERN_C LPVOID STDCALL NDirectImportWorker(NDirectMethodDesc* pMD)
 {
+    LPVOID ret = NULL;
+
+    BEGIN_PRESERVE_LAST_ERROR;
+
     CONTRACTL
     {
         THROWS;
@@ -7302,8 +7332,6 @@ EXTERN_C LPVOID STDCALL NDirectImportWorker(NDirectMethodDesc* pMD)
         SO_TOLERANT;
     }
     CONTRACTL_END;
-
-    LPVOID ret = NULL;
 
     // this function is called by CLR to native assembly stubs which are called by 
     // managed code as a result, we need an unwind and continue handler to translate 
@@ -7362,6 +7390,8 @@ EXTERN_C LPVOID STDCALL NDirectImportWorker(NDirectMethodDesc* pMD)
 
     UNINSTALL_UNWIND_AND_CONTINUE_HANDLER;
 
+    END_PRESERVE_LAST_ERROR;
+
     return ret;
 }
 
@@ -7372,6 +7402,8 @@ EXTERN_C LPVOID STDCALL NDirectImportWorker(NDirectMethodDesc* pMD)
 
 EXTERN_C void STDCALL VarargPInvokeStubWorker(TransitionBlock * pTransitionBlock, VASigCookie *pVASigCookie, MethodDesc *pMD)
 {
+    BEGIN_PRESERVE_LAST_ERROR;
+
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_COOPERATIVE;
@@ -7394,10 +7426,14 @@ EXTERN_C void STDCALL VarargPInvokeStubWorker(TransitionBlock * pTransitionBlock
     GetILStubForCalli(pVASigCookie, pMD);
 
     pFrame->Pop(CURRENT_THREAD);
+
+    END_PRESERVE_LAST_ERROR;
 }
 
 EXTERN_C void STDCALL GenericPInvokeCalliStubWorker(TransitionBlock * pTransitionBlock, VASigCookie * pVASigCookie, PCODE pUnmanagedTarget)
 {
+    BEGIN_PRESERVE_LAST_ERROR;
+
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_COOPERATIVE;
@@ -7419,6 +7455,8 @@ EXTERN_C void STDCALL GenericPInvokeCalliStubWorker(TransitionBlock * pTransitio
     GetILStubForCalli(pVASigCookie, NULL);
 
     pFrame->Pop(CURRENT_THREAD);
+
+    END_PRESERVE_LAST_ERROR;
 }
 
 PCODE GetILStubForCalli(VASigCookie *pVASigCookie, MethodDesc *pMD)

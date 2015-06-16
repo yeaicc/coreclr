@@ -23,7 +23,10 @@ bld/
 [Oo]bj/
 msbuild.log
 
-# Roslyn stuff
+# Visual Studio 2015
+.vs/
+
+# Visual Studio 2015 Pre-CTP6
 *.sln.ide
 *.ide/
 
@@ -159,6 +162,9 @@ ClientBin/
 node_modules/
 *.metaproj
 *.metaproj.tmp
+.atom-build.json
+tags
+TAGS
 
 # RIA/Silverlight projects
 Generated_Code/
@@ -217,6 +223,7 @@ $RECYCLE.BIN/
 ### Linux ###
 
 *~
+\#*\#
 
 # KDE directory preferences
 .directory
@@ -247,6 +254,9 @@ Temporary Items
 # We have some checked in prebuilt generated files
 !src/pal/prebuilt/idl/*_i.c
 
+# Valid 'debug' folder, that contains CLR debuggin code
+!src/debug
+
 # Ignore folders created by the test build
 TestWrappers_x64_debug
 TestWrappers_x64_release
@@ -254,3 +264,8 @@ TestWrappers_x64_release
 Vagrantfile
 .vagrant
 
+# CMake files
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+Makefile

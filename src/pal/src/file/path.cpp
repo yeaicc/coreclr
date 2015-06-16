@@ -440,18 +440,16 @@ Function:
 See MSDN.
 
 Notes:
-    On Windows NT/2000, the temp path is determined by the following steps:
+    On Windows, the temp path is determined by the following steps:
     1. The value of the "TMP" environment variable, or if it doesn't exist,
     2. The value of the "TEMP" environment variable, or if it doesn't exist,
     3. The Windows directory.
-    
-    On the Mac, in the default environment, none of the above variables are
-    set, so the Temporary Items folder is used instead. 
-	    
-    Also note that dwPathLen will always be the proper return value, since
-    GetEnvironmentVariable and MultiByteToWideChar will both return the
-    required size of the buffer if they fail, which is what this function
-    should do also.
+
+    On Unix, we follow in spirit:
+    1. The value of the "TMPDIR" environment variable, or if it doesn't exist,
+    2. The /tmp directory.
+    This is the same approach employed by mktemp.
+
 --*/
 DWORD
 PALAPI
@@ -474,115 +472,67 @@ GetTempPathA(
         return 0;
     }
 
-#ifdef __APPLE__
-    // Retrieve the Temporary Items folder.
-    DWORD palError = ERROR_SUCCESS;
-    FSRef tempFolderFSRef;
-    OSErr err = FSFindFolder(kUserDomain, kTemporaryFolderType, true /* fCreate */,
-        &tempFolderFSRef);
-    if (err != noErr)
-        palError = ERROR_INTERNAL_ERROR;
-    else
+    /* Try the TMPDIR environment variable. This is the same env var checked by mktemp. */
+    dwPathLen = GetEnvironmentVariableA("TMPDIR", lpBuffer, nBufferLength);
+    if (dwPathLen > 0)
     {
-        CFURLRef tempFolderURLRef = CFURLCreateFromFSRef(kCFAllocatorDefault, &tempFolderFSRef);
-        if (tempFolderURLRef == NULL)
-            palError = ERROR_OUTOFMEMORY;
-        else
+        /* The env var existed. dwPathLen will be the length without null termination 
+         * if the entire value was successfully retrieved, or it'll be the length
+         * required to store the value with null termination.
+         */
+        if (dwPathLen < nBufferLength)
         {
-            CFStringRef tempFolderPathRef = CFURLCopyFileSystemPath(tempFolderURLRef, kCFURLPOSIXPathStyle);
-            CFRelease(tempFolderURLRef);
-            CFIndex tempFolderPathLenWide;
-            if (tempFolderPathRef == NULL)
-                palError = ERROR_OUTOFMEMORY;
-            else if ((tempFolderPathLenWide = CFStringGetLength(tempFolderPathRef)) == 0)
+            /* The environment variable fit in the buffer. Make sure it ends with '/'. */
+            if (lpBuffer[dwPathLen - 1] != '/')
             {
-                palError = ERROR_INTERNAL_ERROR;
-                CFRelease(tempFolderPathRef);
-            }
-            else
-            {
-                // String needs to terminate with a slash.
-                if (CFStringGetCharacterAtIndex(tempFolderPathRef, tempFolderPathLenWide) != '/')
+                /* If adding the slash would still fit in our provided buffer, do it.  Otherwise, 
+                 * let the caller know how much space would be needed.
+                 */
+                if (dwPathLen + 2 <= nBufferLength)
                 {
-                    CFStringRef altTempFolderPathRef = CFStringCreateWithFormat(kCFAllocatorDefault, 
-                        NULL, CFSTR("%@/"), tempFolderPathRef);
-                    if (altTempFolderPathRef == NULL)
-                    {
-                        palError = ERROR_OUTOFMEMORY;
-                    }
-                    else
-                    {
-                        CFRelease(tempFolderPathRef);
-                        tempFolderPathRef = altTempFolderPathRef;
-                    }
-                }
-                if (palError != ERROR_SUCCESS)
-                {}
-                else if (!CFStringGetFileSystemRepresentation(tempFolderPathRef, lpBuffer, nBufferLength))
-                {
-                    // Too small or failed conversion.
-                    CFIndex tempFolderPathLenMax = CFStringGetMaximumSizeOfFileSystemRepresentation(tempFolderPathRef);
-                    char *lpBigBuffer = CorUnix::InternalNewArray<char>(CorUnix::InternalGetCurrentThread(), tempFolderPathLenMax);
-                    if (!lpBigBuffer)
-                    {
-                        palError = ERROR_OUTOFMEMORY;
-                    }
-                    else
-                    {
-                        if (!CFStringGetFileSystemRepresentation(tempFolderPathRef, lpBigBuffer, tempFolderPathLenMax))
-                        {
-                            // failed conversion.
-                            ERROR("Could not convert temp folder ref to 8-bit string.\n");
-                            palError = ERROR_INTERNAL_ERROR;
-                        }
-                        else
-                        {
-                            if (!ClrSafeInt<DWORD>::addition(strlen(lpBigBuffer), 1, dwPathLen))
-                            {
-                                ERROR("Integer overflow in buffer math.\n");
-                                palError = ERROR_INTERNAL_ERROR;
-                            }
-                            else
-                            {
-                                ERROR("Buffer is too small, need %d characters.\n", dwPathLen);
-                                palError = ERROR_INSUFFICIENT_BUFFER;
-                            }
-                        }
-                        CorUnix::InternalDeleteArray<char>(CorUnix::InternalGetCurrentThread(), lpBigBuffer);
-                    }
+                    lpBuffer[dwPathLen++] = '/';
+                    lpBuffer[dwPathLen] = '\0';
                 }
                 else
                 {
-                    dwPathLen = strlen(lpBuffer);
+                    dwPathLen += 2;
                 }
-                CFRelease(tempFolderPathRef);
             }
         }
+        else /* dwPathLen >= nBufferLength */
+        {
+            /* The value is too long for the supplied buffer.  dwPathLen will now be the
+             * length required to hold the value, but we don't know whether that value
+             * is going to be '/' terminated.  Since we'll need enough space for the '/', and since
+             * a caller would assume that the dwPathLen we return will be sufficient, 
+             * we make sure to account for it in dwPathLen even if that means we end up saying
+             * one more byte of space is needed than actually is.
+             */
+            dwPathLen++;
+        }
     }
-    if (palError != ERROR_SUCCESS)
-        SetLastError(palError);
-#else
-	// GetTempPath is supposed to include the trailing slash.
-    const char *defaultDir = "/tmp/";
+    else /* env var not found or was empty */
+    {
+        /* no luck, use /tmp/ */
+        const char *defaultDir = "/tmp/";
+        int defaultDirLen = strlen(defaultDir);
+        if (defaultDirLen < nBufferLength)
+        {
+            dwPathLen = defaultDirLen;
+            strcpy_s(lpBuffer, nBufferLength, defaultDir);
+        }
+        else
+        {
+            /* get the required length */
+            dwPathLen = defaultDirLen + 1;
+        }
+    }
 
-    /* still no luck, use /tmp */
-    if ( strlen(defaultDir) < nBufferLength )
+    if ( dwPathLen >= nBufferLength )
     {
-        dwPathLen = strlen(defaultDir);
-        strcpy_s(lpBuffer, nBufferLength, defaultDir);
-    }
-    else
-    {
-        /* get the required length */
-        dwPathLen = strlen(defaultDir) + 1;
-    }
-
-    if ( dwPathLen > nBufferLength )
-    {
-        ERROR("Buffer is too small, need %d characters\n", dwPathLen);
+        ERROR("Buffer is too small, need space for %d characters including null termination\n", dwPathLen);
         SetLastError( ERROR_INSUFFICIENT_BUFFER );
     }
-#endif // __APPLE__
 
     LOGEXIT("GetTempPathA returns DWORD %u\n", dwPathLen);
     PERF_EXIT(GetTempPathA);
@@ -602,26 +552,24 @@ GetTempPathW(
 	     IN DWORD nBufferLength,
 	     OUT LPWSTR lpBuffer)
 {
-    char TempBuffer[ MAX_PATH ];
-    DWORD dwRetVal = 0;
-
     PERF_ENTRY(GetTempPathW);
-    ENTRY( "GetTempPathW(nBufferLength=%u, lpBuffer=%p)\n",
-           nBufferLength, lpBuffer);
+    ENTRY("GetTempPathW(nBufferLength=%u, lpBuffer=%p)\n",
+          nBufferLength, lpBuffer);
 
-    dwRetVal = GetTempPathA( MAX_PATH, TempBuffer );
-   
-    // MAX_PATH should be big enough to hold whatever path, but due to concerns about multiple platforms, implememtation change inside GetTempPathA, and security attacks, adding checks for dwRetVal > MAX_PATH is better
-    if ( dwRetVal > MAX_PATH )
+    if (!lpBuffer)
     {
-        // If dwRetVal > MAX_PATH, dwRetVal = required number of TCHARs for TempBuffer, including NULL
-        ERROR( "internal TempBuffer was not large enough.\n " )
-        SetLastError( ERROR_INSUFFICIENT_BUFFER );
-        *lpBuffer = '\0';
+        ERROR("lpBuffer was not a valid pointer.\n")
+        SetLastError(ERROR_INVALID_PARAMETER);
+        LOGEXIT("GetTempPathW returns DWORD 0\n");
+        PERF_EXIT(GetTempPathW);
+        return 0;
     }
-    else if ( dwRetVal + 1 > nBufferLength )
+
+    char TempBuffer[nBufferLength > 0 ? nBufferLength : 1];
+    DWORD dwRetVal = GetTempPathA( nBufferLength, TempBuffer );
+   
+    if ( dwRetVal >= nBufferLength )
     {
-        // if dwRetVal < MAX_PATH, dwRetVal = number of TCHARs in TempBuffer, not including NULL
         ERROR( "lpBuffer was not large enough.\n" )
         SetLastError( ERROR_INSUFFICIENT_BUFFER );
         *lpBuffer = '\0';
@@ -1085,7 +1033,15 @@ void FILECanonicalizePath(LPSTR lpUnixPath)
         slashptr = strrchr(lpUnixPath,'/');
         if(NULL != slashptr)
         {
-            *slashptr = '\0';
+            /* make sure the last slash isn't the root */
+            if (slashptr == lpUnixPath)
+            {
+                lpUnixPath[1] = '\0';
+            }
+            else
+            {
+                *slashptr = '\0';    
+            }
         }
     }
 
@@ -1529,3 +1485,42 @@ done:
     return nRet;
 }
 
+/*++
+Function:
+  PathFindFileNameW
+
+See MSDN doc.
+--*/
+LPWSTR
+PALAPI
+PathFindFileNameW(
+    IN LPCWSTR pPath
+    )
+{
+    PERF_ENTRY(PathFindFileNameW);
+    ENTRY("PathFindFileNameW(pPath=%p (%S))\n",
+          pPath?pPath:W16_NULLSTRING,
+          pPath?pPath:W16_NULLSTRING);
+
+    LPWSTR ret = (LPWSTR)pPath;
+    if (ret != NULL && *ret != W('\0'))
+    {
+        ret = PAL_wcschr(ret, W('\0')) - 1;
+        if (ret > pPath && *ret == W('/'))
+        {
+            ret--;
+        }
+        while (ret > pPath && *ret != W('/'))
+        {
+            ret--;
+        }
+        if (*ret == W('/') && *(ret + 1) != W('\0'))
+        {
+            ret++;
+        }
+    }
+
+    LOGEXIT("PathFindFileNameW returns %S\n", ret);
+    PERF_EXIT(PathFindFileNameW);
+    return ret;
+}

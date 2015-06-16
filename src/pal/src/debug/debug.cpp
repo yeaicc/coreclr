@@ -59,6 +59,10 @@ Revision History:
 #include <procfs.h>
 #endif // HAVE_PROCFS_H
 
+#if HAVE_MACH_EXCEPTIONS
+#include "../exception/machexception.h"
+#endif // HAVE_MACH_EXCEPTIONS
+
 using namespace CorUnix;
 
 SET_DEFAULT_DEBUG_CHANNEL(DEBUG);
@@ -71,8 +75,10 @@ SET_DEFAULT_DEBUG_CHANNEL(DEBUG);
 
 /* ------------------- Constant definitions ----------------------------------*/
 
+#if !HAVE_VM_READ && !HAVE_PROCFS_CTL
 const BOOL DBG_ATTACH       = TRUE;
 const BOOL DBG_DETACH       = FALSE;
+#endif
 static const char PAL_OUTPUTDEBUGSTRING[]    = "PAL_OUTPUTDEBUGSTRING";
 
 #ifdef _DEBUG
@@ -425,7 +431,7 @@ GetThreadContext(
         {
             ret = CONTEXT_GetThreadContext(
                 GetCurrentProcessId(),
-                pTargetThread->GetThreadId(),
+                pTargetThread->GetPThreadSelf(),
                 pTargetThread->GetLwpId(),
                 lpContext
                 );
@@ -488,7 +494,7 @@ SetThreadContext(
         {
             ret = CONTEXT_SetThreadContext(
                 GetCurrentProcessId(),
-                pTargetThread->GetThreadId(),
+                pTargetThread->GetPThreadSelf(),
                 pTargetThread->GetLwpId(),
                 lpContext
                 );
@@ -510,25 +516,6 @@ SetThreadContext(
     }
         
     return ret;
-}
-
-VOID 
-PALAPI 
-RtlCaptureContext(
-  OUT PCONTEXT ContextRecord
-)
-{
-    ASSERT("UNIXTODO: Implement this");
-}
-
-VOID 
-PALAPI 
-RtlRestoreContext(
-  IN PCONTEXT ContextRecord,
-  IN PEXCEPTION_RECORD ExceptionRecord
-)
-{
-    ASSERT("UNIXTODO: Implement this");
 }
 
 /*++

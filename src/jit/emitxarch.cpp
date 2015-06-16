@@ -82,6 +82,7 @@ bool emitter::IsThreeOperandBinaryAVXInstruction(instruction ins)
             ins == INS_pcmpeqw  || ins == INS_pcmpgtw  ||
             ins == INS_pcmpeqb  || ins == INS_pcmpgtb  ||
             ins == INS_pcmpeqq  || ins == INS_pcmpgtq  ||
+            ins == INS_pmulld   || ins == INS_pmullw   ||
 
             ins == INS_shufps   || ins == INS_shufpd   ||
             ins == INS_minps    || ins == INS_minss    ||
@@ -1629,15 +1630,6 @@ UNATIVE_OFFSET      emitter::emitInsSizeSV(size_t code, int var, int dsp)
         assert(tmp != nullptr);
         offs = tmp->tdTempOffs();
 
-        // For SP-based frames, temps will only have zero offset if there is nothing else on the stack.
-        // Note that we would generally expect something else to be on the stack if we have a spill temp
-        // (minimally, the callee-save register area, since we wouldn't expect to spill if we haven't even
-        // used any callee-save regs).  However, in a stress mode this can happen.
-
-        assert(emitComp->isFramePointerUsed() ||
-               (offs != 0) ||
-               emitComp->tmpSize == emitComp->compLclFrameSize);
-
         // We only care about the magnitude of the offset here, to determine instruction size.
         if (emitComp->isFramePointerUsed())
         {
@@ -1721,7 +1713,14 @@ UNATIVE_OFFSET      emitter::emitInsSizeSV(size_t code, int var, int dsp)
 #endif
                 {
                     // Dev10 804810 - failing this assert can lead to bad codegen and runtime crashes
+#ifdef UNIX_AMD64_ABI
+                    LclVarDsc*  varDsc = emitComp->lvaTable + var;
+                    bool isRegPassedArg = varDsc->lvIsParam && varDsc->lvIsRegArg;
+                    // Register passed args could have a stack offset of 0.
+                    noway_assert((int)offs < 0 || isRegPassedArg);
+#else // !UNIX_AMD64_ABI
                     noway_assert((int)offs < 0);
+#endif // !UNIX_AMD64_ABI
                 }
  
 
@@ -1926,12 +1925,11 @@ UNATIVE_OFFSET      emitter::emitInsSizeAM(instrDesc* id, size_t code)
         // Most 16-bit operands will require a size prefix .
         // This refers to 66h size prefix override.
 
-        if  (    (attrSize == EA_2BYTE)
 #if FEATURE_STACK_FP_X87
-              && (ins != INS_fldcw)
-              && (ins != INS_fnstcw)
+        if ((attrSize == EA_2BYTE) && (ins != INS_fldcw) && (ins != INS_fnstcw))
+#else // FEATURE_STACK_FP_X87
+        if (attrSize == EA_2BYTE)
 #endif // FEATURE_STACK_FP_X87
-              )
         {
             size++;
         }
@@ -8982,7 +8980,7 @@ BYTE*               emitter::emitOutputR(BYTE* dst, instrDesc* id)
                 // The reg must currently be holding either a gcref or a byref
                 // and the instruction must be inc or dec
                 assert(((emitThisGCrefRegs | emitThisByrefRegs) & regMask) &&
-                        (ins == INS_inc || ins == INS_dec || ins == INS_inc_l));
+                        (ins == INS_inc || ins == INS_dec || ins == INS_inc_l || ins == INS_dec_l));
                 assert(id->idGCref() == GCT_BYREF);
                 // Mark it as holding a GCT_BYREF
                 emitGCregLiveUpd(GCT_BYREF, id->idReg1(), dst);

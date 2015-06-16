@@ -93,7 +93,7 @@
 
 
 #if defined(CROSSGEN_COMPILE)
-static const PCHAR hlpNameTable[CORINFO_HELP_COUNT] = {
+static const char *const hlpNameTable[CORINFO_HELP_COUNT] = {
 #define JITHELPER(code, pfnHelper, sig) #code,
 #include "jithelpers.h"
 };
@@ -3145,10 +3145,13 @@ MethodDesc * CEEInfo::GetMethodForSecurity(CORINFO_METHOD_HANDLE callerHandle)
         return m_pMethodForSecurity_Value;
     }
 
+    MethodDesc * pCallerMethod = (MethodDesc *)callerHandle;
+
     //If the caller is generic, load the open type and then load the field again,  This allows us to
     //differentiate between BadGeneric<T> containing a memberRef for a field of type InaccessibleClass and
     //GoodGeneric<T> containing a memberRef for a field of type T instantiated over InaccessibleClass.
-    MethodDesc * pMethodForSecurity = ((MethodDesc *)callerHandle)->LoadTypicalMethodDefinition();
+    MethodDesc * pMethodForSecurity = pCallerMethod->IsILStub() ? 
+        pCallerMethod : pCallerMethod->LoadTypicalMethodDefinition();
 
     m_hMethodForSecurity_Key = callerHandle;
     m_pMethodForSecurity_Value = pMethodForSecurity;
@@ -4047,7 +4050,7 @@ DWORD CEEInfo::getClassAttribsInternal (CORINFO_CLASS_HANDLE clsHnd)
             if (pMT->ContainsStackPtr())
                 ret |= CORINFO_FLG_CONTAINS_STACK_PTR;
 
-            if (pClass->IsNotTightlyPacked() && (!pClass->IsManagedSequential() || pClass->HasExplicitSize()) ||
+            if ((pClass->IsNotTightlyPacked() && (!pClass->IsManagedSequential() || pClass->HasExplicitSize())) ||
                 pMT == g_TypedReferenceMT ||
                 VMClsHnd.IsNativeValueType())
             {
@@ -4901,7 +4904,7 @@ CORINFO_CLASS_HANDLE CEEInfo::getParentType(
     // If we encounter __ComObject in the hierarchy, we need to skip it
     // since this hierarchy is introduced by the EE, but won't be present
     // in the metadata.
-    if (IsComObjectClass(thParent))
+    if (!thParent.IsNull() && IsComObjectClass(thParent))
     {
         result = (CORINFO_CLASS_HANDLE) g_pObjectClass;
     }
@@ -5443,7 +5446,8 @@ void CEEInfo::getCallInfo(
     // Delegate targets are always treated as direct calls here. (It would be nice to clean it up...).
     if (flags & CORINFO_CALLINFO_LDFTN)
     {
-        TypeEquivalenceFixupSpecificationHelper(m_pOverride, pTargetMD);
+        if (m_pOverride != NULL)
+            TypeEquivalenceFixupSpecificationHelper(m_pOverride, pTargetMD);
         directCall = true;
     }
     else
@@ -6443,7 +6447,7 @@ CorInfoHelpFunc CEEInfo::getCastingHelper(CORINFO_RESOLVED_TOKEN * pResolvedToke
 
     bool fClassMustBeRestored;
     result = getCastingHelperStatic(TypeHandle(pResolvedToken->hClass), fThrowing, &fClassMustBeRestored);
-    if (fClassMustBeRestored)
+    if (fClassMustBeRestored && m_pOverride != NULL)
         m_pOverride->classMustBeLoadedBeforeCodeIsRun(pResolvedToken->hClass);
 
     EE_TO_JIT_TRANSITION();
@@ -6578,7 +6582,7 @@ CorInfoHelpFunc CEEInfo::getUnBoxHelper(CORINFO_CLASS_HANDLE clsHnd)
 {
     LIMITED_METHOD_CONTRACT;
 
-    if (!isVerifyOnly())
+    if (m_pOverride != NULL)
         m_pOverride->classMustBeLoadedBeforeCodeIsRun(clsHnd);
 
     TypeHandle VMClsHnd(clsHnd);
@@ -7846,6 +7850,60 @@ CorInfoInline CEEInfo::canInline (CORINFO_METHOD_HANDLE hCaller,
             dwRestrictions |= INLINE_SAME_THIS;
         }
     }
+
+#ifdef PROFILING_SUPPORTED
+    if (CORProfilerPresent())
+    {
+        // #rejit
+        // 
+        // See if rejit-specific flags for the caller disable inlining
+        if ((ReJitManager::GetCurrentReJitFlags(pCaller) &
+            COR_PRF_CODEGEN_DISABLE_INLINING) != 0)
+        {
+            result = INLINE_FAIL;
+            szFailReason = "ReJIT request disabled inlining from caller";
+            goto exit;
+        }
+
+        // If the profiler has set a mask preventing inlining, always return
+        // false to the jit.
+        if (CORProfilerDisableInlining())
+        {
+            result = INLINE_FAIL;
+            szFailReason = "Profiler disabled inlining globally";
+            goto exit;
+        }
+
+        // If the profiler wishes to be notified of JIT events and the result from
+        // the above tests will cause a function to be inlined, we need to tell the
+        // profiler that this inlining is going to take place, and give them a
+        // chance to prevent it.
+        {
+            BEGIN_PIN_PROFILER(CORProfilerTrackJITInfo());
+            if (pCaller->IsILStub() || pCallee->IsILStub())
+            {
+                // do nothing
+            }
+            else
+            {
+                BOOL fShouldInline;
+
+                HRESULT hr = g_profControlBlock.pProfInterface->JITInlining(
+                    (FunctionID)pCaller,
+                    (FunctionID)pCallee,
+                    &fShouldInline);
+
+                if (SUCCEEDED(hr) && !fShouldInline)
+                {
+                    result = INLINE_FAIL;
+                    szFailReason = "Profiler disabled inlining locally";
+                    goto exit;
+                }
+            }
+            END_PIN_PROFILER();
+        }
+    }
+#endif // PROFILING_SUPPORTED
 
 
 #ifdef PROFILING_SUPPORTED
@@ -10544,9 +10602,17 @@ void* CEEJitInfo::getHelperFtn(CorInfoHelpFunc    ftnNum,         /* IN  */
 #endif /*_PREFAST_ */
 
 #if defined(_TARGET_AMD64_)
-        // Always call profiler helpers indirectly to avoid going through jump stubs.
-        // Jumps stubs corrupt RAX that has to be preserved for profiler probes.
-        if (dynamicFtnNum == DYNAMIC_CORINFO_HELP_PROF_FCN_ENTER ||
+        // To avoid using a jump stub we always call certain helpers using an indirect call.
+        // Because when using a direct call and the target is father away than 2^31 bytes,
+        // the direct call instead goes to a jump stub which jumps to the jit helper.
+        // However in this process the jump stub will corrupt RAX.
+        //
+        // The set of helpers for which RAX must be preserved are the profiler probes
+        // and the STOP_FOR_GC helper which maps to JIT_RareDisableHelper.
+        // In the case of the STOP_FOR_GC helper RAX can be holding a function return value.
+        //
+        if (dynamicFtnNum == DYNAMIC_CORINFO_HELP_STOP_FOR_GC    ||
+            dynamicFtnNum == DYNAMIC_CORINFO_HELP_PROF_FCN_ENTER ||
             dynamicFtnNum == DYNAMIC_CORINFO_HELP_PROF_FCN_LEAVE ||
             dynamicFtnNum == DYNAMIC_CORINFO_HELP_PROF_FCN_TAILCALL)
         {
@@ -12468,7 +12534,7 @@ BOOL g_fAllowRel32 = TRUE;
 // are OK since they discard the return value of this method.
 
 PCODE UnsafeJitFunction(MethodDesc* ftn, COR_ILMETHOD_DECODER* ILHeader,
-                        DWORD flags, DWORD flags2)
+                        DWORD flags, DWORD flags2, ULONG * pSizeOfCode)
 {
     STANDARD_VM_CONTRACT;
 
@@ -12719,6 +12785,14 @@ PCODE UnsafeJitFunction(MethodDesc* ftn, COR_ILMETHOD_DECODER* ILHeader,
                                                   &sizeOfCode,
                                                   (MethodDesc*)ftn);
             LOG((LF_CORDB, LL_EVERYTHING, "Got through CallCompile MethodWithSEHWrapper\n"));
+
+#if FEATURE_PERFMAP
+            // Save the code size so that it can be reported to the perfmap.
+            if (pSizeOfCode != NULL)
+            {
+                *pSizeOfCode = sizeOfCode;
+            }
+#endif
 
 #if defined(ENABLE_PERF_COUNTERS)
             LARGE_INTEGER CycleStop;
@@ -13800,6 +13874,100 @@ void CEEInfo::GetProfilingHandle(BOOL                      *pbHookFunction,
 {
     LIMITED_METHOD_CONTRACT;
     UNREACHABLE();      // only called on derived class.
+}
+
+// Allow access to CLRConfig environment variables from the JIT with
+// out exposing CLR internals. 
+// 
+// Args:
+//     name         - String name being queried for.
+//     defaultValue - Default integer value to return if no value is found.
+//
+// Returns:
+//     Raw string from environment variable.  Caller owns the string.
+//
+int CEEInfo::getIntConfigValue(
+    const wchar_t *name,  int defaultValue
+    )
+{
+    CONTRACTL{
+        SO_TOLERANT;
+        THROWS;
+        GC_TRIGGERS;
+        MODE_PREEMPTIVE;
+    } CONTRACTL_END;
+
+    DWORD ret = defaultValue;
+
+    JIT_TO_EE_TRANSITION();
+
+    // Translate JIT call into runtime configuration query
+    CLRConfig::ConfigDWORDInfo info{ name, defaultValue, CLRConfig::REGUTIL_default };
+
+    // Perform a CLRConfig look up on behalf of the JIT.
+    ret = CLRConfig::GetConfigValue(info);
+
+    EE_TO_JIT_TRANSITION();
+
+    return ret;
+}
+
+// Allow access to CLRConfig environment variables from the JIT with
+// out exposing CLR internals. 
+// 
+// Args:
+//     name - String name being queried for.
+//
+// Returns:
+//     Raw string from environment variable.  Caller owns the string.
+//
+wchar_t *CEEInfo::getStringConfigValue(
+    const wchar_t *name
+    )
+{
+    CONTRACTL{
+        SO_TOLERANT;
+        THROWS;
+        GC_TRIGGERS;
+        MODE_PREEMPTIVE;
+    } CONTRACTL_END;
+
+    wchar_t * returnStr = nullptr;
+
+    JIT_TO_EE_TRANSITION();
+
+    // Translate JIT call into runtime configuration query
+    CLRConfig::ConfigStringInfo info{ name, CLRConfig::REGUTIL_default };
+
+    // Perform a CLRConfig look up on behalf of the JIT.
+    returnStr = CLRConfig::GetConfigValue(info);
+
+    EE_TO_JIT_TRANSITION();
+
+    return returnStr;
+}
+
+// Free runtime allocated CLRConfig strings requrested by the JIT.
+//
+// Args:
+//    value - String to be freed.
+//
+void CEEInfo::freeStringConfigValue(
+    wchar_t *value
+    )
+{
+    CONTRACTL{
+        SO_TOLERANT;
+        THROWS;
+        GC_TRIGGERS;
+        MODE_PREEMPTIVE;
+    } CONTRACTL_END;
+
+    JIT_TO_EE_TRANSITION();
+
+    CLRConfig::FreeConfigString(value);
+
+    EE_TO_JIT_TRANSITION();
 }
 
 #endif // !DACCESS_COMPILE

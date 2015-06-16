@@ -581,10 +581,10 @@ static DWORD ShouldInjectFaultInRange()
 #endif
 
 BYTE * ClrVirtualAllocWithinRange(const BYTE *pMinAddr,
-                                   const BYTE *pMaxAddr,
-                                   SIZE_T dwSize, 
-                                   DWORD flAllocationType,
-                                   DWORD flProtect)
+                                  const BYTE *pMaxAddr,
+                                  SIZE_T dwSize, 
+                                  DWORD flAllocationType,
+                                  DWORD flProtect)
 {
     CONTRACTL
     {
@@ -615,7 +615,7 @@ BYTE * ClrVirtualAllocWithinRange(const BYTE *pMinAddr,
     if ((pMinAddr == (BYTE *) BOT_MEMORY) && (pMaxAddr == (BYTE *) TOP_MEMORY))
     {
         return (BYTE*) ClrVirtualAlloc(NULL, dwSize, flAllocationType, flProtect);
-        }
+    }
 
     // If pMaxAddr is not greater than pMinAddr we can not make an allocation
     if (dwSize == 0 || pMaxAddr <= pMinAddr)
@@ -623,48 +623,52 @@ BYTE * ClrVirtualAllocWithinRange(const BYTE *pMinAddr,
         return NULL;
     }
 
-        // We will do one scan: [pMinAddr .. pMaxAddr]
+    // We will do one scan: [pMinAddr .. pMaxAddr]
     // Align to 64k. See docs for VirtualAllocEx and lpAddress and 64k alignment for reasons.
     BYTE *tryAddr = (BYTE *)ALIGN_UP((BYTE *)pMinAddr, VIRTUAL_ALLOC_RESERVE_GRANULARITY);
 
-        // Now scan memory and try to find a free block of the size requested.
+    // Now scan memory and try to find a free block of the size requested.
     while ((tryAddr + dwSize) <= (BYTE *) pMaxAddr)
-        {
+    {
         MEMORY_BASIC_INFORMATION mbInfo;
-            
-            // Use VirtualQuery to find out if this address is MEM_FREE
-            //
-            if (!ClrVirtualQuery((LPCVOID)tryAddr, &mbInfo, sizeof(mbInfo)))
-                break;
-            
-            // Is there enough memory free from this start location?
-            if ((mbInfo.State == MEM_FREE)  && (mbInfo.RegionSize >= (SIZE_T) dwSize))
-            {
-                // Try reserving the memory using VirtualAlloc now
+
+        // Use VirtualQuery to find out if this address is MEM_FREE
+        //
+        if (!ClrVirtualQuery((LPCVOID)tryAddr, &mbInfo, sizeof(mbInfo)))
+            break;
+
+        // Is there enough memory free from this start location?
+        // The PAL version of VirtualQuery sets RegionSize to 0 for free
+        // memory regions, in which case we go just ahead and try
+        // VirtualAlloc without checking the size, and see if it succeeds.
+        if (mbInfo.State == MEM_FREE &&
+            (mbInfo.RegionSize >= (SIZE_T) dwSize || mbInfo.RegionSize == 0))
+        {
+            // Try reserving the memory using VirtualAlloc now
             pResult = (BYTE*) ClrVirtualAlloc(tryAddr, dwSize, MEM_RESERVE, flProtect);
-                
-                if (pResult != NULL) 
-                {
+
+            if (pResult != NULL) 
+            {
                 return pResult;
-                }
+            }
 #ifdef _DEBUG 
-                // pResult == NULL
-                else if (ShouldInjectFaultInRange())
-                {
+            // pResult == NULL
+            else if (ShouldInjectFaultInRange())
+            {
                 return NULL;
-                }
+            }
 #endif // _DEBUG
 
-                // We could fail in a race.  Just move on to next region and continue trying
+            // We could fail in a race.  Just move on to next region and continue trying
             tryAddr = tryAddr + VIRTUAL_ALLOC_RESERVE_GRANULARITY;
-            }
-            else
-            {
-                // Try another section of memory
-            tryAddr = max(tryAddr + VIRTUAL_ALLOC_RESERVE_GRANULARITY,
-                              (BYTE*) mbInfo.BaseAddress + mbInfo.RegionSize);
-            }
         }
+        else
+        {
+            // Try another section of memory
+            tryAddr = max(tryAddr + VIRTUAL_ALLOC_RESERVE_GRANULARITY,
+                (BYTE*) mbInfo.BaseAddress + mbInfo.RegionSize);
+        }
+    }
 
     // Our tryAddr reached pMaxAddr
     return NULL;
@@ -1980,7 +1984,7 @@ HRESULT validateTokenSig(
             if(i == IMAGE_CEE_CS_CALLCONV_FIELD) return validateOneArg(tk, &sig, NULL, pImport, TRUE);
             
             // EXPLICITTHIS and native call convs are for stand-alone sigs only (for calli)
-            if((i != IMAGE_CEE_CS_CALLCONV_DEFAULT)&&( i != IMAGE_CEE_CS_CALLCONV_VARARG)
+            if(((i != IMAGE_CEE_CS_CALLCONV_DEFAULT)&&( i != IMAGE_CEE_CS_CALLCONV_VARARG))
                 || (ulCallConv & IMAGE_CEE_CS_CALLCONV_EXPLICITTHIS)) return VLDTR_E_MD_BADCALLINGCONV;
             break;
             
@@ -2302,108 +2306,6 @@ void PutIA64Imm64(UINT64 * pBundle, UINT64 imm64)
     /* Or in the new bits used in the imm64 */
     pBundle[0] |= temp0;
     pBundle[1] |= temp1;
-    FlushInstructionCache(GetCurrentProcess(),pBundle,16);
-}
-
-//*****************************************************************************
-//  Extract the addl 22-bit signed immediate from an IA64 bundle
-//  (Format A5)
-//*****************************************************************************
-INT32 GetIA64Imm22(UINT64 * pBundle, UINT32 slot)
-{
-    INT32         imm22 = 0;
-    UINT64        temp0 = PTR_UINT64(pBundle)[0];
-    UINT64        temp1 = PTR_UINT64(pBundle)[1];
-    
-    if (slot == 0)
-    {
-        if ((temp0 >> 41) & 1)
-            imm22 =              0xFFE00000;   //  1 sign bit
-        imm22 |= (temp0 >> 11) & 0x001F0000;   //  5 imm5c
-        imm22 |= (temp0 >> 25) & 0x0000FF80;   //  9 imm9d
-        imm22 |= (temp0 >> 18) & 0x0000007F;   //  7 imm7b
-    }
-    else if (slot == 1)
-    {
-        if ((temp1 >> 18) & 1)
-            imm22 =              0xFFE00000;   //  1 sign bit
-        imm22 |= (temp1 <<  9) & 0x001F0000;   //  5 imm5c
-        imm22 |= (temp1 >>  2) & 0x0000FF80;   //  9 imm9d
-        imm22 |= (temp1 <<  5) & 0x00000060;   //  2 imm7b (hi2)
-        imm22 |= (temp0 >> 59) & 0x0000001F;   //  5 imm7b (lo5)
-    }
-    else if (slot == 2)
-    {
-        if ((temp1 >> 59) & 1)
-            imm22 =              0xFFE00000;   //  1 sign bit
-        imm22 |= (temp1 >> 32) & 0x001F0000;   //  5 imm5c
-        imm22 |= (temp1 >> 43) & 0x0000FF80;   //  9 imm9d
-        imm22 |= (temp1 >> 36) & 0x0000007F;   //  7 imm7b
-    }
-
-    return imm22;
-}
-
-//*****************************************************************************
-//  Deposit the addl 22-bit signed immediate into an IA64 bundle
-//  (Format A5)
-//*****************************************************************************
-void  PutIA64Imm22(UINT64 * pBundle, UINT32 slot, INT32 imm22)
-{
-    if (slot == 0)
-    {
-        const UINT64 mask0 = UI64(0xFFFFFC000603FFFF);
-        /* Clear all bits used as part of the imm22 */
-        pBundle[0] &= mask0;
-
-        UINT64 temp0;
-        
-        temp0  = (UINT64) (imm22 & 0x200000) << 20;     //  1 s
-        temp0 |= (UINT64) (imm22 & 0x1F0000) << 11;     //  5 imm5c
-        temp0 |= (UINT64) (imm22 & 0x00FF80) << 25;     //  9 imm9d
-        temp0 |= (UINT64) (imm22 & 0x00007F) << 18;     //  7 imm7b
-        
-        /* Or in the new bits used in the imm22 */
-        pBundle[0] |= temp0;
-
-    }
-    else if (slot == 1)
-    {
-        const UINT64 mask0 = UI64(0x07FFFFFFFFFFFFFF);
-        const UINT64 mask1 = UI64(0xFFFFFFFFFFF8000C);
-        /* Clear all bits used as part of the imm22 */
-        pBundle[0] &= mask0;
-        pBundle[1] &= mask1;
-        
-        UINT64 temp0;
-        UINT64 temp1;
-        
-        temp1  = (UINT64) (imm22 & 0x200000) >>  4;     //  1 s
-        temp1 |= (UINT64) (imm22 & 0x1F0000) >>  9;     //  5 imm5c
-        temp1 |= (UINT64) (imm22 & 0x00FF80) <<  2;     //  9 imm9d
-        temp1 |= (UINT64) (imm22 & 0x000060) >>  5;     //  2 imm7b (hi2)
-        temp0  = (UINT64) (imm22 & 0x00001F) << 59;     //  5 imm7b (hi2)
-        
-        /* Or in the new bits used in the imm22 */
-        pBundle[0] |= temp0;
-        pBundle[1] |= temp1;
-    }
-    else if (slot == 0)
-    {
-        const UINT64 mask1 = UI64(0xF000180FFFFFFFFF);
-        /* Clear all bits used as part of the imm22 */
-        pBundle[1] &= mask1;
-
-        UINT64 temp1;
-        
-        temp1  = (UINT64) (imm22 & 0x200000) << 37;     //  1 s
-        temp1 |= (UINT64) (imm22 & 0x1F0000) << 32;     //  5 imm5c
-        temp1 |= (UINT64) (imm22 & 0x00FF80) << 43;     //  9 imm9d
-        temp1 |= (UINT64) (imm22 & 0x00007F) << 36;     //  7 imm7b
-        
-        /* Or in the new bits used in the imm22 */
-        pBundle[1] |= temp1;
-    }
     FlushInstructionCache(GetCurrentProcess(),pBundle,16);
 }
 

@@ -1046,7 +1046,7 @@ wchar ParseFormatSpecifier(STRINGREF str, int* digits)
         _ASSERTE(p != NULL);
         wchar ch = *p;
         if (ch != 0) {
-            if (ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z') {
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
                 p++;
                 int n = -1;
                 if (*p >= '0' && *p <= '9') {
@@ -2416,7 +2416,7 @@ ParseSection:
 #pragma warning(pop)
 #endif
 
-FCIMPL3_VII(Object*, COMNumber::FormatDecimal, DECIMAL value, StringObject* formatUNSAFE, NumberFormatInfo* numfmtUNSAFE)
+FCIMPL3_VII(Object*, COMNumber::FormatDecimal, FC_DECIMAL value, StringObject* formatUNSAFE, NumberFormatInfo* numfmtUNSAFE)
 {
     FCALL_CONTRACT;
 

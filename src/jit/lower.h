@@ -42,10 +42,7 @@ private:
     void DecomposeNode(GenTreePtr* tree, Compiler::fgWalkData* data);
     void LowerNode(GenTreePtr* tree, Compiler::fgWalkData* data);
     GenTreeStmt* LowerMorphAndSeqTree(GenTree *tree);
-    
-#ifdef _TARGET_AMD64_
     void CheckVSQuirkStackPaddingNeeded(GenTreeCall* call);
-#endif
 
     // ------------------------------
     // Call Lowering
@@ -171,13 +168,6 @@ private:
                                          GenTreePtr indirCandidate);
 
     GenTreePtr  CreateLocalTempAsg      (GenTreePtr rhs, unsigned refCount, GenTreePtr *ppLclVar = nullptr);
-    GenTreePtr  CreateAsgByRefNonGcStmt (Compiler* comp,
-                                         BasicBlock* block,
-                                         GenTreePtr srcObj,
-                                         GenTreePtr dstObj,
-                                         GenTreePtr index,
-                                         unsigned scale,
-                                         unsigned offset);
 
     bool AreSourcesPossiblyModified     (GenTree* use, GenTree* src1, GenTree *src2);
     void ReplaceNode                    (GenTree** ppTreeLocation,
@@ -199,6 +189,9 @@ private:
     // Checks and makes 'childNode' contained in the 'parentNode'
     bool CheckImmedAndMakeContained(GenTree* parentNode, GenTree* childNode);
     
+    // Checks for memory conflicts in the instructions between childNode and parentNode, and returns true if childNode can be contained.
+    bool IsSafeToContainMem(GenTree* parentNode, GenTree* childNode);
+
     LinearScan *m_lsra;
     BasicBlock *currBlock;
     unsigned vtableCallTemp; // local variable we use as a temp for vtable calls

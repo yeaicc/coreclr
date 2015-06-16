@@ -69,6 +69,7 @@ class ShimProxyCallback :
 
 public:
     ShimProxyCallback(ShimProcess * pShim);
+    virtual ~ShimProxyCallback() {}
 
     // Implement IUnknown
     ULONG STDMETHODCALLTYPE AddRef();
@@ -480,12 +481,6 @@ public:
     // Look for a CLR in the process and if found, return it's instance ID
     HRESULT FindLoadedCLR(CORDB_ADDRESS * pClrInstanceId);    
 
-    // Check whether the debugger has given us an ICorDebugRemoteTarget to query for the host name of the remote machine.
-    void   CheckForPortInfo(ICorDebugRemoteTarget * pRemoteTarget);
-
-    // Resolve the host name given to us by the debugger to an IP address.  Currently we don't support IPv6.
-    DWORD  ResolveHostName(ICorDebugRemoteTarget * pRemoteTarget);
-
     // Retrieve the IP address and the port number of the debugger proxy.
     MachineInfo GetMachineInfo();
 
@@ -518,10 +513,8 @@ protected:
     HANDLE  m_markAttachPendingEvent;
     HANDLE  m_terminatingEvent;
 
-#if !defined(FEATURE_CORESYSTEM)
-    // Finds the base address of mscorwks.dll 
+    // Finds the base address of [core]clr.dll 
     CORDB_ADDRESS GetCLRInstanceBaseAddress();
-#endif // !defined(FEATURE_CORESYSTEM)
 
     //
     // Event Queues
@@ -865,7 +858,7 @@ public:
               CorDebugChainReason chainReason,
               BOOL                fIsManaged,
               RSLock *            pShimLock);
-    ~ShimChain();
+    virtual ~ShimChain();
 
     void Neuter();
     BOOL IsNeutered();
@@ -947,7 +940,7 @@ class ShimChainEnum : public ICorDebugChainEnum
 {
 public:
     ShimChainEnum(ShimStackWalk * pSW, RSLock * pShimLock);
-    ~ShimChainEnum();
+    virtual ~ShimChainEnum();
 
     void Neuter();
     BOOL IsNeutered();
@@ -1007,7 +1000,7 @@ class ShimFrameEnum : public ICorDebugFrameEnum
 {
 public:
     ShimFrameEnum(ShimStackWalk * pSW, ShimChain * pChain, UINT32 frameStartIndex, UINT32 frameEndIndex, RSLock * pShimLock);
-    ~ShimFrameEnum();
+    virtual ~ShimFrameEnum();
 
     void Neuter();
     BOOL IsNeutered();

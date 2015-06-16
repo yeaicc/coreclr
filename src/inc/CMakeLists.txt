@@ -50,6 +50,11 @@ add_compile_options(/TC)
 else()
 
 #The MIDL tool exists for Windows only, so for other systems, we have the prebuilt xxx_i.c files checked in
+
+# The prebuilt files contain extra '!_MIDL_USE_GUIDDEF_' after the #endif, but not in the comment.
+# In order to not to have to modify these prebuilt files, we disable the extra tokens warning.
+add_compile_options(-Wno-extra-tokens)
+
 foreach(IDL_SOURCE IN LISTS CORGUIDS_IDL_SOURCES)
    get_filename_component(IDLNAME ${IDL_SOURCE} NAME_WE)
    set(C_SOURCE ../pal/prebuilt/idl/${IDLNAME}_i.c)
@@ -63,4 +68,12 @@ add_library(corguids ${CORGUIDS_SOURCES})
 
 # Binplace the inc files for packaging later.
 
-install (FILES cor.h corhdr.h corinfo.h corjit.h DESTINATION inc)
+install (FILES cor.h
+               corhdr.h
+               corinfo.h
+               corjit.h
+               opcode.def
+               openum.h
+               gcinfoencoder.h
+               gcinfotypes.h
+               DESTINATION inc)

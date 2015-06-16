@@ -320,7 +320,7 @@ namespace sos
          * Throws:
          *   DataRead - we failed to read the object header.
          */
-        unsigned long GetHeader() const;
+        ULONG GetHeader() const;
         
         /* Gets the header for the current object, does not throw any exception.
          * Params:
@@ -328,7 +328,7 @@ namespace sos
          * Returns:
          *   True if we successfully read the object header, false otherwise.
          */
-        bool TryGetHeader(unsigned long &outHeader) const;
+        bool TryGetHeader(ULONG &outHeader) const;
         
         /* Returns the method table of the object this represents.
          * Throws:
@@ -424,7 +424,7 @@ namespace sos
          * Returns:
          *    A string containing the type of the object.
          */
-        wchar_t *GetTypeName() const;
+        const wchar_t *GetTypeName() const;
 
     private:
         void FillMTData() const;
@@ -554,7 +554,7 @@ namespace sos
          */
         inline operator void *() const
         {
-            return (void*)(mCurrHeap == mNumHeaps ? 0 : 1);
+            return (void*)(SIZE_T)(mCurrHeap == mNumHeaps ? 0 : 1);
         }
 
         /* Do not use.
@@ -723,7 +723,7 @@ namespace sos
 
         inline operator void *() const
         {
-            return (void*)(mCurr <= mTotal ? 1 : 0);
+            return (void*)(SIZE_T)(mCurr <= mTotal ? 1 : 0);
         }
 
     private:

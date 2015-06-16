@@ -4,21 +4,12 @@
 //
 
 ///////////////////////////////////////////////////////////////////////////////
-// Copyright (c) 2004 Microsoft Corporation.  All Rights Reserved.
 //
 // File:
 //     cs.cpp
 //
 // Purpose:
 //     Implementation of critical sections
-//
-//     This implementation is derived from Windows Server 2003 SP1
-//     and Windows Longhorn Critical Sections.
-//     
-//     These algorithms are intellectual property of Microsoft and they 
-//     should be considered Microsoft confidential material.
-//
-
 //
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -184,6 +175,26 @@ namespace CorUnix
 }
 #endif // _DEBUG
 
+#define ObtainCurrentThreadId(thread) ObtainCurrentThreadIdImpl(thread, __func__)
+static SIZE_T ObtainCurrentThreadIdImpl(CPalThread *pCurrentThread, const char *callingFuncName)
+{
+    SIZE_T threadId;
+    if(pCurrentThread)
+    {
+        threadId = pCurrentThread->GetThreadId();
+        _ASSERTE(threadId == THREADSilentGetCurrentThreadId());            
+    }
+    else 
+    {
+        threadId = THREADSilentGetCurrentThreadId();
+        CS_TRACE("Early %s, no pthread data, getting TID internally\n", callingFuncName);
+    }
+    _ASSERTE(0 != threadId);
+
+    return threadId;
+}
+
+
 /*++
 Function:
   InitializeCriticalSection
@@ -201,6 +212,25 @@ void InitializeCriticalSection(LPCRITICAL_SECTION lpCriticalSection)
 
     LOGEXIT("InitializeCriticalSection returns void\n");
     PERF_EXIT(InitializeCriticalSection);
+}
+
+/*++
+Function:
+  InitializeCriticalSectionEx - Flags is ignored.
+
+See MSDN doc.
+--*/
+BOOL InitializeCriticalSectionEx(LPCRITICAL_SECTION lpCriticalSection, DWORD dwSpinCount, DWORD Flags)
+{
+    PERF_ENTRY(InitializeCriticalSection);
+    ENTRY("InitializeCriticalSectionEx(lpCriticalSection=%p, dwSpinCount=%d, Flags=%d)\n",
+          lpCriticalSection, dwSpinCount, Flags);
+
+    InternalInitializeCriticalSectionAndSpinCount(lpCriticalSection, dwSpinCount, false);
+
+    LOGEXIT("InitializeCriticalSectionEx returns TRUE\n");
+    PERF_EXIT(InitializeCriticalSection);
+    return true;
 }
 
 /*++
@@ -333,12 +363,12 @@ VOID InternalDeleteCriticalSection(
 
 #ifdef _DEBUG
     CPalThread * pThread = 
-        (PALIsThreadDataInitialized() ? InternalGetCurrentThread() : NULL);
+        (PALIsThreadDataInitialized() ? GetCurrentPalThread() : NULL);
 
     if (0 != pPalCriticalSection->LockCount)
     {
         SIZE_T tid;
-        tid = (NULL != pThread ? pThread->GetThreadId() : (SIZE_T)pthread_self());
+        tid = ObtainCurrentThreadId(pThread);
         int iWaiterCount = (int)PALCS_GETWCOUNT(pPalCriticalSection->LockCount);
 
         if (0 != (PALCS_LOCK_BIT & pPalCriticalSection->LockCount))
@@ -472,7 +502,7 @@ which has no knowledge of CPalThread, classes and namespaces.
 VOID PALCEnterCriticalSection(CRITICAL_SECTION * pcs)
 {
     CPalThread * pThread = 
-        (PALIsThreadDataInitialized() ? InternalGetCurrentThread() : NULL);
+        (PALIsThreadDataInitialized() ? GetCurrentPalThread() : NULL);
     CorUnix::InternalEnterCriticalSection(pThread, pcs);
 }
 
@@ -486,7 +516,7 @@ which has no knowledge of CPalThread, classes and namespaces.
 VOID PALCLeaveCriticalSection(CRITICAL_SECTION * pcs)
 {
     CPalThread * pThread = 
-        (PALIsThreadDataInitialized() ? InternalGetCurrentThread() : NULL);
+        (PALIsThreadDataInitialized() ? GetCurrentPalThread() : NULL);
     CorUnix::InternalLeaveCriticalSection(pThread, pcs);    
 }
 
@@ -604,7 +634,7 @@ namespace CorUnix
 
 #ifdef _DEBUG
         CPalThread * pThread = 
-            (PALIsThreadDataInitialized() ? InternalGetCurrentThread() : NULL);
+            (PALIsThreadDataInitialized() ? GetCurrentPalThread() : NULL);
 
         pPalCriticalSection->DebugInfo = InternalNew<CRITICAL_SECTION_DEBUG_INFO>(pThread);
         _ASSERT_MSG(NULL != pPalCriticalSection->DebugInfo, 
@@ -678,20 +708,8 @@ namespace CorUnix
 
         _ASSERTE(PalCsNotInitialized != pPalCriticalSection->cisInitState);
 
-        if(pThread)
-        {
-            threadId = pThread->GetThreadId();
-            _ASSERTE(threadId == (SIZE_T)pthread_self());            
-        }
-        else 
-        {
-            threadId = (SIZE_T)pthread_self();
-            CS_TRACE("Early EnterCriticalSection, no pthread data, getting TID "
-                     "internally\n");
-        }
-
-        _ASSERTE(0 != threadId);
-
+        threadId = ObtainCurrentThreadId(pThread);
+        
 
         // Check if the current thread already owns the CS
         //
@@ -857,19 +875,7 @@ namespace CorUnix
 
         _ASSERTE(PalCsNotInitialized != pPalCriticalSection->cisInitState);
 
-        if(pThread)
-        {
-            threadId = pThread->GetThreadId();
-            _ASSERTE(threadId == (SIZE_T)pthread_self());            
-        }
-        else 
-        {
-            threadId = (SIZE_T)pthread_self();
-            CS_TRACE("Early LeaveCriticalSection, no pthread data, getting TID "
-                     "internally\n");
-        }
-
-        _ASSERTE(0 != threadId);
+        threadId = ObtainCurrentThreadId(pThread);
         _ASSERTE(threadId == pPalCriticalSection->OwningThread);
 #endif // _DEBUG
 
@@ -1025,19 +1031,7 @@ namespace CorUnix
 
         _ASSERTE(PalCsNotInitialized != pPalCriticalSection->cisInitState);
 
-        if(pThread)
-        {
-            threadId = pThread->GetThreadId();
-            _ASSERTE(threadId == (SIZE_T)pthread_self());            
-        }
-        else 
-        {
-            threadId = (SIZE_T)pthread_self();
-            CS_TRACE("Early TryEnterCriticalSection, no pthread data, getting TID "
-                     "internally\n");            
-        }
-
-        _ASSERTE(0 != threadId);
+        threadId = ObtainCurrentThreadId(pThread);
 
         if (pPalCriticalSection->fInternal && NULL != pThread)
         {
@@ -1554,19 +1548,7 @@ namespace CorUnix
 
         _ASSERTE(PalCsNotInitialized != pPalCriticalSection->cisInitState);
 
-        if(pThread)
-        {
-            threadId = pThread->GetThreadId();
-            _ASSERTE(threadId == (SIZE_T)pthread_self()); 
-        }
-        else 
-        {
-            threadId = (SIZE_T)pthread_self();
-            CS_TRACE("Early EnterCriticalSection, no pthread data, getting TID "
-                     "internally\n");
-        }
-        
-        _ASSERTE(0 != threadId);
+        threadId = ObtainCurrentThreadId(pThread);
 
         /* check if the current thread already owns the criticalSection */
         if (pPalCriticalSection->OwningThread == threadId)
@@ -1616,19 +1598,7 @@ namespace CorUnix
 
         _ASSERTE(PalCsNotInitialized != pPalCriticalSection->cisInitState);
 
-        if(pThread)
-        {
-            threadId = pThread->GetThreadId();
-            _ASSERTE(threadId == (SIZE_T)pthread_self());            
-        }
-        else 
-        {
-            threadId = (SIZE_T)pthread_self();
-            CS_TRACE("Early LeaveCriticalSection, no pthread data, getting TID "
-                     "internally\n");
-        }
-
-        _ASSERTE(0 != threadId);
+        threadId = ObtainCurrentThreadId(pThread);
         _ASSERTE(threadId == pPalCriticalSection->OwningThread);
 
         if (0 >= pPalCriticalSection->RecursionCount)
@@ -1680,19 +1650,7 @@ namespace CorUnix
 
         _ASSERTE(PalCsNotInitialized != pPalCriticalSection->cisInitState);
 
-        if(pThread)
-        {
-            threadId = pThread->GetThreadId();
-            _ASSERTE(threadId == (SIZE_T)pthread_self());            
-        }
-        else 
-        {
-            threadId = (SIZE_T)pthread_self();
-            CS_TRACE("Early EnterCriticalSection, no pthread data, getting TID "
-                     "internally\n");
-        }
-
-        _ASSERTE(0 != threadId);
+        threadId = ObtainCurrentThreadId(pThread);
 
         /* check if the current thread already owns the criticalSection */
         if (pPalCriticalSection->OwningThread == threadId)

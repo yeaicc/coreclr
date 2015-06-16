@@ -68,7 +68,7 @@ extern int _DbgBreakCount;
 
 #define _ASSERTE(expr) ((void)0)
 #define _ASSERTE_MSG(expr, msg) ((void)0)
-#define VERIFY(stmt) (stmt)
+#define VERIFY(stmt) (void)(stmt)
 
 void __FreeBuildDebugBreak();
 void DECLSPEC_NORETURN __FreeBuildAssertFail(const char *szFile, int iLine, const char *szExpr);
@@ -241,13 +241,13 @@ namespace clr
         template < typename T >
         void PoisonMem(T &val)
         {
-            ZeroMemory(&val, sizeof(T));
+            ZeroMemory((void*)&val, sizeof(T));
         }
 
         template < typename T >
         void PoisonMem(T* ptr, size_t len)
         {
-            ZeroMemory(ptr, sizeof(T) * len);
+            ZeroMemory((void*)ptr, sizeof(T)* len);
         }
     }
 }

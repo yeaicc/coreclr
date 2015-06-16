@@ -35,6 +35,9 @@ Abstract:
 
 #include <signal.h>
 #include <pthread.h>
+#if HAVE_PTHREAD_NP_H
+#include <pthread_np.h>
+#endif
 #include <unistd.h>
 #include <errno.h>
 #include <stddef.h>
@@ -380,13 +383,7 @@ GetCurrentThreadId(
     // cache faster on average than pthread_self?)
     //
     
-    SIZE_T threadId = THREADSilentGetCurrentThreadId();
-
-#ifdef BIT64
-    dwThreadId = (DWORD)(threadId >> 2); // REVISIT_TODO: not guaranteed to be unique.
-#else // BIT64
-    dwThreadId = threadId;
-#endif // BIT64 else
+    dwThreadId = (DWORD)THREADSilentGetCurrentThreadId();
     
     LOGEXIT("GetCurrentThreadId returns DWORD %#x\n", dwThreadId);    
     PERF_EXIT(GetCurrentThreadId);
@@ -527,7 +524,7 @@ CorUnix::InternalCreateThread(
     BOOL fHoldingProcessLock = FALSE;
     int iError = 0;
 
-    if(0 != terminator)
+    if (0 != terminator)
     {
         //
         // Since the PAL is in the middle of shutting down we don't want to
@@ -650,11 +647,11 @@ CorUnix::InternalCreateThread(
         TRACE("using the system default thread stack size of %d\n", pthreadStackSize);
     }
 
-#if HAVE_SOLARIS_THREADS || HAVE_THREAD_SELF || HAVE__LWP_SELF
+#if HAVE_THREAD_SELF || HAVE__LWP_SELF
     /* Create new threads as "bound", so each pthread is permanently bound
        to an LWP.  Get/SetThreadContext() depend on this 1:1 mapping. */
     pthread_attr_setscope(&pthreadAttr, PTHREAD_SCOPE_SYSTEM);
-#endif // HAVE_SOLARIS_THREADS || HAVE_THREAD_SELF || HAVE__LWP_SELF
+#endif // HAVE_THREAD_SELF || HAVE__LWP_SELF
 
     //
     // We never call pthread_join, so create the new thread as detached
@@ -1212,7 +1209,7 @@ CorUnix::InternalSetThreadPriority(
     /* get the previous thread schedule parameters.  We need to know the 
        scheduling policy to determine the priority range */
     if (pthread_getschedparam(
-            (pthread_t) pTargetThread->GetThreadId(),
+            pTargetThread->GetPThreadSelf(),
             &policy, 
             &schedParam
             ) != 0)
@@ -1277,7 +1274,7 @@ CorUnix::InternalSetThreadPriority(
 
     /* Finally, set the new priority into place */
     if (pthread_setschedparam(
-            (pthread_t) pTargetThread->GetThreadId(),
+            pTargetThread->GetPThreadSelf(),
             policy,
             &schedParam
             ) != 0)
@@ -1367,7 +1364,7 @@ GetThreadTimes(
     pthrTarget->Lock(pthrCurrent);
 	
     mach_port_t mhThread;
-    mhThread = pthread_mach_thread_np((pthread_t)pthrTarget->GetThreadId());
+    mhThread = pthread_mach_thread_np(pthrTarget->GetPThreadSelf());
 	
 	kern_return_t status;
 	status = thread_info(
@@ -1453,7 +1450,7 @@ CPalThread::ThreadEntry(
 
     pThread = reinterpret_cast<CPalThread*>(pvParam);
 
-    if(NULL == pThread)
+    if (NULL == pThread)
     {
         ASSERT("THREAD pointer is NULL!\n");
         goto fail;
@@ -1467,7 +1464,8 @@ CPalThread::ThreadEntry(
         DebugBreak();
 #endif // FEATURE_PAL_SXS && _DEBUG
 
-    pThread->m_threadId = (SIZE_T) pthread_self();
+    pThread->m_threadId = THREADSilentGetCurrentThreadId();
+    pThread->m_pthreadSelf = pthread_self();
 #if HAVE_THREAD_SELF
     pThread->m_dwLwpId = (DWORD) thread_self();
 #elif HAVE__LWP_SELF
@@ -1486,9 +1484,7 @@ CPalThread::ThreadEntry(
     // Check if the thread should be started suspended.
     if (pThread->GetCreateSuspended())
     {
-        DWORD dwSuspendCount;
-        
-        palError = pThread->suspensionInfo.InternalSuspendThreadFromData(pThread, pThread, &dwSuspendCount);
+        palError = pThread->suspensionInfo.InternalSuspendNewThreadFromData(pThread);
         if (NO_ERROR != palError)
         {
             ASSERT("Error %i attempting to suspend new thread\n", palError);
@@ -1637,10 +1633,11 @@ CorUnix::CreateThreadData(
     {
         goto CreateThreadDataExit;
     }
-    
-    pThread->SetLastError(StartupLastError);
 
-    pThread->m_threadId = (SIZE_T) pthread_self();
+    pThread->SetLastError(0);
+
+    pThread->m_threadId = THREADSilentGetCurrentThreadId();
+    pThread->m_pthreadSelf = pthread_self();
 #if HAVE_THREAD_SELF
     pThread->m_dwLwpId = (DWORD) thread_self();
 #elif HAVE__LWP_SELF
@@ -2201,7 +2198,7 @@ CPalThread::SetStartStatus(
     iError = pthread_mutex_lock(&m_startMutex);
     if (0 != iError)
     {
-        ASSERT("pthread primative failure\n");
+        ASSERT("pthread primitive failure\n");
         // bugcheck?
     }
 
@@ -2211,14 +2208,14 @@ CPalThread::SetStartStatus(
     iError = pthread_cond_signal(&m_startCond);
     if (0 != iError)
     {
-        ASSERT("pthread primative failure\n");
+        ASSERT("pthread primitive failure\n");
         // bugcheck?
     }
 
     iError = pthread_mutex_unlock(&m_startMutex);
     if (0 != iError)
     {
-        ASSERT("pthread primative failure\n");
+        ASSERT("pthread primitive failure\n");
         // bugcheck?
     }
 }
@@ -2233,7 +2230,7 @@ CPalThread::WaitForStartStatus(
     iError = pthread_mutex_lock(&m_startMutex);
     if (0 != iError)
     {
-        ASSERT("pthread primative failure\n");
+        ASSERT("pthread primitive failure\n");
         // bugcheck?
     }
 
@@ -2242,7 +2239,7 @@ CPalThread::WaitForStartStatus(
         iError = pthread_cond_wait(&m_startCond, &m_startMutex);
         if (0 != iError)
         {
-            ASSERT("pthread primative failure\n");
+            ASSERT("pthread primitive failure\n");
             // bugcheck?
         }
     }
@@ -2250,7 +2247,7 @@ CPalThread::WaitForStartStatus(
     iError = pthread_mutex_unlock(&m_startMutex);
     if (0 != iError)
     {
-        ASSERT("pthread primative failure\n");
+        ASSERT("pthread primitive failure\n");
         // bugcheck?
     }
 
@@ -2434,7 +2431,16 @@ PAL_GetStackBase()
     
     pthread_t thread = pthread_self();
     
+    status = pthread_attr_init(&attr);
+    _ASSERT_MSG(status == 0, "pthread_attr_init call failed");
+
+#if HAVE_PTHREAD_ATTR_GET_NP
+    status = pthread_attr_get_np(thread, &attr);
+#elif HAVE_PTHREAD_GETATTR_NP
     status = pthread_getattr_np(thread, &attr);
+#else
+#error Dont know how to get thread attributes on this platform!
+#endif
     _ASSERT_MSG(status == 0, "pthread_getattr_np call failed");
 
     status = pthread_attr_getstack(&attr, &stackAddr, &stackSize);
@@ -2460,7 +2466,16 @@ PAL_GetStackLimit()
     
     pthread_t thread = pthread_self();
     
+    status = pthread_attr_init(&attr);
+    _ASSERT_MSG(status == 0, "pthread_attr_init call failed");
+
+#if HAVE_PTHREAD_ATTR_GET_NP
+    status = pthread_attr_get_np(thread, &attr);
+#elif HAVE_PTHREAD_GETATTR_NP
     status = pthread_getattr_np(thread, &attr);
+#else
+#error Dont know how to get thread attributes on this platform!
+#endif
     _ASSERT_MSG(status == 0, "pthread_getattr_np call failed");
 
     status = pthread_attr_getstack(&attr, &stackAddr, &stackSize);

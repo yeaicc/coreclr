@@ -75,7 +75,7 @@ void ZapImage::SaveNativeHeader()
     if (m_ModuleDecoder.HasDirectoryEntry(IMAGE_DIRECTORY_ENTRY_SECURITY))
         nativeHeader.Flags |= CORCOMPILE_HEADER_HAS_SECURITY_DIRECTORY;
             
-        nativeHeader.COR20Flags = m_ModuleDecoder.GetCorHeader()->Flags;
+    nativeHeader.COR20Flags = m_ModuleDecoder.GetCorHeader()->Flags;
 
 #ifdef CROSSGEN_COMPILE
     if (CLRConfig::GetConfigValue(CLRConfig::INTERNAL_CrossGenAssumeInputSigned))
@@ -91,24 +91,27 @@ void ZapImage::SaveNativeHeader()
     }
 #endif
 
-        if (m_ModuleDecoder.HasReadyToRunHeader())
-        {
-            // Pretend that ready-to-run images are IL-only
-            nativeHeader.COR20Flags |= COMIMAGE_FLAGS_ILONLY;
+    if (m_ModuleDecoder.HasReadyToRunHeader())
+    {
+        // Pretend that ready-to-run images are IL-only
+        nativeHeader.COR20Flags |= COMIMAGE_FLAGS_ILONLY;
 
-            // Pretend that ready-to-run images do not have native header
-            nativeHeader.COR20Flags &= ~COMIMAGE_FLAGS_IL_LIBRARY;
-        }
+        // Pretend that ready-to-run images do not have native header
+        nativeHeader.COR20Flags &= ~COMIMAGE_FLAGS_IL_LIBRARY;
 
-        if (m_fHaveProfileData)
-            nativeHeader.Flags |= CORCOMPILE_HEADER_IS_IBC_OPTIMIZED;
+        // Remember whether the source IL image had ReadyToRun header
+        nativeHeader.Flags |= CORCOMPILE_HEADER_IS_READY_TO_RUN;
+    }
 
-        DWORD dwPEKind, dwMachine;
-        m_ModuleDecoder.GetPEKindAndMachine(&dwPEKind, &dwMachine);
-        nativeHeader.PEKind = dwPEKind;
-        nativeHeader.Machine = (WORD)dwMachine;
+    if (m_fHaveProfileData)
+        nativeHeader.Flags |= CORCOMPILE_HEADER_IS_IBC_OPTIMIZED;
 
-        nativeHeader.Characteristics = m_ModuleDecoder.GetCharacteristics();
+    DWORD dwPEKind, dwMachine;
+    m_ModuleDecoder.GetPEKindAndMachine(&dwPEKind, &dwMachine);
+    nativeHeader.PEKind = dwPEKind;
+    nativeHeader.Machine = (WORD)dwMachine;
+
+    nativeHeader.Characteristics = m_ModuleDecoder.GetCharacteristics();
 
 
     SetDirectoryData(&nativeHeader.EEInfoTable, m_pEEInfoTable);
@@ -222,6 +225,7 @@ void ZapVersionResource::Save(ZapWriter * pZapWriter)
 
 void ZapImage::CopyWin32VersionResource()
 {
+#ifndef FEATURE_PAL
     // Copy the version resource over so it is easy to see in the dumps where the ngened module came from
     COUNT_T cbResourceData;
     PVOID pResourceData = m_ModuleDecoder.GetWin32Resource(MAKEINTRESOURCE(1), RT_VERSION, &cbResourceData);
@@ -237,6 +241,7 @@ void ZapImage::CopyWin32VersionResource()
     m_pWin32ResourceSection->Place(pVersionData);
 
     SetDirectoryEntry(IMAGE_DIRECTORY_ENTRY_RESOURCE, m_pWin32ResourceSection);
+#endif
 }
 #undef MAKEINTRESOURCE
 

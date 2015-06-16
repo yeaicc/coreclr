@@ -226,6 +226,7 @@ c_runtime/iswupper/test1,1
 c_runtime/iswxdigit/test1,1
 c_runtime/isxdigit/test1,1
 c_runtime/labs/test1,1
+c_runtime/llabs/test1,1
 c_runtime/localtime/test1,1
 c_runtime/log/test1,1
 c_runtime/log10/test1,1
@@ -504,16 +505,11 @@ file_io/createfilea/test1,1
 file_io/createfilew/test1,1
 file_io/deletefilea/test1,1
 file_io/deletefilew/test1,1
-file_io/dosdatetimetofiletime/test1,1
-file_io/dosdatetimetofiletime/test2,1
-file_io/dosdatetimetofiletime/test3,1
-file_io/dosdatetimetofiletime/test4,1
 file_io/errorpathnotfound/test1,1
 file_io/errorpathnotfound/test2,1
 file_io/errorpathnotfound/test3,1
 #file_io/errorpathnotfound/test4,1
 file_io/filetimetodosdatetime/test1,1
-file_io/filetimetolocalfiletime/test1,1
 file_io/findclose/test1,1
 file_io/findfirstfilea/test1,1
 #file_io/findfirstfilew/test1,1
@@ -556,8 +552,6 @@ file_io/gettempfilenamew/test1,1
 file_io/gettempfilenamew/test3,1
 file_io/gettemppatha/test1,1
 file_io/gettemppathw/test1,1
-file_io/localfiletimetofiletime/test1,1
-file_io/localfiletimetofiletime/test2,1
 file_io/movefileexw/test1,1
 file_io/movefilew/test1,1
 #file_io/readfile/test1,1

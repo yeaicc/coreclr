@@ -2602,6 +2602,10 @@ BOOL DomainAssembly::ShouldLoadDomainNeutralHelper()
 
     case AppDomain::SHARE_POLICY_NEVER:
         return FALSE;
+
+    case AppDomain::SHARE_POLICY_UNSPECIFIED:
+    case AppDomain::SHARE_POLICY_COUNT:
+        break;
     }
     
     return FALSE; // No meaning in doing costly closure walk for CoreCLR.
@@ -3360,6 +3364,13 @@ void DomainAssembly::GetCurrentVersionInfo(CORCOMPILE_VERSION_INFO *pNativeVersi
     {
         pNativeVersionInfo->wConfigFlags |= CORCOMPILE_CONFIG_INSTRUMENTATION_NONE;
     }
+
+#if defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
+    if (UseRyuJit())
+    {
+        pNativeVersionInfo->wCodegenFlags |= CORCOMPILE_CODEGEN_USE_RYUJIT;
+    }
+#endif
 
     GetTimeStampsForNativeImage(pNativeVersionInfo);
 

@@ -78,6 +78,8 @@ namespace Security
     inline bool CanLoadFromRemoteSources();
 #endif // FEATURE_CAS_POLICY
 
+    BOOL IsTransparencyEnforcementEnabled();
+
     BOOL BypassSecurityChecksForProfiler(MethodDesc *pMD);
     inline BOOL CanCallUnmanagedCode(Module *pModule);
     inline BOOL CanAssert(Module *pModule);
@@ -163,6 +165,7 @@ namespace Security
     IApplicationSecurityDescriptor* CreateApplicationSecurityDescriptor(AppDomain * pDomain);
     IAssemblySecurityDescriptor* CreateAssemblySecurityDescriptor(AppDomain *pDomain, DomainAssembly *pAssembly, LoaderAllocator *pLoaderAllocator);
     ISharedSecurityDescriptor* CreateSharedSecurityDescriptor(Assembly* pAssembly);
+    void DeleteSharedSecurityDescriptor(ISharedSecurityDescriptor *descriptor);
 #ifndef FEATURE_CORECLR
     IPEFileSecurityDescriptor* CreatePEFileSecurityDescriptor(AppDomain* pDomain, PEFile *pPEFile);
 #endif
@@ -246,7 +249,8 @@ namespace Security
 class ISecurityDescriptor
 {
 public:
-    VPTR_BASE_VTABLE_CLASS(ISecurityDescriptor)
+    VPTR_BASE_VTABLE_CLASS_AND_CTOR(ISecurityDescriptor)
+
     virtual ~ISecurityDescriptor() { LIMITED_METHOD_CONTRACT; }
 
     virtual BOOL IsFullyTrusted() = 0;
@@ -274,7 +278,7 @@ public:
 class IApplicationSecurityDescriptor : public ISecurityDescriptor
 {
 public:
-    VPTR_ABSTRACT_VTABLE_CLASS(IApplicationSecurityDescriptor, ISecurityDescriptor)
+    VPTR_ABSTRACT_VTABLE_CLASS_AND_CTOR(IApplicationSecurityDescriptor, ISecurityDescriptor)
 
 #ifndef DACCESS_COMPILE
 public:
@@ -318,7 +322,7 @@ public:
 class IAssemblySecurityDescriptor : public ISecurityDescriptor
 {
 public:
-    VPTR_ABSTRACT_VTABLE_CLASS(IAssemblySecurityDescriptor, ISecurityDescriptor)
+    VPTR_ABSTRACT_VTABLE_CLASS_AND_CTOR(IAssemblySecurityDescriptor, ISecurityDescriptor)
 
 #ifndef DACCESS_COMPILE
     virtual SharedSecurityDescriptor *GetSharedSecDesc() = 0;

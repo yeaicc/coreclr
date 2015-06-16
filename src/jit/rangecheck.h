@@ -108,8 +108,8 @@ struct Limit
     }
 
     Limit(LimitType type, int cns)
-        : type(type)
-        , cns(cns)
+        : cns(cns),
+          type(type)
     {
         assert(type == keConstant);
     }
@@ -190,7 +190,13 @@ struct Limit
             }
             cns += i;
             return true;
+
+        case keUndef:
+        case keUnknown:
+            // For these values of 'type', conservatively return false
+            break;
         }
+
         return false;
     }
 
@@ -264,14 +270,14 @@ struct Range
     Limit lLimit;
 
     Range(const Limit& limit)
-        : lLimit(limit)
-        , uLimit(limit)
+        : uLimit(limit),
+          lLimit(limit)
     {
     }
 
     Range(const Limit& lLimit, const Limit& uLimit)
-        : lLimit(lLimit)
-        , uLimit(uLimit)
+        : uLimit(uLimit),
+          lLimit(lLimit)
     {
     }
 
@@ -325,13 +331,13 @@ struct RangeOps
 
         Range result = Limit(Limit::keUnknown);
 
-        // Check lo ranges if they are dependent.
-        if (r1lo.IsDependent() || r2lo.IsDependent())
+        // Check lo ranges if they are dependent and not unknown.
+        if ((r1lo.IsDependent() && !r1lo.IsUnknown()) || (r2lo.IsDependent() && !r2lo.IsUnknown()))
         {
             result.lLimit = Limit(Limit::keDependent);
         }
-        // Check lo ranges if they are dependent.
-        if (r1hi.IsDependent() || r2hi.IsDependent())
+        // Check hi ranges if they are dependent and not unknown.
+        if ((r1hi.IsDependent() && !r1hi.IsUnknown()) || (r2hi.IsDependent() && !r2hi.IsUnknown()))
         {
             result.uLimit = Limit(Limit::keDependent);
         }
@@ -416,26 +422,6 @@ struct RangeOps
         {
             result.uLimit = Limit(Limit::keConstant, max(r1hi.GetConstant(), r2hi.GetConstant()));
         }
-        if (r1hi.IsConstant() && r1hi.GetConstant() == 0 &&
-            r2hi.IsArray())
-        {
-            result.uLimit = r2hi;
-        }
-        if (r2hi.IsConstant() && r2hi.GetConstant() == 0 &&
-            r1hi.IsArray())
-        {
-            result.uLimit = r1hi;
-        }
-        if (r1hi.IsConstant() && r1hi.GetConstant() == 0 &&
-            r2hi.IsBinOpArray() && r2hi.GetConstant() > 0)
-        {
-            result.uLimit = r2hi;
-        }
-        if (r2hi.IsConstant() && r2hi.GetConstant() == 0 &&
-            r1hi.IsBinOpArray() && r1hi.GetConstant() > 0)
-        {
-            result.uLimit = r1hi;
-        }
         if (r2hi.Equals(r1hi))
         {
             result.uLimit = r2hi;
@@ -444,8 +430,19 @@ struct RangeOps
         {
             result.lLimit = r1lo;
         }
+
+        if (r1hi.IsBinOpArray() && r2hi.IsBinOpArray() && r1hi.vn == r2hi.vn)
+        {
+            result.uLimit = r1hi;
+            // Widen the upper bound if the other constant is greater.
+            if (r2hi.GetConstant() > r1hi.GetConstant())
+            {
+                result.uLimit = r2hi;
+            }
+        }
         return result;
     }
+    
 };
 
 class RangeCheck
@@ -570,7 +567,14 @@ public:
     // are monotonically increasing.
     bool IsMonotonicallyIncreasing(GenTreePtr tree, SearchPath* path);
 
+    // We allocate a budget to avoid walking long UD chains. When traversing each link in the UD
+    // chain, we decrement the budget. When the budget hits 0, then no more range check optimization
+    // will be applied for the currently compiled method.
+    bool IsOverBudget();
+
 private:
+    GenTreeBoundsChk* m_pCurBndsChk;
+
     // Get the cached overflow values.
     OverflowMap* GetOverflowMap();
     OverflowMap* m_pOverflowMap;
@@ -582,4 +586,8 @@ private:
     bool m_fMappedDefs;
     VarToLocMap* m_pDefTable;
     Compiler* m_pCompiler;
+
+    // The number of nodes for which range is computed throughout the current method.
+    // When this limit is zero, we have exhausted all the budget to walk the ud-chain.
+    int m_nVisitBudget;
 };

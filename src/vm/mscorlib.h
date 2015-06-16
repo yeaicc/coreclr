@@ -1765,6 +1765,9 @@ DEFINE_METHOD(STUBHELPERS,          TRIGGER_EXCEPTION_SWALLOWED_MDA,          Tr
 DEFINE_METHOD(STUBHELPERS,          CHECK_COLLECTED_DELEGATE_MDA, CheckCollectedDelegateMDA, SM_IntPtr_RetVoid)
 #endif // MDA_SUPPORTED
 DEFINE_METHOD(STUBHELPERS,          SET_LAST_ERROR,         SetLastError,               SM_RetVoid)
+#ifdef FEATURE_CORECLR
+DEFINE_METHOD(STUBHELPERS,          CLEAR_LAST_ERROR,       ClearLastError,             SM_RetVoid)
+#endif
 
 DEFINE_METHOD(STUBHELPERS,          THROW_INTEROP_PARAM_EXCEPTION, ThrowInteropParamException,   SM_Int_Int_RetVoid)
 DEFINE_METHOD(STUBHELPERS,          ADD_TO_CLEANUP_LIST,    AddToCleanupList,           SM_RefCleanupWorkList_SafeHandle_RetIntPtr)
@@ -2137,11 +2140,9 @@ DEFINE_CLASS(IENUMERABLEGENERIC,    CollectionsGeneric,     IEnumerable`1)
 DEFINE_CLASS(IENUMERATORGENERIC,    CollectionsGeneric,     IEnumerator`1)
 DEFINE_CLASS(ICOLLECTIONGENERIC,    CollectionsGeneric,     ICollection`1)
 DEFINE_CLASS(ILISTGENERIC,          CollectionsGeneric,     IList`1)
-#if !defined(FEATURE_CORECLR) || defined(FEATURE_COMINTEROP)  // Silverlight 5 does not contain IReadOnlyList<T>, but we should add it to Silverlight 6.
 DEFINE_CLASS(IREADONLYCOLLECTIONGENERIC,CollectionsGeneric, IReadOnlyCollection`1)
 DEFINE_CLASS(IREADONLYLISTGENERIC,  CollectionsGeneric,     IReadOnlyList`1)
 DEFINE_CLASS(IREADONLYDICTIONARYGENERIC,CollectionsGeneric, IReadOnlyDictionary`2)
-#endif
 DEFINE_CLASS(IDICTIONARYGENERIC,    CollectionsGeneric,     IDictionary`2)
 DEFINE_CLASS(KEYVALUEPAIRGENERIC,   CollectionsGeneric,     KeyValuePair`2)
 
@@ -2188,11 +2189,17 @@ DEFINE_CLASS(FRAME_SECURITY_DESCRIPTOR_WITH_RESOLVER, Security, FrameSecurityDes
 #endif // FEATURE_COMPRESSEDSTACK
 
 #ifdef FEATURE_COMINTEROP
-DEFINE_CLASS(ASYNC_TRACING_EVENT_ARGS,       WindowsFoundationDiag,	        TracingStatusChangedEventArgs)
+DEFINE_CLASS(ASYNC_TRACING_EVENT_ARGS,       WindowsFoundationDiag,         TracingStatusChangedEventArgs)
 DEFINE_CLASS(IASYNC_TRACING_EVENT_ARGS,      WindowsFoundationDiag,         ITracingStatusChangedEventArgs)
 #endif // FEATURE_COMINTEROP
 
 DEFINE_CLASS(MODULEBASE,        Reflection,         Module)
+
+#ifdef FEATURE_ICASTABLE
+DEFINE_CLASS(ICASTABLE,         CompilerServices,   ICastable)
+DEFINE_METHOD(ICASTABLE,        ISINSTANCEOF,       IsInstanceOfInterface, IM_RuntimeTypeHandle_RefException_RetBool)
+DEFINE_METHOD(ICASTABLE,        GETIMPLTYPE,        GetImplType, IM_RuntimeTypeHandle_RetRuntimeTypeHandle)
+#endif // FEATURE_ICASTABLE
 
 #undef DEFINE_CLASS
 #undef DEFINE_METHOD

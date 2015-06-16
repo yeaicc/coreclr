@@ -20,8 +20,11 @@
         #define LOGGING
     #endif
 #endif
+
+#ifndef STANDALONE_BUILD
 #include "log.h"
 #include "simplerhash.h"
+#endif
 
 #ifdef MDIL
 #define MUST_CALL_JITALLOCATOR_FREE 1
@@ -84,7 +87,7 @@ void GcInfoSize::Log(DWORD level, const char * header)
 
 #endif
 
-
+#ifndef DISABLE_EH_VECTORS
 inline BOOL IsEssential(EE_ILEXCEPTION_CLAUSE *pClause)
 {
     _ASSERTE(pClause->TryEndPC >= pClause->TryStartPC);
@@ -93,6 +96,7 @@ inline BOOL IsEssential(EE_ILEXCEPTION_CLAUSE *pClause)
 
      return TRUE;
 }
+#endif
 
 GcInfoEncoder::GcInfoEncoder(
             ICorJitInfo*                pCorJitInfo,
@@ -125,7 +129,7 @@ GcInfoEncoder::GcInfoEncoder(
 
     // Get the name of the current method along with the enclosing class
     // or module name.
-    m_MethodName = (char *)
+    m_MethodName =
         pCorJitInfo->getMethodName(methodHandle, (const char **)&m_ModuleName);
 #endif
 
@@ -491,10 +495,10 @@ public:
 };
 
 
-int __cdecl CompareLifetimeTransitionsByOffsetThenSlot( const void* p1, const void* p2 )
+int __cdecl CompareLifetimeTransitionsByOffsetThenSlot(const void* p1, const void* p2)
 {
-    GcInfoEncoder::LifetimeTransition* pFirst = (GcInfoEncoder::LifetimeTransition*) p1;
-    GcInfoEncoder::LifetimeTransition* pSecond = (GcInfoEncoder::LifetimeTransition*) p2;
+    const GcInfoEncoder::LifetimeTransition* pFirst = (const GcInfoEncoder::LifetimeTransition*) p1;
+    const GcInfoEncoder::LifetimeTransition* pSecond = (const GcInfoEncoder::LifetimeTransition*) p2;
         
     UINT32 firstOffset  = pFirst->CodeOffset;
     UINT32 secondOffset = pSecond->CodeOffset;
@@ -510,10 +514,10 @@ int __cdecl CompareLifetimeTransitionsByOffsetThenSlot( const void* p1, const vo
 }
 
 
-int __cdecl CompareLifetimeTransitionsBySlot( const void* p1, const void* p2 )
+int __cdecl CompareLifetimeTransitionsBySlot(const void* p1, const void* p2)
 {
-    GcInfoEncoder::LifetimeTransition* pFirst = (GcInfoEncoder::LifetimeTransition*) p1;
-    GcInfoEncoder::LifetimeTransition* pSecond = (GcInfoEncoder::LifetimeTransition*) p2;
+    const GcInfoEncoder::LifetimeTransition* pFirst = (const GcInfoEncoder::LifetimeTransition*) p1;
+    const GcInfoEncoder::LifetimeTransition* pSecond = (const GcInfoEncoder::LifetimeTransition*) p2;
         
     UINT32 firstOffset  = pFirst->CodeOffset;
     UINT32 secondOffset = pSecond->CodeOffset;
@@ -593,8 +597,10 @@ bool GcInfoEncoder::IsAlwaysScratch(GcSlotDesc &slotDesc)
         UINT16 PreservedRegMask =
               (1 << 3)  // rbx
             | (1 << 5)  // rbp
+#ifndef UNIX_AMD64_ABI
             | (1 << 6)  // rsi
             | (1 << 7)  // rdi
+#endif // UNIX_AMD64_ABI
             | (1 << 12)  // r12
             | (1 << 13)  // r13
             | (1 << 14)  // r14

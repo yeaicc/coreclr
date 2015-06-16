@@ -2316,16 +2316,28 @@ void Compiler::fgDfsInvPostOrder()
     // mark in this step.
     BlockSet_ValRet_T startNodes = fgDomFindStartNodes();
 
-    // Make sure fgFirstBB is still there, even if it participates in a loop.
-    // Review: it might be better to do this:
+    // Make sure fgEnterBlks are still there in startNodes, even if they participate in a loop (i.e., there is
+    // an incoming edge into the block).
+    assert(fgEnterBlksSetValid);
+
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+    //
     //    BlockSetOps::UnionD(this, startNodes, fgEnterBlks);
-    // instead, but this causes problems on ARM, because we for BBJ_CALLFINALLY/BBJ_ALWAYS pairs, we add the BBJ_ALWAYS
+    //
+    // This causes problems on ARM, because we for BBJ_CALLFINALLY/BBJ_ALWAYS pairs, we add the BBJ_ALWAYS
     // to the enter blocks set to prevent flow graph optimizations from removing it and creating retless call finallies
     // (BBF_RETLESS_CALL). This leads to an incorrect DFS ordering in some cases, because we start the recursive walk
     // from the BBJ_ALWAYS, which is reachable from other blocks. A better solution would be to change ARM to avoid
     // creating retless calls in a different way, not by adding BBJ_ALWAYS to fgEnterBlks.
+    //
+    // So, let us make sure at least fgFirstBB is still there, even if it participates in a loop.
     BlockSetOps::AddElemD(this, startNodes, 1);
     assert(fgFirstBB->bbNum == 1);
+#else
+    BlockSetOps::UnionD(this, startNodes, fgEnterBlks);
+#endif
+
+    assert(BlockSetOps::IsMember(this, startNodes, fgFirstBB->bbNum));
 
     // Call the recursive helper.
     unsigned postIndex = 1;
@@ -5382,8 +5394,8 @@ DECODE_OPCODE:
         case CEE_CALLI:
             {
                 if (compIsForInlining() || // Ignore tail call in the inlinee. Period.
-                    !tailCall &&
-                    !compTailCallStress()  // A new BB with BBJ_RETURN would have been created
+                    (!tailCall &&
+                    !compTailCallStress())  // A new BB with BBJ_RETURN would have been created
 
                     // after a tailcall statement.
                     // We need to keep this invariant if we want to stress the tailcall.
@@ -6709,6 +6721,9 @@ bool         Compiler::fgIsThrow(GenTreePtr     tree)
         (tree->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_VERIFICATION)) ||
         (tree->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_RNGCHKFAIL)  ) ||
         (tree->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_THROWDIVZERO)) ||
+#ifndef RYUJIT_CTPBUILD
+        (tree->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_THROWNULLREF)) ||
+#endif
         (tree->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_THROW)       ) ||
         (tree->gtCall.gtCallMethHnd == eeFindHelper(CORINFO_HELP_RETHROW)     )   )
     {
@@ -10507,7 +10522,7 @@ void                Compiler::fgRemoveBlock(BasicBlock*   block,
     // If we've cached any mappings from switch blocks to SwitchDesc's (which contain only the
     // *unique* successors of the switch block), invalidate that cache, since an entry in one of
     // the SwitchDescs might be removed.
-    m_switchDescMap = NULL;
+    InvalidateUniqueSwitchSuccMap();
 
     noway_assert((block == fgFirstBB) || (bPrev && (bPrev->bbNext == block)));
     noway_assert(!(block->bbFlags & BBF_DONT_REMOVE));
@@ -11110,6 +11125,9 @@ bool            Compiler::fgRenumberBlocks()
     if (renumbered || newMaxBBNum)
     {
         NewBasicBlockEpoch();
+
+        // The key in the unique switch successor map is dependent on the block number, so invalidate that cache.
+        InvalidateUniqueSwitchSuccMap();
     }
     else
     {
@@ -13965,6 +13983,8 @@ bool Compiler::fgOptimizeBranchToNext(BasicBlock* block, BasicBlock* bNext, Basi
                 // Extracting side-effects won't work in rationalized form.
                 // Instead just transform the JTRUE into a NEG which has the effect of
                 // evaluating the side-effecting tree and perform a benign operation on it.
+                // TODO-CQ: [TFS:1121057] We should be able to simply remove the jump node,
+                // and change gtStmtExpr to its op1.
                 cond->gtStmtExpr->SetOper(GT_NEG);
                 cond->gtStmtExpr->gtType = TYP_I_IMPL;
             }
@@ -16410,6 +16430,27 @@ void                Compiler::fgExtendEHRegionBefore(BasicBlock* block)
             HBtab->ebdHndBeg = bPrev;
             bPrev->bbFlags |=  BBF_DONT_REMOVE | BBF_HAS_LABEL;
             bPrev->bbRefs++;
+
+            // If this is a handler for a filter, the last block of the filter will end with 
+            // a BBJ_EJFILTERRET block that has a bbJumpDest that jumps to the first block of 
+            // it's handler.  So we need to update it to keep things in sync.
+            //
+            if (HBtab->HasFilter())
+            {
+                BasicBlock* bFilterLast = HBtab->BBFilterLast();
+                assert(bFilterLast != nullptr);
+                assert(bFilterLast->bbJumpKind == BBJ_EHFILTERRET);
+                assert(bFilterLast->bbJumpDest == block);
+#ifdef DEBUG
+                if (verbose)
+                {
+                    printf("EH#%u: Updating bbJumpDest for filter ret block: BB%02u => BB%02u\n",
+                           ehGetIndex(HBtab), bFilterLast->bbNum, bPrev->bbNum);
+                }
+#endif // DEBUG
+                // Change the bbJumpDest for bFilterLast from the old first 'block' to the new first 'bPrev'
+                bFilterLast->bbJumpDest = bPrev;
+            }
         }
 
         if (HBtab->HasFilter() && (HBtab->ebdFilter == block))
@@ -18018,11 +18059,12 @@ void                Compiler::fgSetTreeSeqHelper(GenTreePtr tree)
         fgSetTreeSeqHelper(tree->gtBoundsChk.gtIndex);
         break;
 
-#ifdef DEBUG
     default:
+#ifdef DEBUG
         gtDispTree(tree);
         noway_assert(!"unexpected operator");
 #endif // DEBUG
+        break;
     }
 
     fgSetTreeSeqFinish(tree);
@@ -21711,7 +21753,7 @@ JitInlineResult       Compiler::fgInvokeInlineeCompiler(GenTreeCall* call)
                          pParam->pThis->eeGetMethodFullName(pParam->fncHandle),
                          pParam->pThis->dspPtr(pParam->inlineInfo->tokenLookupContextHandle)));
 
-            unsigned   compileFlagsForInlinee = pParam->pThis->opts.eeFlags & ~CORJIT_FLG_LOST_WHEN_INLINING
+            unsigned   compileFlagsForInlinee = (pParam->pThis->opts.eeFlags & ~CORJIT_FLG_LOST_WHEN_INLINING)
                                                          | CORJIT_FLG_SKIP_VERIFICATION;
 
 #ifdef DEBUG

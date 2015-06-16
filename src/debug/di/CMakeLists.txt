@@ -1,8 +1,5 @@
-add_definitions(-DDBG_TARGET_AMD64=1 -DDBG_TARGET_WIN64=1 -DDBG_TARGET_64BIT=1)
+add_definitions(-DDBG_TARGET_AMD64=1 -DDBG_TARGET_WIN64=1 -DDBG_TARGET_64BIT=1 -D_TARGET_AMD64_=1)
 add_definitions(-DFEATURE_METADATA_CUSTOM_DATA_SOURCE -DFEATURE_METADATA_DEBUGGEE_DATA_SOURCE -DFEATURE_NO_HOST -DFEATURE_METADATA_LOAD_TRUSTED_IMAGES)
-
-if(WIN32)
-endif(WIN32)
 
 set(CORDBDI_SOURCES
   shimprocess.cpp
@@ -13,6 +10,7 @@ set(CORDBDI_SOURCES
   breakpoint.cpp
   cordb.cpp
   divalue.cpp
+  dbgtransportmanager.cpp
   hash.cpp
   module.cpp
   nativepipeline.cpp

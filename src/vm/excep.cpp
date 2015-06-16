@@ -7233,8 +7233,9 @@ EXTERN_C void JIT_WriteBarrier_Debug_End();
 EXTERN_C void FCallMemcpy_End();
 #endif
 
-static
-bool IsIPExcluded(UINT_PTR uControlPc)
+// Check if the passed in instruction pointer is in one of the
+// JIT helper functions.
+bool IsIPInMarkedJitHelper(UINT_PTR uControlPc)
 {
     LIMITED_METHOD_CONTRACT;
 
@@ -7292,7 +7293,7 @@ AdjustContextForWriteBarrier(
     CONTEXT             tempContext;
     CONTEXT*            pExceptionContext = pContext;
 
-    BOOL fExcluded = IsIPExcluded((UINT_PTR)f_IP);
+    BOOL fExcluded = IsIPInMarkedJitHelper((UINT_PTR)f_IP);
 
     if (fExcluded)
     {
@@ -7616,7 +7617,7 @@ bool ShouldHandleManagedFault(
 
 LONG WINAPI CLRVectoredExceptionHandlerPhase2(PEXCEPTION_POINTERS pExceptionInfo);
 
-typedef enum VEH_ACTION
+enum VEH_ACTION
 {
     VEH_NO_ACTION = 0,
     VEH_EXECUTE_HANDLE_MANAGED_EXCEPTION,
@@ -8009,11 +8010,6 @@ VEH_ACTION WINAPI CLRVectoredExceptionHandlerPhase3(PEXCEPTION_POINTERS pExcepti
         // prevent the GC before enabling GC, thus its okay for it to trigger.
 
     GCX_NOTRIGGER();
-
-    if (IsInstrModifyFault(pExceptionInfo))
-    {
-        return VEH_CONTINUE_EXECUTION;
-    }
 
 #ifdef USE_REDIRECT_FOR_GCSTRESS
     // NOTE: this is effectively ifdef (_TARGET_AMD64_ || _TARGET_ARM_), and does not actually trigger

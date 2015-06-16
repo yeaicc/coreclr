@@ -91,9 +91,11 @@ protected:
     LoaderAllocator *m_pLoaderAllocator;
 
 private:
+#ifndef CROSSGEN_COMPILE
     LOADERHANDLE m_hGrantedPermissionSet;   // Granted Permission
     LOADERHANDLE m_hGrantDeniedPermissionSet;// Specifically Denied Permissions
-	
+#endif // CROSSGEN_COMPILE
+
 public:
     BOOL IsFullyTrusted();
     DWORD GetSpecialFlags() const;
@@ -132,7 +134,10 @@ protected:
     //--------------------
 #ifndef DACCESS_COMPILE
     inline SecurityDescriptor(AppDomain *pAppDomain, DomainAssembly *pAssembly, PEFile* pPEFile, LoaderAllocator *pLoaderAllocator);    
-#endif // #ifndef DACCESS_COMPILE
+#ifdef FEATURE_PAL
+    SecurityDescriptor() {}
+#endif // FEATURE_PAL
+#endif // !DACCESS_COMPILE
 };
 
 template<typename IT>

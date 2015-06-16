@@ -42,8 +42,6 @@ extern Volatile<LONG> terminator;
 extern DWORD gPID;
 extern LPWSTR pAppDir;
 
-extern DWORD StartupLastError;
-
 /*++
 Function:
   PROCGetProcessIDFromHandle
@@ -153,6 +151,17 @@ Function:
 (no return value)
 --*/
 void PROCCleanupProcess(BOOL bTerminateUnconditionally);
+
+/*++
+Function:
+  InitializeFlushProcessWriteBuffers
+
+Abstract
+  This function initializes data structures needed for the FlushProcessWriteBuffers
+Return
+  TRUE if it succeeded, FALSE otherwise
+--*/
+BOOL InitializeFlushProcessWriteBuffers();
 
 #if HAVE_MACH_EXCEPTIONS
 /*++

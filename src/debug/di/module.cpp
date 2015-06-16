@@ -814,11 +814,12 @@ HRESULT CordbModule::InitPublicMetaDataFromFile()
         // Its possible that the debugger would still load the NGEN image sometime in the future and we will miss a sharing
         // opportunity. Its an acceptable loss from an imperfect heuristic.
         if (NULL == WszGetModuleHandle(szFullPathName))
+#endif            
         {
             szFullPathName = NULL;
             fDebuggerLoadingNgen = false;
         }
-#endif
+
     }
 
     // If we don't have or decided not to load the NGEN image, check to see if IL image is available
@@ -880,6 +881,11 @@ HRESULT CordbModule::InitPublicMetaDataFromFile(const WCHAR * pszFullPathName,
                                                 DWORD dwOpenFlags,
                                                 bool validateFileInfo)
 {
+#ifdef FEATURE_PAL    
+    // UNIXTODO: Some intricate details of file mapping don't work on Linux as on Windows.
+    // We have to revisit this and try to fix it for POSIX system. 
+    return E_FAIL;
+#else    
     if (validateFileInfo)
     {
         // Check that we've got the right file to target.
@@ -988,6 +994,7 @@ HRESULT CordbModule::InitPublicMetaDataFromFile(const WCHAR * pszFullPathName,
     }
 
     return hr;
+#endif // FEATURE_PAL     
 }
 
 //---------------------------------------------------------------------------------------
@@ -2195,8 +2202,17 @@ HRESULT CordbModule::ApplyChanges(ULONG  cbMetaData,
                                                     (void **)&pMDImport));
 
     // The left-side will call this same method on its copy of the metadata.
-    IfFailGo(pMDImport->ApplyEditAndContinue(pbMetaData, cbMetaData, &pMDImport2));
-    pMDImport2->AddRef(); // @todo - issue in ApplyEditAndContinue, doesn't addref the out parameter.
+    hr = pMDImport->ApplyEditAndContinue(pbMetaData, cbMetaData, &pMDImport2);
+    if (pMDImport2 != NULL) 
+    {
+        // ApplyEditAndContinue() expects IMDInternalImport**, but we give it RSExtSmartPtr<IMDInternalImport>
+        // Silent cast of RSExtSmartPtr to IMDInternalImport* leads to assignment of a raw pointer
+        // without calling AddRef(), thus we need to do it manually.
+
+        // @todo -  ApplyEditAndContinue should probably AddRef the out parameter.
+        pMDImport2->AddRef(); 
+    }
+    IfFailGo(hr);
 
    
     // We're about to get a new importer object, so release the old one.
@@ -2550,6 +2566,7 @@ HRESULT CordbModule::CreateReaderForInMemorySymbols(REFIID riid, void** ppObj)
         ReleaseHolder<ISymUnmanagedBinder> pBinder;
         if (symFormat == IDacDbiInterface::kSymbolFormatPDB)
         {
+#ifndef FEATURE_PAL
             // PDB format - use diasymreader.dll with COM activation
             InlineSString<_MAX_PATH> ssBuf;
             IfFailThrow(FakeCoCreateInstanceEx(CLSID_CorSymBinder_SxS,
@@ -2557,6 +2574,11 @@ HRESULT CordbModule::CreateReaderForInMemorySymbols(REFIID riid, void** ppObj)
                                                IID_ISymUnmanagedBinder,
                                                (void**)&pBinder,
                                                NULL));
+#else
+            IfFailThrow(FakeCoCreateInstance(CLSID_CorSymBinder_SxS,
+                                             IID_ISymUnmanagedBinder,
+                                             (void**)&pBinder));
+#endif
         }
         else if (symFormat == IDacDbiInterface::kSymbolFormatILDB)
         {
@@ -2790,10 +2812,10 @@ BOOL CordbModule::IsWinMD()
 CordbCode::CordbCode(CordbFunction * pFunction, UINT_PTR id, SIZE_T encVersion, BOOL fIsIL)
   : CordbBase(pFunction->GetProcess(), id, enumCordbCode),
     m_fIsIL(fIsIL),
-    m_pFunction(pFunction),
     m_nVersion(encVersion),
     m_rgbCode(NULL),
-    m_continueCounterLastSync(0)
+    m_continueCounterLastSync(0),
+    m_pFunction(pFunction)
 {
     _ASSERTE(pFunction != NULL);
     _ASSERTE(m_nVersion >= CorDB_DEFAULT_ENC_FUNCTION_VERSION);

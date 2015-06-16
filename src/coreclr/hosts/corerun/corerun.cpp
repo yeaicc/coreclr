@@ -462,17 +462,6 @@ bool TryRun(const int argc, const wchar_t* argv[], Logger &log, const bool verbo
         return false;
     }
 
-    log << W("Authenticating ICLRRuntimeHost2") << Logger::endl;
-
-    // Authenticate with either
-    //  CORECLR_HOST_AUTHENTICATION_KEY  or
-    //  CORECLR_HOST_AUTHENTICATION_KEY_NONGEN  
-    hr = host->Authenticate(CORECLR_HOST_AUTHENTICATION_KEY); 
-    if (FAILED(hr)) {
-        log << W("Failed authenticate. ") << hr << Logger::endl;
-        return false;
-    }
-
     log << W("Starting ICLRRuntimeHost2") << Logger::endl;
 
     hr = host->Start();
@@ -548,8 +537,9 @@ bool TryRun(const int argc, const wchar_t* argv[], Logger &log, const bool verbo
         // APPDOMAIN_IGNORE_UNHANDLED_EXCEPTION
         // - Prevents the application from being torn down if a managed exception is unhandled
         //
-        APPDOMAIN_ENABLE_PLATFORM_SPECIFIC_APPS | 
-        APPDOMAIN_ENABLE_PINVOKE_AND_CLASSIC_COMINTEROP,
+        APPDOMAIN_ENABLE_PLATFORM_SPECIFIC_APPS |
+        APPDOMAIN_ENABLE_PINVOKE_AND_CLASSIC_COMINTEROP |
+        APPDOMAIN_DISABLE_TRANSPARENCY_ENFORCEMENT,
         NULL,                // Name of the assembly that contains the AppDomainManager implementation
         NULL,                    // The AppDomainManager implementation type name
         sizeof(property_keys)/sizeof(wchar_t*),  // The number of properties

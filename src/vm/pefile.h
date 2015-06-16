@@ -108,7 +108,6 @@ class PEFile
     // ------------------------------------------------------------
     // SOS support
     // ------------------------------------------------------------
-
     VPTR_BASE_CONCRETE_VTABLE_CLASS(PEFile)
 
 public:
@@ -304,6 +303,7 @@ public:
 
     BOOL HasSecurityDirectory();
     BOOL IsIbcOptimized();
+    BOOL IsILImageReadyToRun();
     WORD GetSubsystem();
     mdToken GetEntryPointToken(
 #ifdef _DEBUG        
@@ -508,6 +508,8 @@ protected:
     virtual ~PEFile();
 
     virtual void ReleaseIL();
+#else    
+    virtual ~PEFile() {}
 #endif
 
     void OpenMDImport();

@@ -29,7 +29,9 @@ class MethodDesc;
 class MethodTable;
 #include "CompactLayoutWriter.h"
 #endif
+#ifdef MDIL
 #include "TritonStress.h"
+#endif
 
 ZapInfo::ZapInfo(ZapImage * pImage, mdMethodDef md, CORINFO_METHOD_HANDLE handle, CORINFO_MODULE_HANDLE module, unsigned methodProfilingDataFlags)
     : m_pImage(pImage),
@@ -1335,6 +1337,8 @@ COUNT_T ZapImage::MethodCodeTraits::Hash(key_t k)
             case ZapNodeType_Import_MethodHandle:
                 hash = ((hash << 5) + hash) ^ (COUNT_T)(pTarget);
                 break;
+            default:
+                break;
             }
 
             pRelocs++;
@@ -2513,6 +2517,14 @@ void * ZapInfo::getHelperFtn (CorInfoHelpFunc ftnNum, void **ppIndirection)
     case CORINFO_HELP_PROF_FCN_TAILCALL:
         *ppIndirection = m_pImage->GetInnerPtr(GetProfilingHandleImport(), kZapProfilingHandleImportValueIndexTailcallAddr * sizeof(TADDR));
         return NULL;
+#ifdef _TARGET_AMD64_
+    case CORINFO_HELP_STOP_FOR_GC:
+        // Force all calls in ngen images for this helper to use an indirect call.
+        // We cannot use a jump stub to reach this helper because 
+        // the RAX register can contain a return value.
+        dwHelper |= CORCOMPILE_HELPER_PTR;
+   break;
+#endif
     default:
         break;
     }
@@ -2632,7 +2644,8 @@ void ZapInfo::getFunctionEntryPoint(
 {
     if (IsReadyToRunCompilation())
     {
-        _ASSERTE(!"getFunctionEntryPoint");
+        // READYTORUN: FUTURE: JIT still calls this for tail. and jmp instructions
+        m_zapper->Warning(W("ReadyToRun: Method entrypoint cannot be encoded\n"));
         ThrowHR(E_NOTIMPL);
     }
 
@@ -4040,7 +4053,17 @@ CorInfoIsAccessAllowedResult ZapInfo::canAccessClass( CORINFO_RESOLVED_TOKEN * p
                                                       CORINFO_METHOD_HANDLE   callerHandle,
                                                       CORINFO_HELPER_DESC    *throwHelper)
 {
-    return m_pEEJitInfo->canAccessClass(pResolvedToken, callerHandle, throwHelper);
+    CorInfoIsAccessAllowedResult ret = m_pEEJitInfo->canAccessClass(pResolvedToken, callerHandle, throwHelper);
+
+#ifdef FEATURE_READYTORUN_COMPILER
+    if (ret != CORINFO_ACCESS_ALLOWED)
+    {
+        m_zapper->Warning(W("ReadyToRun: Runtime access checks not supported\n"));
+        ThrowHR(E_NOTIMPL);
+    }
+#endif
+
+    return ret;
 }
 
 
@@ -4696,4 +4719,35 @@ BOOL ZapInfo::CurrentMethodHasProfileData()
     ULONG size;
     ICorJitInfo::ProfileBuffer * profileBuffer;
     return SUCCEEDED(getBBProfileData(m_currentMethodHandle, &size, &profileBuffer, NULL));
+}
+
+int ZapInfo::getIntConfigValue(const wchar_t *name, int defaultValue)
+{
+    int ret;
+
+    // Translate JIT call into runtime configuration query
+    CLRConfig::ConfigDWORDInfo info{name, defaultValue, CLRConfig::REGUTIL_default};
+
+    // Perform a CLRConfig look up on behalf of the JIT.
+    ret = CLRConfig::GetConfigValue(info);
+
+    return ret;
+}
+
+wchar_t *ZapInfo::getStringConfigValue(const wchar_t *name)
+{
+    wchar_t *returnStr = nullptr;
+
+    // Translate JIT call into runtime configuration query
+    CLRConfig::ConfigStringInfo info { name, CLRConfig::REGUTIL_default };
+
+    // Perform a CLRConfig look up on behalf of the JIT.
+    returnStr = CLRConfig::GetConfigValue(info);
+
+    return returnStr;
+}
+
+void ZapInfo::freeStringConfigValue(wchar_t *value)
+{
+    CLRConfig::FreeConfigString(value);
 }

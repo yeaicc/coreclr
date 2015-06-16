@@ -36,13 +36,15 @@ Function :
 
 Parameters:
     CPalThread * pthrCurrent : reference to the current thread.
+    flags : PAL initialize flags
 
 Return value:
     TRUE  if SEH support initialization succeeded,
     FALSE otherwise
 
 --*/
-BOOL SEHInitialize(CorUnix::CPalThread *pthrCurrent);
+BOOL 
+SEHInitialize(CorUnix::CPalThread *pthrCurrent, DWORD flags);
 
 /*++
 Function :
@@ -50,9 +52,28 @@ Function :
 
     Clean up SEH-related stuff(signals, etc)
 
-    (no parameters, no return value)
+Parameters:
+    None
+
+    (no return value)
 --*/
-void SEHCleanup(void);
+VOID 
+SEHCleanup();
+
+/*++
+Function:
+    SEHProcessException
+
+    Build the PAL exception and sent it to any handler registered.
+
+Parameters:
+    None
+
+Return value:
+    Does not return
+--*/
+VOID 
+SEHProcessException(PEXCEPTION_POINTERS pointers);
 
 /*++
 Function :

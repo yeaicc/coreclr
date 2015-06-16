@@ -608,8 +608,10 @@ public:
             return gtVNPair.SetConservative(vn);
         }
     }
-
-
+    void                ClearVN()
+    {
+        gtVNPair = ValueNumPair();          // Initializes both elements to "NoVN".
+    }
 
     //---------------------------------------------------------------------
     //  The first set of flags can be used with a large set of nodes, and
@@ -1586,6 +1588,8 @@ public:
 #ifdef DEBUG
   private:
     GenTree& operator=(const GenTree& gt) {
+        _ASSERTE(!"Don't copy");
+        return *this;
     }
 #endif // DEBUG
 
@@ -1842,6 +1846,20 @@ struct GenTreeIntCon: public GenTreeIntConCommon
         {
             assert(fields != NULL);
         }
+
+#ifdef _TARGET_64BIT_
+    void TruncateOrSignExtend32()
+    {        
+        if (gtFlags & GTF_UNSIGNED)
+        {
+            gtIconVal = UINT32(gtIconVal);
+        }
+        else
+        {
+            gtIconVal = INT32(gtIconVal);
+        }
+    }
+#endif // _TARGET_64BIT_
 
 #if DEBUGGABLE_GENTREE
     GenTreeIntCon() : GenTreeIntConCommon() {}

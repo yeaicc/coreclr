@@ -56,10 +56,8 @@ EXTERN_C void FastCallFinalizeWorker(Object *obj, PCODE funcPtr);
 
 #define HAS_NDIRECT_IMPORT_PRECODE              1
 //#define HAS_REMOTING_PRECODE                  1    // TODO: Implement
-#if !defined(__APPLE__)
 #define HAS_FIXUP_PRECODE                       1
 #define HAS_FIXUP_PRECODE_CHUNKS                1
-#endif
 
 // ThisPtrRetBufPrecode one is necessary for closed delegates over static methods with return buffer
 #define HAS_THISPTR_RETBUF_PRECODE              1
@@ -175,23 +173,7 @@ typedef INT64 StackElemType;
 // This represents some of the TransitionFrame fields that are
 // stored at negative offsets.
 //--------------------------------------------------------------------
-typedef DPTR(struct CalleeSavedRegisters) PTR_CalleeSavedRegisters;
-struct CalleeSavedRegisters {
-#ifndef UNIX_AMD64_ABI
-    INT_PTR     rdi;
-    INT_PTR     rsi;
-#endif
-    INT_PTR     rbx;
-    INT_PTR     rbp;
-    INT_PTR     r12;
-    INT_PTR     r13;
-    INT_PTR     r14;
-    INT_PTR     r15;
-};
-
 struct REGDISPLAY;
-
-void UpdateRegDisplayFromCalleeSavedRegisters(REGDISPLAY * pRD, CalleeSavedRegisters * pRegs);
 
 //--------------------------------------------------------------------
 // This represents the arguments that are stored in volatile registers.
@@ -213,6 +195,18 @@ void UpdateRegDisplayFromCalleeSavedRegisters(REGDISPLAY * pRD, CalleeSavedRegis
 
 #define NUM_ARGUMENT_REGISTERS 6
 
+// The order of registers in this macro is hardcoded in assembly code
+// at number of places
+#define ENUM_CALLEE_SAVED_REGISTERS() \
+    CALLEE_SAVED_REGISTER(R12) \
+    CALLEE_SAVED_REGISTER(R13) \
+    CALLEE_SAVED_REGISTER(R14) \
+    CALLEE_SAVED_REGISTER(R15) \
+    CALLEE_SAVED_REGISTER(Rbx) \
+    CALLEE_SAVED_REGISTER(Rbp)
+
+#define NUM_CALLEE_SAVED_REGISTERS 6
+
 #else // UNIX_AMD64_ABI
 
 #define ENUM_ARGUMENT_REGISTERS() \
@@ -223,6 +217,20 @@ void UpdateRegDisplayFromCalleeSavedRegisters(REGDISPLAY * pRD, CalleeSavedRegis
 
 #define NUM_ARGUMENT_REGISTERS 4
 
+// The order of registers in this macro is hardcoded in assembly code
+// at number of places
+#define ENUM_CALLEE_SAVED_REGISTERS() \
+    CALLEE_SAVED_REGISTER(Rdi) \
+    CALLEE_SAVED_REGISTER(Rsi) \
+    CALLEE_SAVED_REGISTER(Rbx) \
+    CALLEE_SAVED_REGISTER(Rbp) \
+    CALLEE_SAVED_REGISTER(R12) \
+    CALLEE_SAVED_REGISTER(R13) \
+    CALLEE_SAVED_REGISTER(R14) \
+    CALLEE_SAVED_REGISTER(R15)
+
+#define NUM_CALLEE_SAVED_REGISTERS 8
+
 #endif // UNIX_AMD64_ABI
 
 typedef DPTR(struct ArgumentRegisters) PTR_ArgumentRegisters;
@@ -230,6 +238,19 @@ struct ArgumentRegisters {
     #define ARGUMENT_REGISTER(regname) INT_PTR regname;
     ENUM_ARGUMENT_REGISTERS();
     #undef ARGUMENT_REGISTER
+};
+
+typedef DPTR(struct CalleeSavedRegisters) PTR_CalleeSavedRegisters;
+struct CalleeSavedRegisters {
+    #define CALLEE_SAVED_REGISTER(regname) INT_PTR regname;
+    ENUM_CALLEE_SAVED_REGISTERS();
+    #undef CALLEE_SAVED_REGISTER
+};
+
+struct CalleeSavedRegistersPointers {
+    #define CALLEE_SAVED_REGISTER(regname) PTR_TADDR p##regname;
+    ENUM_CALLEE_SAVED_REGISTERS();
+    #undef CALLEE_SAVED_REGISTER
 };
 
 #define SCRATCH_REGISTER_X86REG kRAX
@@ -250,6 +271,9 @@ struct FloatArgumentRegisters {
 };
 
 #endif
+
+
+void UpdateRegDisplayFromCalleeSavedRegisters(REGDISPLAY * pRD, CalleeSavedRegisters * pRegs);
 
 
 // Sufficient context for Try/Catch restoration.
@@ -415,7 +439,7 @@ inline BOOL IsUnmanagedValueTypeReturnedByRef(UINT sizeofvaluetype)
 }
 
 #include <pshpack1.h>
-DECLSPEC_ALIGN(8) struct UMEntryThunkCode
+struct DECLSPEC_ALIGN(8) UMEntryThunkCode
 {
     // padding                  // CC CC CC CC
     // mov r10, pUMEntryThunk   // 49 ba xx xx xx xx xx xx xx xx    // METHODDESC_REGISTER

@@ -35,8 +35,6 @@ Revision History:
 #if HAVE_PTHREAD_NP_H
 #include <pthread_np.h>
 #endif
-#elif HAVE_SOLARIS_THREADS
-#include <thread.h>
 #elif HAVE_MACH_THREADS
 #include <mach/thread_act.h>
 #include "sys/types.h"
@@ -66,7 +64,8 @@ using namespace CorUnix;
 /* ------------------- Definitions ------------------------------*/
 SET_DEFAULT_DEBUG_CHANNEL(THREAD);
 
-/* code used by ResumeThread to wake up a thread using its blocking pipe. */
+/* This code is written to the blocking pipe of a thread that was created
+   in suspended state in order to resume it. */
 CONST BYTE WAKEUPCODE=0x2A;
 
 // #define USE_GLOBAL_LOCK_FOR_SUSPENSION // Uncomment this define to use the global suspension lock. 
@@ -167,6 +166,68 @@ CorUnix::InternalSuspendThread(
     {
         pobjThread->ReleaseReference(pthrSuspender);
     }
+
+    return palError;
+}
+
+/*++
+Function:
+  InternalSuspendNewThreadFromData
+
+  On platforms where we use pipes for starting threads suspended, this
+  function sets the blocking pipe for the thread and blocks until the
+  wakeup code is written to the pipe by ResumeThread.
+
+  On platforms where we don't use pipes for starting threads suspended,
+  this function falls back on InternalSuspendThreadFromData to perform
+  the suspension.
+--*/
+PAL_ERROR
+CThreadSuspensionInfo::InternalSuspendNewThreadFromData(
+    CPalThread *pThread
+    )
+{
+    PAL_ERROR palError = NO_ERROR;
+
+    AcquireSuspensionLock(pThread);
+    pThread->suspensionInfo.SetSelfSusp(TRUE);
+    pThread->suspensionInfo.IncrSuspCount();
+    ReleaseSuspensionLock(pThread);
+
+    int pipe_descs[2];
+    if (pipe(pipe_descs) == -1)
+    {
+        ERROR("pipe() failed! error is %d (%s)\n", errno, strerror(errno));
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    // [0] is the read end of the pipe, and [1] is the write end.
+    pThread->suspensionInfo.SetBlockingPipe(pipe_descs[1]);
+    pThread->SetStartStatus(TRUE);
+
+    BYTE resume_code = 0;
+    ssize_t read_ret;
+    
+    // Block until ResumeThread writes something to the pipe
+    while ((read_ret = read(pipe_descs[0], &resume_code, sizeof(resume_code))) != sizeof(resume_code))
+    {
+        if (read_ret != -1 || EINTR != errno)
+        {
+            // read might return 0 (with EAGAIN) if the other end of the pipe gets closed
+            palError = ERROR_INTERNAL_ERROR;
+            break;
+        }
+    }
+
+    if (palError == NO_ERROR && resume_code != WAKEUPCODE)
+    {
+        // If we did read successfully but the byte didn't match WAKEUPCODE, we treat it as a failure.
+        palError = ERROR_INTERNAL_ERROR;
+    }
+
+    // Close the pipes regardless of whether we were successful.
+    close(pipe_descs[0]);
+    close(pipe_descs[1]);
 
     return palError;
 }
@@ -284,7 +345,7 @@ CThreadSuspensionInfo::InternalSuspendThreadFromData(
 #if USE_SIGNALS_FOR_THREAD_SUSPENSION
                 pthrTarget->suspensionInfo.SetSuspendSignalSent(TRUE);
                 // Send the SIGUSR1 to the target thread and wait for it to post, immediately prior to suspension.
-                nPthreadRet = pthread_kill((pthread_t)pthrTarget->GetThreadId(), SIGUSR1);
+                nPthreadRet = pthread_kill(pthrTarget->GetPThreadSelf(), SIGUSR1);
                 if (nPthreadRet == 0)
                 {
                     if (!fSelfSuspend)
@@ -565,55 +626,57 @@ CThreadSuspensionInfo::InternalResumeThreadFromData(
         goto InternalResumeThreadFromDataExit;
     }
 
-    // If this is a dummy thread, then it represents a process that was created with CREATE_SUSPENDED.
-    if (pthrTarget->IsDummy())
+    // If this is a dummy thread, then it represents a process that was created with CREATE_SUSPENDED
+    // and it should have a blocking pipe set. If GetBlockingPipe returns -1 for a dummy thread, then
+    // something is wrong - either CREATE_SUSPENDED wasn't used or the process was already resumed.
+    if (pthrTarget->IsDummy() && -1 == pthrTarget->suspensionInfo.GetBlockingPipe())
     {
-        // GetBlockingPipe may return -1 due to an application error; either CREATE_SUSPENDED wasn't used or the 
-        // process was already resumed.
-        if (-1 == pthrTarget->suspensionInfo.GetBlockingPipe())
-        {
-            palError = ERROR_INVALID_HANDLE;
-            ERROR("Tried to wake up dummy thread without a blocking pipe.\n");
-            ReleaseSuspensionLocks(pthrResumer, pthrTarget);
-            goto InternalResumeThreadFromDataExit;            
-        }
-        else
-        {
-            // If write() is interrupted by a signal before writing data, 
-            // it returns -1 and sets errno to EINTR. In this case, we
-            // attempt the write() again.
-            writeAgain:
-            nWrittenBytes = write(pthrTarget->suspensionInfo.GetBlockingPipe(), &WAKEUPCODE, sizeof(WAKEUPCODE));
+        palError = ERROR_INVALID_HANDLE;
+        ERROR("Tried to wake up dummy thread without a blocking pipe.\n");
+        ReleaseSuspensionLocks(pthrResumer, pthrTarget);
+        goto InternalResumeThreadFromDataExit;            
+    }
 
-            // The size of WAKEUPCODE is 1 byte. If write returns 0, we'll treat it as an error.
-            if (sizeof(WAKEUPCODE) != nWrittenBytes)
+    dwPrevSuspendCount = pthrTarget->suspensionInfo.GetSuspCount();
+
+    // If there is a blocking pipe on this thread, resume it by writing the wake up code to that pipe.
+    if (-1 != pthrTarget->suspensionInfo.GetBlockingPipe())
+    {
+        // If write() is interrupted by a signal before writing data, 
+        // it returns -1 and sets errno to EINTR. In this case, we
+        // attempt the write() again.
+        writeAgain:
+        nWrittenBytes = write(pthrTarget->suspensionInfo.GetBlockingPipe(), &WAKEUPCODE, sizeof(WAKEUPCODE));
+
+        // The size of WAKEUPCODE is 1 byte. If write returns 0, we'll treat it as an error.
+        if (sizeof(WAKEUPCODE) != nWrittenBytes)
+        {
+            // If we are here during process creation, this is most likely caused by the target 
+            // process dying before reaching this point and thus breaking the pipe.
+            if (nWrittenBytes == -1 && EPIPE == errno)
             {
-                // Most likely caused by the target process dying before reaching this point, thus breaking the pipe.
-                if (nWrittenBytes == -1 && EPIPE == errno)
-                {
-                    palError = ERROR_INVALID_HANDLE;
-                    ReleaseSuspensionLocks(pthrResumer, pthrTarget);
-                    ERROR("Write failed with EPIPE\n");                    
-                    goto InternalResumeThreadFromDataExit;                        
-                }
-                else if (nWrittenBytes == 0 || (nWrittenBytes == -1 && EINTR == errno))
-                {
-                    TRACE("write() failed with EINTR; re-attempting write\n");
-                    goto writeAgain;
-                }
-                else
-                {
-                    // Some other error occurred; need to release suspension mutexes before leaving ResumeThread.
-                    palError = ERROR_INTERNAL_ERROR;
-                    ReleaseSuspensionLocks(pthrResumer, pthrTarget);
-                    ASSERT("Write() failed; error is %d (%s)\n", errno, strerror(errno));
-                    goto InternalResumeThreadFromDataExit;
-                }
+                palError = ERROR_INVALID_HANDLE;
+                ReleaseSuspensionLocks(pthrResumer, pthrTarget);
+                ERROR("Write failed with EPIPE\n");
+                goto InternalResumeThreadFromDataExit;
             }
-            // Finished using pipe so close it.
-            close(pthrTarget->suspensionInfo.GetBlockingPipe());
-            pthrTarget->suspensionInfo.SetBlockingPipe(-1);
+            else if (nWrittenBytes == 0 || (nWrittenBytes == -1 && EINTR == errno))
+            {
+                TRACE("write() failed with EINTR; re-attempting write\n");
+                goto writeAgain;
+            }
+            else
+            {
+                // Some other error occurred; need to release suspension mutexes before leaving ResumeThread.
+                palError = ERROR_INTERNAL_ERROR;
+                ReleaseSuspensionLocks(pthrResumer, pthrTarget);
+                ASSERT("Write() failed; error is %d (%s)\n", errno, strerror(errno));
+                goto InternalResumeThreadFromDataExit;
+            }
         }
+
+        // Reset blocking pipe to -1 since we're done using it.
+        pthrTarget->suspensionInfo.SetBlockingPipe(-1);
         
         ReleaseSuspensionLocks(pthrResumer, pthrTarget);
         goto InternalResumeThreadFromDataExit;
@@ -629,8 +692,7 @@ CThreadSuspensionInfo::InternalResumeThreadFromData(
         goto InternalResumeThreadFromDataExit;
     }
 
-    // Notice that the suspension count is decremented after assigning it to dwSuspendCount.
-    dwPrevSuspendCount = pthrTarget->suspensionInfo.GetSuspCount();
+    // Notice that the suspension count is decremented after setting dwPrevSuspendCount above.
     pthrTarget->suspensionInfo.DecrSuspCount();
 
 #ifdef _DEBUG
@@ -670,7 +732,7 @@ CThreadSuspensionInfo::InternalResumeThreadFromData(
 
 #if USE_SIGNALS_FOR_THREAD_SUSPENSION
         pthrTarget->suspensionInfo.SetResumeSignalSent(TRUE);
-        dwPthreadRet = pthread_kill((pthread_t)pthrTarget->GetThreadId(), SIGUSR2);
+        dwPthreadRet = pthread_kill(pthrTarget->GetPThreadSelf(), SIGUSR2);
         if (dwPthreadRet == 0)
         {
             pthrTarget->suspensionInfo.WaitOnResumeSemaphore();
@@ -1237,8 +1299,6 @@ CThreadSuspensionInfo::InitializeSignalSets()
     // Note that SIGPROF is used by the BSD thread scheduler and masking it caused a 
     // significant reduction in performance.
     sigaddset(&smDefaultmask, SIGHUP);  
-    sigaddset(&smDefaultmask, SIGINT);
-    sigaddset(&smDefaultmask, SIGQUIT); 
     sigaddset(&smDefaultmask, SIGABRT); 
 #ifdef SIGEMT
     sigaddset(&smDefaultmask, SIGEMT); 
@@ -1665,24 +1725,28 @@ PALCIsSuspensionStateSafe(void)
 /*++
 Function:
   HandleSuspendSignal
+
+Returns:
+    true if the signal is expected by this PAL instance; false should 
+    be chained to the next signal handler.
   
 HandleSuspendSignal is called from within the SIGUSR1 handler. The thread
 that invokes this function will suspend itself if it's suspension safe
 or set its pending flag to TRUE and continue executing until it becomes
 suspension safe.
 --*/
-void 
+bool
 CThreadSuspensionInfo::HandleSuspendSignal(
     CPalThread *pthrTarget
     )
 {
     if (!GetSuspendSignalSent())
     {
-        ASSERT("Entered suspend handler (by receiving SIGUSR1) but not due to SuspendThread.\n");
-        return;
+        return false;
     }
+
     SetSuspendSignalSent(FALSE);
-    
+
     if (IsSuspensionStateSafe())
     {
         SetSuspPending(FALSE);
@@ -1697,7 +1761,7 @@ CThreadSuspensionInfo::HandleSuspendSignal(
         }
         else 
         {
-        	pthrTarget->SetStartStatus(TRUE);
+            pthrTarget->SetStartStatus(TRUE);
         }
         sigsuspend(&smSuspmask);
     }
@@ -1705,11 +1769,17 @@ CThreadSuspensionInfo::HandleSuspendSignal(
     {
         SetSuspPending(TRUE);
     }	
+
+    return true;
 }
 
 /*++
 Function:
   HandleResumeSignal
+
+Returns:
+    true if the signal is expected by this PAL instance; false should 
+    be chained to the next signal handler.
   
 HandleResumeSignal is called from within the SIGUSR2 handler. 
 A thread suspended by sigsuspend will enter the SUGUSR2 handler
@@ -1719,30 +1789,32 @@ still has a positive suspend count. After these checks, the resumed
 thread posts on its resume semaphore so the resuming thread can
 continue execution.
 --*/
-void 
+bool
 CThreadSuspensionInfo::HandleResumeSignal()
 {
     if (!GetResumeSignalSent())
     {
-        ASSERT("Entered resume handler (by receiving SIGUSR2) but not due to ResumeThread.\n");
-        return;
+        return false;
     }
+
     SetResumeSignalSent(FALSE);
-    
+
     if (GetSuspCount() != 0)
     {
         ASSERT("Should not be resuming a thread whose suspension count is %d.\n", GetSuspCount());
-        return;
+        return true;
     }
-    
+
     // This thread is no longer suspended - if it self suspended, 
     // then its self suspension field should now be set to FALSE.
     if (GetSelfSusp())
     {
         SetSelfSusp(FALSE);
     }
-    
+
     PostOnResumeSemaphore();
+
+    return true;
 }
 #else // USE_SIGNALS_FOR_THREAD_SUSPENSION
 
@@ -1765,11 +1837,9 @@ CThreadSuspensionInfo::THREADHandleSuspendNative(CPalThread *pthrTarget)
     }
     
 #if HAVE_PTHREAD_SUSPEND
-    dwPthreadRet = pthread_suspend((pthread_t)pthrTarget->GetThreadId());
-#elif HAVE_SOLARIS_THREADS
-    dwPthreadRet = thr_suspend((thread_t)pthrTarget->GetThreadId());
+    dwPthreadRet = pthread_suspend(pthrTarget->GetPThreadSelf());
 #elif HAVE_MACH_THREADS
-    dwPthreadRet = thread_suspend(pthread_mach_thread_np((pthread_t)pthrTarget->GetThreadId()));
+    dwPthreadRet = thread_suspend(pthread_mach_thread_np(pthrTarget->GetPThreadSelf()));
 #elif HAVE_PTHREAD_SUSPEND_NP
 #if SELF_SUSPEND_FAILS_WITH_NATIVE_SUSPENSION
     if (pthrTarget->suspensionInfo.GetSelfSusp())
@@ -1779,7 +1849,7 @@ CThreadSuspensionInfo::THREADHandleSuspendNative(CPalThread *pthrTarget)
     else
 #endif // SELF_SUSPEND_FAILS_WITH_NATIVE_SUSPENSION
     {
-        dwPthreadRet = pthread_suspend_np((pthread_t)pthrTarget->GetThreadId());
+        dwPthreadRet = pthread_suspend_np(pthrTarget->GetPThreadSelf());
     }
 #else
     #error "Don't know how to suspend threads on this platform!"
@@ -1843,13 +1913,11 @@ CThreadSuspensionInfo::THREADHandleResumeNative(CPalThread *pthrTarget)
     do
     {
 #if HAVE_PTHREAD_CONTINUE
-        dwPthreadRet = pthread_continue((pthread_t)pthrTarget->GetThreadId());
-#elif HAVE_SOLARIS_THREADS
-        dwPthreadRet = thr_continue((thread_t)pthrTarget->GetThreadId());
+        dwPthreadRet = pthread_continue(pthrTarget->GetPThreadSelf());
 #elif HAVE_MACH_THREADS
-        dwPthreadRet = thread_resume(pthread_mach_thread_np((pthread_t)pthrTarget->GetThreadId()));
+        dwPthreadRet = thread_resume(pthread_mach_thread_np(pthrTarget->GetPThreadSelf()));
 #elif HAVE_PTHREAD_CONTINUE_NP
-        dwPthreadRet = pthread_continue_np((pthread_t)pthrTarget->GetThreadId());
+        dwPthreadRet = pthread_continue_np((pthrTarget->GetPThreadSelf());
 #elif HAVE_PTHREAD_RESUME_NP
 #if SELF_SUSPEND_FAILS_WITH_NATIVE_SUSPENSION  
         if (pthrTarget->suspensionInfo.GetSelfSusp())
@@ -1872,7 +1940,7 @@ CThreadSuspensionInfo::THREADHandleResumeNative(CPalThread *pthrTarget)
         else
 #endif // SELF_SUSPEND_FAILS_WITH_NATIVE_SUSPENSION  
         {
-            dwPthreadRet = pthread_resume_np((pthread_t)pthrTarget->GetThreadId());
+            dwPthreadRet = pthread_resume_np(pthrTarget->GetPThreadSelf());
         }
 #else
         #error "Don't know how to resume threads on this platform!"

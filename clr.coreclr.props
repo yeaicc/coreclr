@@ -60,6 +60,7 @@
     <FeatureClassicCominterop>true</FeatureClassicCominterop>
     <FeatureLegacySurface>true</FeatureLegacySurface>
     <FeatureCominterop>true</FeatureCominterop>
+    <FeatureICastable>true</FeatureICastable>
     <FeatureCominteropUnmanagedActivation>true</FeatureCominteropUnmanagedActivation>
     <FeatureCominteropWinRTManagedActivation>true</FeatureCominteropWinRTManagedActivation>
     <FeatureCrypto>true</FeatureCrypto>
@@ -78,7 +79,7 @@
     <!-- The rejit feature is available only on supported architectures (x86 & x64) -->
     <FeatureReJIT Condition="('$(TargetArch)' == 'i386') or ('$(TargetArch)' == 'amd64')">true</FeatureReJIT>
     <FeatureWindowsPhone>true</FeatureWindowsPhone>
-    <FeatureManagedEtw>true</FeatureManagedEtw>
+    <FeatureManagedEtw Condition="'$(OS)' == 'Windows_NT'">true</FeatureManagedEtw>
     <FeatureManagedEtwChannels>true</FeatureManagedEtwChannels>
     <FeatureHostedBinder>true</FeatureHostedBinder>
     <BinderDebugLog Condition="'$(_BuildType)'=='dbg'">true</BinderDebugLog>
@@ -93,10 +94,12 @@
     <FeatureSvrGc Condition="'$(TargetArch)' != 'arm'">true</FeatureSvrGc>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(OS)' == 'Unix'">
+  <PropertyGroup Condition="'$(TargetsUnix)' == 'true'">
     <FeaturePal>true</FeaturePal>
 
     <FeatureStubsAsIL>true</FeatureStubsAsIL>
+
+    <ProfilingSupportedBuild>false</ProfilingSupportedBuild>
 
     <!-- UNIXTODO Enable randomized string hashing -->
     <FeatureRandomizedStringHashing>false</FeatureRandomizedStringHashing>

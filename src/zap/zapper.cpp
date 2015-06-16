@@ -24,7 +24,9 @@
 #endif
 
 #include "clr/fs/dir.h"
+#ifdef FEATURE_FUSION
 #include "ngenparser.inl"
+#endif
 
 /* --------------------------------------------------------------------------- *
  * Error Macros
@@ -437,10 +439,11 @@ ZapperOptions::ZapperOptions() :
   m_fPartialNGen(false),
   m_fPartialNGenSet(false),
   m_fNGenLastRetry(false),
+  m_compilerFlags(CORJIT_FLG_RELOC | CORJIT_FLG_PREJIT),
+  m_legacyMode(false)
 #ifdef FEATURE_CORECLR
-  m_fNoMetaData(s_fNGenNoMetaData),
+  ,m_fNoMetaData(s_fNGenNoMetaData)
 #endif
-  m_compilerFlags(CORJIT_FLG_RELOC | CORJIT_FLG_PREJIT)
 {
     m_zapSet = CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_ZapSet);
     if (m_zapSet != NULL && wcslen(m_zapSet) > 3)
@@ -754,11 +757,11 @@ void Zapper::LoadAndInitializeJITForNgen(LPCWSTR pwzJitName, OUT HINSTANCE* phJi
 
     if (FAILED(hr))
     {
-        Error(W("Unable to load Jit Compiler: %s\r\n"), pwzJitName);
+        Error(W("Unable to load Jit Compiler: %s, hr=0x%08x\r\n"), pwzJitName, hr);
         ThrowLastError();
     }
 
-#if defined(FEATURE_CORECLR) || !defined(SELF_NO_HOST) || defined(DACCESS_COMPILE)
+#if (defined(FEATURE_CORECLR) || !defined(SELF_NO_HOST)) && !defined(CROSSGEN_COMPILE)
     typedef void (__stdcall* pSxsJitStartup) (CoreClrCallbacks const & cccallbacks);
     pSxsJitStartup sxsJitStartupFn = (pSxsJitStartup) GetProcAddress(*phJit, "sxsJitStartup");
     if (sxsJitStartupFn == NULL)
@@ -901,14 +904,7 @@ void Zapper::InitEE(BOOL fForceDebug, BOOL fForceProfile, BOOL fForceInstrument)
     //
     // Also see the code and comments in EEJitManager::LoadJIT().
 
-    static ConfigDWORD useRyuJitValue;
-    bool fUseRyuJit = (useRyuJitValue.val(CLRConfig::INTERNAL_UseRyuJit) == 1);
-
-    // ****** TODO: Until the registry value is set by the .NET 4.6 installer, we pretend .NET 4.6 has been installed, which causes
-    // ******       RyuJit to be used by default.
-    fUseRyuJit = true;
-
-    if (!fUseRyuJit)        // Do we need to fall back to JIT64 for NGEN?
+    if (!UseRyuJit())        // Do we need to fall back to JIT64 for NGEN?
     {
         LPCWSTR pwzJitName = MAKEDLLNAME_W(L"compatjit");
 
@@ -943,8 +939,8 @@ void Zapper::InitEE(BOOL fForceDebug, BOOL fForceProfile, BOOL fForceInstrument)
     {
         // Allow a second jit to be loaded into the system.
         // 
-        LPWSTR altName;
-        hr = CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_AltJitName, &altName);
+        LPCWSTR altName;
+        hr = CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_AltJitName, (LPWSTR*)&altName);
         if (FAILED(hr))
         {
             Error(W("Unable to load alternative Jit Compiler\r\n"));
@@ -2640,7 +2636,7 @@ HRESULT Zapper::Compile(LPCWSTR string, CORCOMPILE_NGEN_SIGNATURE * pNativeImage
 #endif
 
 #if defined(CROSSGEN_COMPILE) || defined(FEATURE_CORECLR)
-    if (fMscorlib)
+    if (fMscorlib || IsReadyToRunCompilation())
     {
         //
         // Disallow use of native image to force a new native image generation for mscorlib
@@ -3507,6 +3503,7 @@ void Zapper::DefineOutputAssembly(SString& strAssemblyName, ULONG * pHashAlgId)
         ThrowHR(HRESULT_FROM_WIN32(ERROR_INVALID_NAME));
     }
 
+#ifndef PLATFORM_UNIX
     //
     // We always need a hash since our assembly module is separate from the manifest.
     // Use MD5 by default.
@@ -3514,6 +3511,7 @@ void Zapper::DefineOutputAssembly(SString& strAssemblyName, ULONG * pHashAlgId)
 
     if (hashAlgId == 0)
         hashAlgId = CALG_MD5;
+#endif
 
     mdAssembly tkEmitAssembly;
     IfFailThrow(m_pAssemblyEmit->DefineAssembly(pbPublicKey, cbPublicKey, hashAlgId,

@@ -31,6 +31,7 @@ Abstract:
 #include "pal/dbgmsg.h"
 #include "pal/utils.h"
 #include "pal/misc.h"
+#include "pal/virtual.h"
 
 #include <errno.h>
 #if HAVE_POLL
@@ -39,6 +40,7 @@ Abstract:
 #include "pal/fakepoll.h"
 #endif  // HAVE_POLL
 
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -85,6 +87,16 @@ CObjectType CorUnix::otProcess(
                 CObjectType::NoOwner
                 );
 
+//
+// Helper memory page used by the FlushProcessWriteBuffers
+//
+static int s_helperPage[VIRTUAL_PAGE_SIZE / sizeof(int)] __attribute__((aligned(VIRTUAL_PAGE_SIZE)));
+
+//
+// Mutex to make the FlushProcessWriteBuffersMutex thread safe
+// 
+pthread_mutex_t flushProcessWriteBuffersMutex;
+
 CAllowedObjectTypes aotProcess(otiProcess);
 
 //
@@ -120,7 +132,7 @@ Volatile<LONG> terminator = 0;
 // Process ID of this process.
 DWORD gPID = (DWORD) -1;
 
-LPWSTR pAppDir;
+LPWSTR pAppDir = NULL;
 
 //
 // Key used for associating CPalThread's with the underlying pthread
@@ -808,11 +820,11 @@ CorUnix::InternalCreateProcess(
         &hDummyThread
         );
     
-    if(dwCreationFlags & CREATE_SUSPENDED)
+    if (dwCreationFlags & CREATE_SUSPENDED)
     {
         int pipe_descs[2];
 
-        if(-1 == pipe(pipe_descs))
+        if (-1 == pipe(pipe_descs))
         {
             ERROR("pipe() failed! error is %d (%s)\n", errno, strerror(errno));
             palError = ERROR_NOT_ENOUGH_MEMORY;
@@ -857,20 +869,17 @@ CorUnix::InternalCreateProcess(
         
 
     /* fork the new process */
-#if HAVE_SOLARIS_THREADS
-    /* On Solaris, we use fork1 so that only the calling thread (LWP) is duplicated */
-    processId = fork1();
-#else
     processId = fork();
-#endif
 
     if (processId == -1)
     {
-        ASSERT("unable to create a new process with fork()\n");
-        if(-1 != child_blocking_pipe)
+        ASSERT("Unable to create a new process with fork()\n");
+        if (-1 != child_blocking_pipe)
         {
             close(child_blocking_pipe);
+            close(parent_blocking_pipe);
         }
+
         palError = ERROR_INTERNAL_ERROR;
         goto InternalCreateProcessExit;
     }
@@ -907,7 +916,7 @@ CorUnix::InternalCreateProcess(
             _exit(EXIT_FAILURE);
         }
         
-        if(dwCreationFlags & CREATE_SUSPENDED)
+        if (dwCreationFlags & CREATE_SUSPENDED)
         {
             BYTE resume_code = 0;
             ssize_t read_ret;
@@ -918,7 +927,7 @@ CorUnix::InternalCreateProcess(
             read_again:
             /* block until ResumeThread writes something to the pipe */
             read_ret = read(child_blocking_pipe, &resume_code, sizeof(resume_code));
-            if(sizeof(resume_code) != read_ret)
+            if (sizeof(resume_code) != read_ret)
             {
                 if (read_ret == -1 && EINTR == errno)
                 {
@@ -937,6 +946,7 @@ CorUnix::InternalCreateProcess(
                 // resume_code should always equal WAKEUPCODE.
                 _exit(EXIT_FAILURE);
             }
+
             close(child_blocking_pipe);
         }
 
@@ -1558,14 +1568,14 @@ PAL_GetCPUBusyTime(
     if (nCurrentTime > nLastRecordedCurrentTime)
     {
         nCpuTotalTime = (nCurrentTime - nLastRecordedCurrentTime);
-#if HAVE_SOLARIS_THREADS || HAVE_THREAD_SELF || HAVE__LWP_SELF || HAVE_VM_READ
+#if HAVE_THREAD_SELF || HAVE__LWP_SELF || HAVE_VM_READ
         // For systems that run multiple threads of a process on multiple processors,
         // the accumulated userTime and kernelTime of this process may exceed
         // the elapsed time. In this case, the cpuTotalTime needs to be adjusted
         // according to number of processors so that the cpu utilization
         // will not be greater than 100.
         nCpuTotalTime *= dwNumberOfProcessors;
-#endif // HAVE_SOLARIS_THREADS || HAVE_THREAD_SELF || HAVE__LWP_SELF || HAVE_VM_READ
+#endif // HAVE_THREAD_SELF || HAVE__LWP_SELF || HAVE_VM_READ
     }
 
     if (nUserTime >= nLastRecordedUserTime &&
@@ -1748,6 +1758,50 @@ OpenProcessExit:
 
 /*++
 Function:
+  InitializeFlushProcessWriteBuffers
+
+Abstract
+  This function initializes data structures needed for the FlushProcessWriteBuffers
+Return
+  TRUE if it succeeded, FALSE otherwise
+--*/
+BOOL InitializeFlushProcessWriteBuffers()
+{
+    // Verify that the s_helperPage is really aligned to the VIRTUAL_PAGE_SIZE
+    _ASSERTE((((SIZE_T)s_helperPage) & (VIRTUAL_PAGE_SIZE - 1)) == 0);
+
+    // Locking the page ensures that it stays in memory during the two mprotect
+    // calls in the FlushProcessWriteBuffers below. If the page was unmapped between
+    // those calls, they would not have the expected effect of generating IPI.
+    int status = mlock(s_helperPage, VIRTUAL_PAGE_SIZE);
+
+    if (status != 0)
+    {
+        return FALSE;
+    }
+
+    status = pthread_mutex_init(&flushProcessWriteBuffersMutex, NULL);
+    if (status != 0)
+    {
+        munlock(s_helperPage, VIRTUAL_PAGE_SIZE);
+    }
+
+    return status == 0;
+}
+
+#define FATAL_ASSERT(e, msg) \
+    do \
+    { \
+        if (!(e)) \
+        { \
+            fprintf(stderr, "FATAL ERROR: " msg); \
+            abort(); \
+        } \
+    } \
+    while(0)
+
+/*++
+Function:
   FlushProcessWriteBuffers
 
 See MSDN doc.
@@ -1755,9 +1809,25 @@ See MSDN doc.
 VOID 
 PALAPI 
 FlushProcessWriteBuffers()
-{
-    // UNIXTODO: Implement this. There seems to be no equivalent on Linux
-    // that could be used in user mode code.   
+{   
+    int status = pthread_mutex_lock(&flushProcessWriteBuffersMutex);
+    FATAL_ASSERT(status == 0, "Failed to lock the flushProcessWriteBuffersMutex lock");
+
+    // Changing a helper memory page protection from read / write to no access 
+    // causes the OS to issue IPI to flush TLBs on all processors. This also
+    // results in flushing the processor buffers.
+    status = mprotect(s_helperPage, VIRTUAL_PAGE_SIZE, PROT_READ | PROT_WRITE);
+    FATAL_ASSERT(status == 0, "Failed to change helper page protection to read / write");
+
+    // Ensure that the page is dirty before we change the protection so that
+    // we prevent the OS from skipping the global TLB flush.
+    InterlockedIncrement(s_helperPage);
+
+    status = mprotect(s_helperPage, VIRTUAL_PAGE_SIZE, PROT_NONE);
+    FATAL_ASSERT(status == 0, "Failed to change helper page protection to no access");
+
+    status = pthread_mutex_unlock(&flushProcessWriteBuffersMutex);
+    FATAL_ASSERT(status == 0, "Failed to unlock the flushProcessWriteBuffersMutex lock");
 }
 
 /*++
@@ -1884,40 +1954,40 @@ CorUnix::CreateInitialProcessAndThreadObjects(
     CProcSharedData *pSharedData;
     CObjectAttributes oa;
     HANDLE hProcess;
-    
-    INT n;
-    LPWSTR lpwstr = NULL;
     LPWSTR initial_dir = NULL;
 
     //
     // Save the command line and initial directory
     //
 
-    g_lpwstrCmdLine = lpwstrCmdLine;
+    g_lpwstrCmdLine = lpwstrCmdLine ? lpwstrCmdLine : (LPWSTR)W("");
     
-    lpwstr=PAL_wcsrchr(lpwstrFullPath,'/');
-    lpwstr[0]='\0';
-    n=lstrlenW(lpwstrFullPath)+1;
-
-    int iLen = n;
-    initial_dir = reinterpret_cast<LPWSTR>(InternalMalloc(pThread, iLen*sizeof(WCHAR)));
-    if (NULL == initial_dir)
+    if (lpwstrCmdLine)
     {
-        ERROR("malloc() failed! (initial_dir) \n");
-        goto CreateInitialProcessAndThreadObjectsExit;
+        LPWSTR lpwstr = PAL_wcsrchr(lpwstrFullPath, '/');
+        lpwstr[0] = '\0';
+        INT n = lstrlenW(lpwstrFullPath) + 1;
+
+        int iLen = n;
+        initial_dir = reinterpret_cast<LPWSTR>(InternalMalloc(pThread, iLen*sizeof(WCHAR)));
+        if (NULL == initial_dir)
+        {
+            ERROR("malloc() failed! (initial_dir) \n");
+            goto CreateInitialProcessAndThreadObjectsExit;
+        }
+
+        if (wcscpy_s(initial_dir, iLen, lpwstrFullPath) != SAFECRT_SUCCESS)
+        {
+            ERROR("wcscpy_s failed!\n");
+            palError = ERROR_INTERNAL_ERROR;
+            goto CreateInitialProcessAndThreadObjectsExit;
+        }
+
+        lpwstr[0] = '/';
     }
-
-    if (wcscpy_s(initial_dir, iLen, lpwstrFullPath) != SAFECRT_SUCCESS)
-    {
-        ERROR("wcscpy_s failed!\n");
-        palError = ERROR_INTERNAL_ERROR;
-        goto CreateInitialProcessAndThreadObjectsExit;
-    }
-
-    lpwstr[0]='/';
-
+    
     pAppDir = initial_dir;
-    
+
     //
     // Create initial thread object
     //
@@ -3439,33 +3509,36 @@ getPath(
     /* first look in directory from which the application loaded */
     lpwstr=pAppDir;
 
-    /* convert path to multibyte, check buffer size */
-    n = WideCharToMultiByte(CP_ACP, 0, lpwstr, -1, lpPathFileName, iLen,
-                            NULL, NULL);
-    if(n == 0)
+    if (lpwstr)
     {
-        ASSERT("WideCharToMultiByte failure!\n");
-        return FALSE;
-    }
+        /* convert path to multibyte, check buffer size */
+        n = WideCharToMultiByte(CP_ACP, 0, lpwstr, -1, lpPathFileName, iLen,
+            NULL, NULL);
+        if (n == 0)
+        {
+            ASSERT("WideCharToMultiByte failure!\n");
+            return FALSE;
+        }
 
-    n += strlen(lpFileName) + 2;
-    if( n > (INT) iLen )
-    {
-        ERROR("Buffer too small for full path!\n");
-        return FALSE;
-    }
-    
-    if ((strcat_s(lpPathFileName, iLen, "/") != SAFECRT_SUCCESS) ||
-        (strcat_s(lpPathFileName, iLen, lpFileName) != SAFECRT_SUCCESS))
-    {
-        ERROR("strcat_s failed!\n");
-        return FALSE;
-    }
+        n += strlen(lpFileName) + 2;
+        if (n > (INT)iLen)
+        {
+            ERROR("Buffer too small for full path!\n");
+            return FALSE;
+        }
 
-    if(access(lpPathFileName, F_OK) == 0)
-    {
-        TRACE("found %s in application directory (%s)\n", lpFileName, lpPathFileName);
-        return TRUE;
+        if ((strcat_s(lpPathFileName, iLen, "/") != SAFECRT_SUCCESS) ||
+            (strcat_s(lpPathFileName, iLen, lpFileName) != SAFECRT_SUCCESS))
+        {
+            ERROR("strcat_s failed!\n");
+            return FALSE;
+        }
+
+        if (access(lpPathFileName, F_OK) == 0)
+        {
+            TRACE("found %s in application directory (%s)\n", lpFileName, lpPathFileName);
+            return TRUE;
+        }
     }
 
     /* then try the current directory */
@@ -3573,7 +3646,7 @@ CorUnix::CPalThread *PROCThreadFromMachPort(mach_port_t hTargetThread)
     pThread = pGThreadList;
     while (pThread)
     {
-        pthread_t pPThread = (pthread_t)pThread->GetThreadId();
+        pthread_t pPThread = pThread->GetPThreadSelf();
         mach_port_t hThread = pthread_mach_thread_np(pPThread);
         if (hThread == hTargetThread)
             break;

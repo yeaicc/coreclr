@@ -35,6 +35,13 @@ ISharedSecurityDescriptor* Security::CreateSharedSecurityDescriptor(Assembly* pA
     return static_cast<ISharedSecurityDescriptor*>(new SharedSecurityDescriptor(pAssembly));
 }
 
+void Security::DeleteSharedSecurityDescriptor(ISharedSecurityDescriptor *descriptor)
+{
+    WRAPPER_NO_CONTRACT;
+
+    delete static_cast<SharedSecurityDescriptor *>(descriptor);
+}
+
 #ifndef FEATURE_CORECLR
 IPEFileSecurityDescriptor* Security::CreatePEFileSecurityDescriptor(AppDomain* pDomain, PEFile *pPEFile)
 {
@@ -43,6 +50,23 @@ IPEFileSecurityDescriptor* Security::CreatePEFileSecurityDescriptor(AppDomain* p
     return static_cast<IPEFileSecurityDescriptor*>(new PEFileSecurityDescriptor(pDomain, pPEFile));
 }
 #endif
+
+BOOL Security::IsTransparencyEnforcementEnabled()
+{
+    LIMITED_METHOD_CONTRACT;
+
+#ifdef FEATURE_CORECLR
+    if (GetAppDomain()->IsTransparencyEnforcementDisabled())
+        return FALSE;
+#endif
+
+#ifdef _DEBUG
+    if (g_pConfig->DisableTransparencyEnforcement())
+        return FALSE;
+#endif
+
+    return TRUE;
+}
 
 //---------------------------------------------------------------------------------------
 //

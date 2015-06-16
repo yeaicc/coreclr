@@ -17,12 +17,12 @@
 inline void RestoreSOToleranceState() {}
 
 #include <cor.h>
-#include <CorSym.h>
+#include <corsym.h>
 #include <clrdata.h>
 #include <palclr.h>
+#include <metahost.h>
 
 #if !defined(FEATURE_PAL)
-#include <metahost.h>
 #include <new>
 #include <dia2.h>
 #endif
@@ -36,7 +36,6 @@ inline void RestoreSOToleranceState() {}
 
 #endif //STRIKE
 
-#include "cor.h"
 #include "cordebug.h"
 #include "static_assert.h"
 
@@ -157,17 +156,11 @@ class BaseObject
 };
 
 
-const DWORD gElementTypeInfo[] = {
+const BYTE gElementTypeInfo[] = {
 #define TYPEINFO(e,ns,c,s,g,ia,ip,if,im,gv)    s,
 #include "cortypeinfo.h"
 #undef TYPEINFO
 };
-
-// Under unix we need to implement ExtensionApis.
-#ifdef FEATURE_PAL
-#undef GetExpression
-DWORD_PTR GetExpression(const char *exp);
-#endif // FEATURE_PAL
 
 typedef struct tagLockEntry
 {
@@ -188,10 +181,8 @@ extern ISOSDacInterface *g_sos;
 
 #include "dacprivate.h"
 
-#ifndef FEATURE_PAL
 interface ICorDebugProcess;
 extern ICorDebugProcess * g_pCorDebugProcess;
-#endif // FEATURE_PAL
 
 // This class is templated for easy modification.  We may need to update the CachedString
 // or related classes to use wchar_t instead of char in the future.
@@ -396,8 +387,8 @@ namespace Output
     *   simpleName - simple name of the managed variable                   *
     *                                                                      *
     \**********************************************************************/
-    CachedString BuildManagedVarValue(__in_z LPWSTR expansionName, ULONG frame, __in_z LPWSTR simpleName, FormatType type);
-    CachedString BuildManagedVarValue(__in_z LPWSTR expansionName, ULONG frame, int indexInArray, FormatType type);    //used for array indices (simpleName = "[<indexInArray>]")
+    CachedString BuildManagedVarValue(__in_z LPCWSTR expansionName, ULONG frame, __in_z LPCWSTR simpleName, FormatType type);
+    CachedString BuildManagedVarValue(__in_z LPCWSTR expansionName, ULONG frame, int indexInArray, FormatType type);    //used for array indices (simpleName = "[<indexInArray>]")
 }
 
 class NoOutputHolder
@@ -820,7 +811,7 @@ namespace Output
                 char buffer[64];
                 if (mFormat == Formats::Default || mFormat == Formats::Pointer)
                 {
-                    sprintf_s(buffer, _countof(buffer), "%p", (int *)mValue);
+                    sprintf_s(buffer, _countof(buffer), "%p", (int *)(SIZE_T)mValue);
                     ConvertToLower(buffer, _countof(buffer));
                 }
                 else
@@ -1380,8 +1371,8 @@ void IP2MethodDesc (DWORD_PTR IP, DWORD_PTR &methodDesc, JITTypes &jitType,
 const char *ElementTypeName (unsigned type);
 void DisplayFields (CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodTableFieldData *pMTFD,
                     DWORD_PTR dwStartAddr = 0, BOOL bFirst=TRUE, BOOL bValueClass=FALSE);
-int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, __in_z LPWSTR wszFieldName, BOOL bFirst=TRUE);
-int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPWSTR wszFieldName, BOOL bFirst=TRUE);
+int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, __in_z LPCWSTR wszFieldName, BOOL bFirst=TRUE);
+int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCWSTR wszFieldName, BOOL bFirst=TRUE);
 
 BOOL IsValidToken(DWORD_PTR ModuleAddr, mdTypeDef mb);
 void NameForToken_s(DacpModuleData *pModule, mdTypeDef mb, __out_ecount (capacity_mdName) WCHAR *mdName, size_t capacity_mdName, 
@@ -1430,7 +1421,7 @@ DllsName(
 inline
 BOOL IsElementValueType (CorElementType cet)
 {
-    return cet >= ELEMENT_TYPE_BOOLEAN && cet <= ELEMENT_TYPE_R8 
+    return (cet >= ELEMENT_TYPE_BOOLEAN && cet <= ELEMENT_TYPE_R8) 
         || cet == ELEMENT_TYPE_VALUETYPE || cet == ELEMENT_TYPE_I || cet == ELEMENT_TYPE_U;
 }
 
@@ -1613,9 +1604,9 @@ void DecodeDynamicIL(BYTE *data, ULONG Size, DacpObjectData& tokenArray);
 
 BOOL IsRetailBuild (size_t base);
 EEFLAVOR GetEEFlavor ();
-#ifndef FEATURE_PAL
 HRESULT InitCorDebugInterface();
 VOID UninitCorDebugInterface();
+#ifndef FEATURE_PAL
 BOOL GetEEVersion(VS_FIXEDFILEINFO *pFileInfo);
 BOOL GetSOSVersion(VS_FIXEDFILEINFO *pFileInfo);
 #endif
@@ -1734,6 +1725,7 @@ private:
 };
 
 class CGCDesc;
+
 // The information MethodTableCache returns.
 struct MethodTableInfo
 {
@@ -2072,7 +2064,6 @@ struct StringHolder
 };
 
 
-ULONG TargetPlatform();
 ULONG DebuggeeType();
 
 inline BOOL IsKernelDebugger ()
@@ -2314,6 +2305,8 @@ struct MemRange
     MemRange * next;
 }; //struct MemRange
 
+#ifndef FEATURE_PAL
+
 class StressLogMem
 {
 private:
@@ -2333,7 +2326,6 @@ public:
     bool IsInStressLog (ULONG64 addr);
 }; //class StressLogMem
 
-#ifndef FEATURE_PAL
 // An adapter class that DIA consumes so that it can read PE data from the an image
 // This implementation gets the backing data from the image loaded in debuggee memory
 // that has been layed out identical to the disk format (ie not seperated by section)
@@ -2400,7 +2392,8 @@ public:
     HRESULT GetNamedLocalVariable(ICorDebugFrame * pFrame, ULONG localIndex, __inout_ecount(paramNameLen) WCHAR* paramName, ULONG paramNameLen, ICorDebugValue** ppValue);
     HRESULT SymbolReader::ResolveSequencePoint(__in_z WCHAR* pFilename, ULONG32 lineNumber, mdMethodDef* pToken, ULONG32* pIlOffset);
 };
-#endif
+
+#endif // !FEATURE_PAL
 
 HRESULT
 GetLineByOffset(
@@ -2795,6 +2788,7 @@ public:
             MoveToPage(start, size);
         }
     }
+
     
     void ClearStats()
     {
@@ -2805,6 +2799,8 @@ public:
 #endif
     }
     
+#ifndef FEATURE_PAL
+
     void PrintStats(const char *func)
     {
 #ifdef _DEBUG
@@ -2815,6 +2811,8 @@ public:
         OutputDebugStringA(buffer);
 #endif
     }
+
+#endif // !FEATURE_PAL
     
 private:
     /* Sets the cache to the page specified by addr, or false if we could not move to
@@ -2853,8 +2851,8 @@ private:
 //
 
 #ifndef FEATURE_PAL
-#include <hash_map>
-#include <hash_set>
+#include <unordered_map>
+#include <unordered_set>
 #include <list>
 #endif
 
@@ -2873,7 +2871,7 @@ private:
     LinearReadCache mCache;
     
 #ifndef FEATURE_PAL
-    std::hash_map<TADDR, std::list<TADDR>> mDependentHandleMap;
+    std::unordered_map<TADDR, std::list<TADDR>> mDependentHandleMap;
 #endif
     
 public:           
@@ -3027,7 +3025,7 @@ private:
     };
 
 public:
-    static void GetDependentHandleMap(std::hash_map<TADDR, std::list<TADDR>> &map);
+    static void GetDependentHandleMap(std::unordered_map<TADDR, std::list<TADDR>> &map);
 
 public:
     // Finds all objects which root "target" and prints the path from the root
@@ -3046,7 +3044,7 @@ public:
     void ObjSize();
 
     // Returns the set of all live objects in the process.
-    const std::hash_set<TADDR> &GetLiveObjects(bool excludeFQ = false);
+    const std::unordered_set<TADDR> &GetLiveObjects(bool excludeFQ = false);
 
     // See !FindRoots.
     int FindRoots(int gen, TADDR target);
@@ -3104,12 +3102,12 @@ private:
     std::list<RootNode*> mCleanupList;  // A list of RootNode's we've newed up.  This is only used to delete all of them later.
     std::list<RootNode*> mRootNewList;  // A list of unused RootNodes that are free to use instead of having to "new" up more.
     
-    std::hash_map<TADDR, MTInfo*> mMTs;     // The MethodTable cache which maps from MT -> MethodTable data (size, gcdesc, string typename)
-    std::hash_map<TADDR, RootNode*> mTargets;   // The objects that we are searching for.
-    std::hash_set<TADDR> mConsidered;       // A hashtable of objects we've already visited.
-    std::hash_map<TADDR, size_t> mSizes;   // A mapping from object address to total size of data the object roots.
+    std::unordered_map<TADDR, MTInfo*> mMTs;     // The MethodTable cache which maps from MT -> MethodTable data (size, gcdesc, string typename)
+    std::unordered_map<TADDR, RootNode*> mTargets;   // The objects that we are searching for.
+    std::unordered_set<TADDR> mConsidered;       // A hashtable of objects we've already visited.
+    std::unordered_map<TADDR, size_t> mSizes;   // A mapping from object address to total size of data the object roots.
     
-    std::hash_map<TADDR, std::list<TADDR>> mDependentHandleMap;
+    std::unordered_map<TADDR, std::list<TADDR>> mDependentHandleMap;
     
     LinearReadCache mCache;     // A linear cache which stops us from having to read from the target process more than 1-2 times per object.
 };

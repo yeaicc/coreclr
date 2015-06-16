@@ -1567,6 +1567,8 @@ FCFuncStart(gGCInterfaceFuncs)
     FCFuncElement("SetGCLatencyMode", GCInterface::SetGcLatencyMode)
     FCFuncElement("GetLOHCompactionMode", GCInterface::GetLOHCompactionMode)
     FCFuncElement("SetLOHCompactionMode", GCInterface::SetLOHCompactionMode)
+    QCFuncElement("_StartNoGCRegion", GCInterface::StartNoGCRegion)
+    QCFuncElement("_EndNoGCRegion", GCInterface::EndNoGCRegion)
     FCFuncElement("IsServerGC", SystemNative::IsServerGC)
     QCFuncElement("_AddMemoryPressure", GCInterface::_AddMemoryPressure)
     QCFuncElement("_RemoveMemoryPressure", GCInterface::_RemoveMemoryPressure)
@@ -1961,6 +1963,9 @@ FCFuncStart(gStubHelperFuncs)
     FCIntrinsic("GetNDirectTarget", StubHelpers::GetNDirectTarget, CORINFO_INTRINSIC_StubHelpers_GetNDirectTarget)
     FCFuncElement("GetDelegateTarget", StubHelpers::GetDelegateTarget)
     FCFuncElement("SetLastError", StubHelpers::SetLastError)
+#ifdef FEATURE_CORECLR
+    FCFuncElement("ClearLastError", StubHelpers::ClearLastError)
+#endif
     FCFuncElement("ThrowInteropParamException", StubHelpers::ThrowInteropParamException)
     FCFuncElement("InternalGetHRExceptionObject", StubHelpers::GetHRExceptionObject)
 #ifdef FEATURE_COMINTEROP

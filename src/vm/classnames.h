@@ -27,9 +27,11 @@
 #ifdef FEATURE_COMINTEROP
 #define g_ECMAKeyToken "B77A5C561934E089"       // The ECMA key used by some framework assemblies: mscorlib, system, etc.
 #define g_FXKeyToken "b03f5f7f11d50a3a"         // The FX key used by other framework assemblies: System.Web, System.Drawing, etc.
-#define g_CoreClrKeyToken "7CEC85D7BEA7798E"    // The silverlight platform key used by CoreClr framework assemblies: mscorlib, system, etc
 #define g_SystemAsmName "System"
+#define g_SystemRuntimeAsmName "System.Runtime"
 #define g_DrawingAsmName "System.Drawing"
+#define g_ObjectModelAsmName "System.ObjectModel"
+#define g_SystemRuntimeWindowsRuntimeAsmName "System.Runtime.WindowsRuntime"
 #define g_ColorClassName "System.Drawing.Color"
 #define g_ColorTranslatorClassName "System.Drawing.ColorTranslator"
 #define g_SystemUriClassName "System.Uri"
@@ -51,7 +53,19 @@
 #define g_ICommandName "System.Windows.Input.ICommand"
 #define g_ComObjectName "__ComObject"
 #define g_RuntimeClassName "RuntimeClass"
+#define g_INotifyCollectionChanged_WinRTName "System.Runtime.InteropServices.WindowsRuntime.INotifyCollectionChanged_WinRT"
+#define g_NotifyCollectionChangedToManagedAdapterName "System.Runtime.InteropServices.WindowsRuntime.NotifyCollectionChangedToManagedAdapter"
+#define g_NotifyCollectionChangedToWinRTAdapterName "System.Runtime.InteropServices.WindowsRuntime.NotifyCollectionChangedToWinRTAdapter"
+#define g_INotifyPropertyChanged_WinRTName "System.Runtime.InteropServices.WindowsRuntime.INotifyPropertyChanged_WinRT"
+#define g_NotifyPropertyChangedToManagedAdapterName "System.Runtime.InteropServices.WindowsRuntime.NotifyPropertyChangedToManagedAdapter"
+#define g_NotifyPropertyChangedToWinRTAdapterName "System.Runtime.InteropServices.WindowsRuntime.NotifyPropertyChangedToWinRTAdapter"
+#define g_ICommand_WinRTName "System.Runtime.InteropServices.WindowsRuntime.ICommand_WinRT"
+#define g_ICommandToManagedAdapterName "System.Runtime.InteropServices.WindowsRuntime.ICommandToManagedAdapter"
+#define g_ICommandToWinRTAdapterName "System.Runtime.InteropServices.WindowsRuntime.ICommandToWinRTAdapter"
+#define g_NotifyCollectionChangedEventHandler_WinRT "System.Runtime.InteropServices.WindowsRuntime.NotifyCollectionChangedEventHandler_WinRT"
+#define g_PropertyChangedEventHandler_WinRT_Name "System.Runtime.InteropServices.WindowsRuntime.PropertyChangedEventHandler_WinRT"
 #endif // FEATURE_COMINTEROP
+
 #ifdef FEATURE_REMOTING
 #define g_ContextBoundObjectClassName "System.ContextBoundObject"
 #endif

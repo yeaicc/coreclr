@@ -81,6 +81,7 @@ enum RefType : unsigned char
     RefTypeZeroInit            = (0x30 | RefTypeDef),
     RefTypeUpperVectorSaveDef  = (0x40 | RefTypeDef),
     RefTypeUpperVectorSaveUse  = (0x40 | RefTypeUse),
+    RefTypeKillGCRefs          = 0x80,
     RefTypeBound,
 };
 
@@ -161,7 +162,7 @@ public:
     }
 
 void
-RegRecord::init(regNumber reg)
+init(regNumber reg)
 {
 #ifdef _TARGET_ARM64_
     // The Zero register, or the SP
@@ -425,18 +426,24 @@ private:
                                       LSRA_LIMIT_CALLER                 = 0x2,
                                       LSRA_LIMIT_SMALL_SET              = 0x3,
                                       LSRA_LIMIT_MASK                   = 0x3 };
+    // When LSRA_LIMIT_SMALL_SET is specified, it is desirable to select a "mixed" set of caller- and callee-save
+    // registers, so as to get different coverage than limiting to callee or caller.
+    // At least for x86 and AMD64, and potentially other architecture that will support SIMD,
+    // we need a minimum of 5 fp regs in order to support the InitN intrinsic for Vector4.
+    // Hence the "SmallFPSet" has 5 elements.
+
 #if defined(_TARGET_AMD64_)
     static const regMaskTP  LsraLimitSmallIntSet = RBM_LOWINT;
-    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_XMM0 | RBM_XMM1 | RBM_XMM2 | RBM_XMM3);
+    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_XMM0 | RBM_XMM1 | RBM_XMM2 | RBM_XMM6 | RBM_XMM7 );
 #elif defined(_TARGET_ARM_)
     static const regMaskTP  LsraLimitSmallIntSet = (RBM_R0|RBM_R1|RBM_R2|RBM_R3|RBM_R4);
-    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_F0|RBM_F1|RBM_F2|RBM_F3);
+    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_F0|RBM_F1|RBM_F2|RBM_F16|RBM_F17);
 #elif defined(_TARGET_ARM64_)
-    static const regMaskTP  LsraLimitSmallIntSet = (RBM_R0|RBM_R1|RBM_R2|RBM_R3|RBM_R4);
-    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_V0|RBM_V1|RBM_V2|RBM_V3);
+    static const regMaskTP  LsraLimitSmallIntSet = (RBM_R0|RBM_R1|RBM_R2|RBM_R19|RBM_R20);
+    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_V0|RBM_V1|RBM_V2|RBM_V8|RBM_V9);
 #elif defined(_TARGET_X86_)
     static const regMaskTP  LsraLimitSmallIntSet = (RBM_EAX | RBM_ECX | RBM_EDI);
-    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_XMM0 | RBM_XMM1 | RBM_XMM2 | RBM_XMM3);
+    static const regMaskTP  LsraLimitSmallFPSet  = (RBM_XMM0 | RBM_XMM1 | RBM_XMM2 | RBM_XMM6 | RBM_XMM7 );
 #else
     #error Unsupported or unset target architecture
 #endif // target
@@ -497,7 +504,7 @@ private:
                                       LSRA_ALWAYS_INSERT_RELOAD         = 0x400,
                                       LSRA_RELOAD_MASK                  = 0x400 };
     LsraReload                  getLsraReload()                 { return (LsraReload) (lsraStressMask & LSRA_RELOAD_MASK); }
-    bool                        alwaysInsertReload()            { return getLsraSpill() == LSRA_ALWAYS_INSERT_RELOAD; }
+    bool                        alwaysInsertReload()            { return getLsraReload() == LSRA_ALWAYS_INSERT_RELOAD; }
 
     // This controls whether we spill everywhere
     enum LsraSpill                  { LSRA_DONT_SPILL_ALWAYS            = 0,
@@ -699,11 +706,12 @@ private:
     /*****************************************************************************
      * Register management
      ****************************************************************************/
+    RegisterType getRegisterType(Interval *currentInterval, RefPosition* refPosition);
     regNumber tryAllocateFreeReg(Interval *current, RefPosition *refPosition);
     RegRecord* findBestPhysicalReg(RegisterType regType, LsraLocation endLocation,
                                   regMaskTP candidates, regMaskTP preferences);
     regNumber allocateBusyReg(Interval *current, RefPosition *refPosition);
-    regNumber assignCopyReg(RefPosition * refPosition, RegisterType regType);
+    regNumber assignCopyReg(RefPosition * refPosition);
 
     void assignPhysReg( RegRecord * physRegInterval, Interval * interval);
     void assignPhysReg( regNumber reg, Interval * interval) { assignPhysReg(getRegisterRecord(reg), interval); }
@@ -714,6 +722,8 @@ private:
 
 
     void spillInterval(Interval* interval, RefPosition* fromRefPosition, RefPosition* toRefPosition);
+
+    void spillGCRefs(RefPosition* killRefPosition);
 
     /*****************************************************************************
      * For Resolution phase
@@ -839,6 +849,7 @@ private:
                          LSRA_EVENT_SPILL_EXTENDED_LIFETIME,
                          LSRA_EVENT_RESTORE_PREVIOUS_INTERVAL,
                          LSRA_EVENT_RESTORE_PREVIOUS_INTERVAL_AFTER_SPILL,
+                         LSRA_EVENT_DONE_KILL_GC_REFS,
 
                          // Block boundaries
                          LSRA_EVENT_START_BB,
@@ -1304,7 +1315,7 @@ public:
     unsigned        rpNum;              // The unique RefPosition number, equal to its index in the refPositions list. Only used for debugging dumps.
 #endif // DEBUG
 
-    bool            isIntervalRef() { return !isPhysRegRef; }
+    bool            isIntervalRef() { return (!isPhysRegRef && (referent != nullptr)); }
 
     // isTrueDef indicates that the RefPosition is a non-update def of a non-internal
     // interval

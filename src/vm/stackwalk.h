@@ -155,9 +155,9 @@ public:
 
     inline CodeManState * GetCodeManState() { LIMITED_METHOD_DAC_CONTRACT; return & codeManState; }
     /*
-       IF YOU USE ANY OF THE SUBSEEQUENT FUNCTIONS, YOU NEED TO REALLY UNDERSTAND THE
+       IF YOU USE ANY OF THE SUBSEQUENT FUNCTIONS, YOU NEED TO REALLY UNDERSTAND THE
        STACK-WALKER (INCLUDING UNWINDING OF METHODS IN MANAGED NATIVE CODE)!
-       YOU ALSO NEED TO UNDERSTAND THE THESE FUNCTIONS MIGHT CHANGE ON A AS-NEED BASIS.
+       YOU ALSO NEED TO UNDERSTAND THAT THESE FUNCTIONS MIGHT CHANGE ON AN AS-NEED BASIS.
      */
 
     /* The rest are meant to be used only by the exception catcher and the GC call-back  */
@@ -405,6 +405,17 @@ public:
 
         return fShouldCrawlframeReportGCReferences;
     }
+    
+    bool ShouldParentToFuncletUseUnwindTargetLocationForGCReporting()
+    {
+        LIMITED_METHOD_CONTRACT;
+        return fShouldParentFrameUseUnwindTargetPCforGCReporting;
+    }
+
+    const EE_ILEXCEPTION_CLAUSE& GetEHClauseForCatch()
+    {
+        return ehClauseForCatch;
+    }
 
 #endif // WIN64EXCEPTIONS
 
@@ -452,6 +463,8 @@ private:
     bool              isFilterFuncletCached;
     bool              fShouldParentToFuncletSkipReportingGCReferences;
     bool              fShouldCrawlframeReportGCReferences;
+    bool              fShouldParentFrameUseUnwindTargetPCforGCReporting;
+    EE_ILEXCEPTION_CLAUSE ehClauseForCatch;
 #endif //WIN64EXCEPTIONS
     Thread*           pThread;
 
@@ -667,7 +680,6 @@ private:
     // the following fields are used to cache information about a managed stack frame 
     // when we need to stop for skipped explicit frames
     EECodeInfo     m_cachedCodeInfo;
-    PTR_VOID       m_pCachedGCInfo;
 
     GSCookie *     m_pCachedGSCookie;
 
@@ -687,9 +699,9 @@ private:
     bool          m_fDidFuncletReportGCReferences;
 #endif // WIN64EXCEPTIONS
 
-#if defined(_WIN64) || defined(_TARGET_ARM_)
+#if !defined(_TARGET_X86_)
     LPVOID m_pvResumableFrameTargetSP;
-#endif // defined(_WIN64) || defined(_TARGET_ARM_)
+#endif // !_TARGET_X86_
 };
 
 void SetUpRegdisplayForStackWalk(Thread * pThread, T_CONTEXT * pContext, REGDISPLAY * pRegdisplay);

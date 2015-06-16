@@ -26,6 +26,7 @@ add_library(mscordbi SHARED
 )
 
 set(COREDBI_LIBRARIES
+  debug-pal
   cordbdi
   utilcodestaticnohost
   ildbsymlib
@@ -56,14 +57,20 @@ if(WIN32)
 elseif(CLR_CMAKE_PLATFORM_UNIX)
     list(APPEND COREDBI_LIBRARIES
         mdhotdata_full
-        palrt
-        CoreClrPal
+        # share the PAL in the dac module
+        mscordaccore
     )
 
     # COREDBI_LIBRARIES is mentioned twice because ld is one pass linker and will not find symbols
     # if they are defined after they are used. Having all libs twice makes sure that ld will actually
     # find all symbols.
     target_link_libraries(mscordbi ${COREDBI_LIBRARIES} ${COREDBI_LIBRARIES})
+
+    # This option is necessary to ensure that the overloaded new/delete operators defined inside
+    # of the utilcode will be used instead of the standard library delete operator.
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Xlinker -Bsymbolic -Bsymbolic-functions")    
+
+    add_dependencies(mscordbi mscordaccore)
     
 endif(WIN32)
 

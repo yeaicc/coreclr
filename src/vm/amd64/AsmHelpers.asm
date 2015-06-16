@@ -134,21 +134,22 @@ endif
         ; So, if m_pReg points into the MachState, we need to update
         ; the register here.  That's what this macro does.
         ;
-RestoreReg macro reg
-        lea     rax, [rcx + OFFSETOF__MachState__m_Capture&reg]
-        mov     rdx, [rcx + OFFSETOF__MachState__m_p&reg]
+RestoreReg macro reg, regnum
+        lea     rax, [rcx + OFFSETOF__MachState__m_Capture + 8 * regnum]
+        mov     rdx, [rcx + OFFSETOF__MachState__m_Ptrs + 8 * regnum]
         cmp     rax, rdx
         cmove   reg, [rax]
         endm
 
-        RestoreReg Rdi
-        RestoreReg Rsi
-        RestoreReg Rbx
-        RestoreReg Rbp
-        RestoreReg R12
-        RestoreReg R13
-        RestoreReg R14
-        RestoreReg R15
+        ; regnum has to match ENUM_CALLEE_SAVED_REGISTERS macro
+        RestoreReg Rdi, 0
+        RestoreReg Rsi, 1
+        RestoreReg Rbx, 2
+        RestoreReg Rbp, 3
+        RestoreReg R12, 4
+        RestoreReg R13, 5
+        RestoreReg R14, 6
+        RestoreReg R15, 7
 
         xor     eax, eax
         ret
@@ -219,21 +220,24 @@ NESTED_END NDirectImportThunk, _TEXT
 ;------------------------------------------------
 ; JIT_RareDisableHelper
 ;
-; The JIT expects this helper to preserve registers used for return values
+; The JIT expects this helper to preserve all 
+; registers that can be used for return values
 ;
 
 NESTED_ENTRY JIT_RareDisableHelper, _TEXT
 
-    push rax
-    alloc_stack         30h
+    alloc_stack         38h
     END_PROLOGUE
-    movdqu [rsp+20h], xmm0
 
-    call JIT_RareDisableHelperWorker
+    movdqa      [rsp+20h], xmm0     ; Save xmm0  
+    mov         [rsp+30h], rax      ; Save rax  
 
-    movdqu xmm0, [rsp+20h]
-    add                 rsp, 30h
-    pop                 rax
+    call        JIT_RareDisableHelperWorker
+
+    movdqa      xmm0, [rsp+20h]     ; Restore xmm0	
+    mov         rax,  [rsp+30h]     ; Restore rax  
+
+    add         rsp, 38h
     ret
 
 NESTED_END JIT_RareDisableHelper, _TEXT
@@ -732,6 +736,22 @@ NESTED_ENTRY getcpuid, _TEXT
         pop     rbx
         ret
 NESTED_END getcpuid, _TEXT
+
+
+;; extern "C" DWORD __stdcall xmmYmmStateSupport();
+LEAF_ENTRY xmmYmmStateSupport, _TEXT
+        mov     ecx, 0                  ; Specify xcr0
+        xgetbv                          ; result in EDX:EAX
+        and eax, 06H
+        cmp eax, 06H                    ; check OS has enabled both XMM and YMM state support
+        jne     not_supported
+        mov     eax, 1
+        jmp     done
+    not_supported:
+        mov     eax, 0
+    done:
+        ret
+LEAF_END xmmYmmStateSupport, _TEXT
 
 ;The following function uses Deterministic Cache Parameter leafs to determine the cache hierarchy information on Prescott & Above platforms. 
 ;  This function takes 3 arguments:

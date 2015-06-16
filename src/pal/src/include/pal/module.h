@@ -56,12 +56,15 @@ extern "C"
 #define PAL_SHLIB_SUFFIX ".so"
 #endif
 
-typedef BOOL (__stdcall *PDLLMAIN)(HINSTANCE,DWORD,LPVOID); /* entry point of module */
+typedef BOOL (__stdcall *PDLLMAIN)(HINSTANCE, DWORD, LPVOID);   /* entry point of module */
+typedef HINSTANCE (PALAPI *PREGISTER_MODULE)(LPCSTR);           /* used to create the HINSTANCE for above DLLMain entry point */
+typedef VOID (PALAPI *PUNREGISTER_MODULE)(HINSTANCE);           /* used to cleanup the HINSTANCE for above DLLMain entry point */
 
 typedef struct _MODSTRUCT
 {
     HMODULE self;         /* circular reference to this module */
     void *dl_handle;      /* handle returned by dlopen() */
+    HINSTANCE hinstance;  /* handle returned by PAL_RegisterLibrary */
 #if defined(CORECLR) && defined(__APPLE__)
     CORECLRHANDLE sys_module; /* System modules can be loaded via mechanisms other than dlopen() under
                                * CoreCLR/Mac */
@@ -225,13 +228,13 @@ int LOADGetLibRotorPalSoFileName(LPSTR pszBuf);
     mscorwks).
 
 Parameters:
-    void
+    Core CLR path
 
 Return value:
     TRUE if successful
     FALSE if failure
 --*/
-BOOL LOADInitCoreCLRModules();
+BOOL LOADInitCoreCLRModules(const char *szCoreCLRPath);
 
 #if defined(CORECLR) && defined(__APPLE__)
 // Abstract the API used to load and query for functions in the CoreCLR binary to make it easier to change the

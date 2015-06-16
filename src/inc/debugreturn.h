@@ -65,6 +65,7 @@
 class __SafeToReturn {
 public:
     static int safe_to_return() {return 0;};
+    static int used() {return 0;};
 };
 
 class __YouCannotUseAReturnStatementHere {
@@ -76,9 +77,10 @@ private:
     //
     static int safe_to_return() {return 0;};
 public:
-    // Some compilers warn if all member functions in a class are private.
-    // Rather than disable the warning, we'll work around it here.
-    static void dont_call_this() { _ASSERTE(!"Don't call this!"); }
+    // Some compilers warn if all member functions in a class are private
+    // or if a typedef is unused. Rather than disable the warning, we'll work
+    // around it here.
+    static int used() {return 0;};
 };
 
 typedef __SafeToReturn __ReturnOK;
@@ -91,17 +93,21 @@ typedef __SafeToReturn __ReturnOK;
 // The call is dead, and does not appear in the generated code, even in a checked
 // build.  (And, in fastchecked, there is no penalty at all.)
 //
+#ifdef _MSC_VER
 #define return if (0 && __ReturnOK::safe_to_return()) { } else return
+#else // _MSC_VER
+#define return for (;1;__ReturnOK::safe_to_return()) return
+#endif // _MSC_VER
 
-#define DEBUG_ASSURE_NO_RETURN_BEGIN(arg) { typedef __YouCannotUseAReturnStatementHere __ReturnOK; 
-#define DEBUG_ASSURE_NO_RETURN_END(arg)   }
+#define DEBUG_ASSURE_NO_RETURN_BEGIN(arg) { typedef __YouCannotUseAReturnStatementHere __ReturnOK; if (0 && __ReturnOK::used()) { } else {
+#define DEBUG_ASSURE_NO_RETURN_END(arg)   } }
 
 // rotor_pal.h defaulted these to empty macros; this file redefines them
 #undef DEBUG_OK_TO_RETURN_BEGIN
 #undef DEBUG_OK_TO_RETURN_END
 
-#define DEBUG_OK_TO_RETURN_BEGIN(arg) { typedef __SafeToReturn __ReturnOK; 
-#define DEBUG_OK_TO_RETURN_END(arg) }
+#define DEBUG_OK_TO_RETURN_BEGIN(arg) { typedef __SafeToReturn __ReturnOK; if (0 && __ReturnOK::used()) { } else {
+#define DEBUG_OK_TO_RETURN_END(arg) } }
 
 #else // !_DEBUG
 

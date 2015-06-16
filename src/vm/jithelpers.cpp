@@ -2360,8 +2360,11 @@ TypeHandle::CastResult STDCALL ObjIsInstanceOfNoGC(Object *pObject, TypeHandle t
         return TypeHandle::CanCast;
 
     if (pMT->IsTransparentProxy() ||
-        pMT->IsComObjectType() && toTypeHnd.IsInterface())
+           (toTypeHnd.IsInterface() && ( pMT->IsComObjectType() || pMT->IsICastable() ))
+       )
+    {      
         return TypeHandle::MaybeCast;
+    }
 
     if (pMT->IsArray())
     {
@@ -2392,7 +2395,7 @@ TypeHandle::CastResult STDCALL ObjIsInstanceOfNoGC(Object *pObject, TypeHandle t
     return pMT->CanCastToClassOrInterfaceNoGC(toTypeHnd.AsMethodTable());
 }
 
-BOOL ObjIsInstanceOf(Object *pObject, TypeHandle toTypeHnd)
+BOOL ObjIsInstanceOf(Object *pObject, TypeHandle toTypeHnd, BOOL throwCastException)
 {
     CONTRACTL {
         THROWS;
@@ -2439,8 +2442,42 @@ BOOL ObjIsInstanceOf(Object *pObject, TypeHandle toTypeHnd)
         // allow an object of type T to be cast to Nullable<T> (they have the same representation)
         fCast = TRUE;
     }
+#ifdef FEATURE_ICASTABLE
+    // If type implements ICastable interface we give it a chance to tell us if it can be casted 
+    // to a given type.
+    else if (toTypeHnd.IsInterface() && fromTypeHnd.GetMethodTable()->IsICastable())
+    {
+        // Make actuall call to obj.IsInstanceOfInterface(interfaceTypeObj, out exception)
+        OBJECTREF exception = NULL;
+        GCPROTECT_BEGIN(exception);
+        MethodTable *pFromTypeMT = fromTypeHnd.GetMethodTable();
+        MethodDesc *pIsInstanceOfMD = pFromTypeMT->GetMethodDescForInterfaceMethod(MscorlibBinder::GetMethod(METHOD__ICASTABLE__ISINSTANCEOF)); //GC triggers
+        OBJECTREF managedType = toTypeHnd.GetManagedClassObject(); //GC triggers
 
-    GCPROTECT_END();
+        PREPARE_NONVIRTUAL_CALLSITE_USING_METHODDESC(pIsInstanceOfMD);
+
+        DECLARE_ARGHOLDER_ARRAY(args, 3);
+        args[ARGNUM_0] = OBJECTREF_TO_ARGHOLDER(obj);
+        args[ARGNUM_1] = OBJECTREF_TO_ARGHOLDER(managedType);
+        args[ARGNUM_2] = PTR_TO_ARGHOLDER(&exception);
+
+        CALL_MANAGED_METHOD(fCast, BOOL, args);
+        INDEBUG(managedType = NULL); // managedType isn't protected during the call
+
+        if (!fCast && throwCastException && exception != NULL)
+        {
+            RealCOMPlusThrow(exception);
+        }
+        GCPROTECT_END(); //exception
+    }
+#endif // FEATURE_ICASTABLE
+
+    if (!fCast && throwCastException) 
+    {
+        COMPlusThrowInvalidCastException(&obj, toTypeHnd);
+    }    
+
+    GCPROTECT_END(); // obj
 
     return(fCast);
 }
@@ -2773,8 +2810,10 @@ NOINLINE HCIMPL2(Object *, JITutil_ChkCastAny, CORINFO_CLASS_HANDLE type, Object
     TypeHandle clsHnd(type);
 
     HELPER_METHOD_FRAME_BEGIN_RET_1(oref);
-    if (!ObjIsInstanceOf(OBJECTREFToObject(oref), clsHnd))
-        COMPlusThrowInvalidCastException(&oref, clsHnd);
+    if (!ObjIsInstanceOf(OBJECTREFToObject(oref), clsHnd, TRUE))
+    {
+        UNREACHABLE(); //ObjIsInstanceOf will throw if cast can't be done
+    }
     HELPER_METHOD_FRAME_END();
 
     return OBJECTREFToObject(oref);
@@ -3075,7 +3114,7 @@ HCIMPLEND
 /*********************************************************************
 // Allocate a multi-dimensional array
 */
-OBJECTREF allocNewMDArr(TypeHandle typeHnd, unsigned dwNumArgs, PVOID args)
+OBJECTREF allocNewMDArr(TypeHandle typeHnd, unsigned dwNumArgs, va_list args)
 {
     CONTRACTL {
         THROWS;
@@ -3099,16 +3138,13 @@ OBJECTREF allocNewMDArr(TypeHandle typeHnd, unsigned dwNumArgs, PVOID args)
         INT32 t = *p; *p = *q; *q = t;
         p++; q--;
     }
-#elif defined(_WIN64)
-    INT64* pArgs = (INT64 *)args;
+#else
     // create an array where fwdArgList[0] == arg[0] ...
     fwdArgList = (INT32*) _alloca(dwNumArgs * sizeof(INT32));
-    for (unsigned i = 0; i <dwNumArgs; i++)
+    for (unsigned i = 0; i < dwNumArgs; i++)
     {
-        fwdArgList[i] = (INT32)*(pArgs + i);
+        fwdArgList[i] = va_arg(args, INT32);
     }
-#else
-    fwdArgList = (INT32*) args;
 #endif
 
     return AllocateArrayEx(typeHnd, fwdArgList, dwNumArgs);
@@ -3133,7 +3169,7 @@ HCIMPL2VA(Object*, JIT_NewMDArr, CORINFO_CLASS_HANDLE classHnd, unsigned dwNumAr
     va_list dimsAndBounds;
     va_start(dimsAndBounds, dwNumArgs);
 
-    ret = allocNewMDArr(typeHnd, dwNumArgs, (PVOID)dimsAndBounds);
+    ret = allocNewMDArr(typeHnd, dwNumArgs, dimsAndBounds);
     va_end(dimsAndBounds);
 
     HELPER_METHOD_FRAME_END();
@@ -3713,7 +3749,8 @@ JIT_GenericHandleWorker(
             {
                 // Add the denormalized key for faster lookup next time. This is not a critical entry - no need 
                 // to specify appdomain affinity.
-                AddToGenericHandleCache(&key, res);
+                JitGenericHandleCacheKey denormKey((CORINFO_CLASS_HANDLE)pMT, NULL, signature);
+                AddToGenericHandleCache(&denormKey, res);
                 return (CORINFO_GENERIC_HANDLE) (DictionaryEntry) res;                
             }
         }
@@ -3736,6 +3773,8 @@ JIT_GenericHandleWorker(
             pDictDomain = pMD->GetDomain();
         }
 
+        // Add the normalized key (pDeclaringMT) here so that future lookups of any
+        // inherited types are faster next time rather than just just for this specific pMT.
         JitGenericHandleCacheKey key((CORINFO_CLASS_HANDLE)pDeclaringMT, (CORINFO_METHOD_HANDLE)pMD, signature, pDictDomain);
         AddToGenericHandleCache(&key, (HashDatum)result);
     }
@@ -5036,12 +5075,12 @@ HCIMPL1(void, IL_Throw,  Object* obj)
         // then do not clear the "_stackTrace" field of the exception object.
         if (GetThread()->GetExceptionState()->IsRaisingForeignException())
         {
-	        ((EXCEPTIONREF)oref)->SetStackTraceString(NULL);
+            ((EXCEPTIONREF)oref)->SetStackTraceString(NULL);
         }
         else
 #endif // defined(FEATURE_EXCEPTIONDISPATCHINFO)
         {
-	        ((EXCEPTIONREF)oref)->ClearStackTracePreservingRemoteStackTrace();
+            ((EXCEPTIONREF)oref)->ClearStackTracePreservingRemoteStackTrace();
         }
     }
 
@@ -5151,6 +5190,24 @@ HCIMPL0(void, JIT_ThrowDivZero)
     COMPlusThrow(kDivideByZeroException);
 
     HELPER_METHOD_FRAME_END();
+}
+HCIMPLEND
+
+/*********************************************************************/
+HCIMPL0(void, JIT_ThrowNullRef)
+{
+  FCALL_CONTRACT;
+
+  /* Make no assumptions about the current machine state */
+  ResetCurrentContext();
+
+  FC_GC_POLL_NOT_NEEDED();    // throws always open up for GC
+
+  HELPER_METHOD_FRAME_BEGIN_ATTRIB_NOPOLL(Frame::FRAME_ATTR_EXCEPTION);    // Set up a frame
+
+  COMPlusThrow(kNullReferenceException);
+
+  HELPER_METHOD_FRAME_END();
 }
 HCIMPLEND
 
@@ -5282,9 +5339,9 @@ void DoJITFailFast ()
 #if defined(_TARGET_X86_)
     __report_gsfailure();
 #else // !defined(_TARGET_X86_)
-	// On AMD64/IA64/ARM, we need to pass a stack cookie, which will be saved in the context record 
-	// that is used to raise the buffer-overrun exception by __report_gsfailure.
-	__report_gsfailure((ULONG_PTR)0);
+    // On AMD64/IA64/ARM, we need to pass a stack cookie, which will be saved in the context record 
+    // that is used to raise the buffer-overrun exception by __report_gsfailure.
+    __report_gsfailure((ULONG_PTR)0);
 #endif // defined(_TARGET_X86_)
 #else // FEATURE_PAL
     if(ETW_EVENT_ENABLED(MICROSOFT_WINDOWS_DOTNETRUNTIME_PRIVATE_PROVIDER_Context, FailFast))

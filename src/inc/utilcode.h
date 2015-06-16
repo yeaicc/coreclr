@@ -189,6 +189,12 @@ typedef LPSTR   LPUTF8;
 #define sizeofmember(c,m) (sizeof(((c*)0)->m))
 #endif
 
+#if defined(_MSC_VER) && _MSC_VER < 1900
+#define NOEXCEPT
+#else
+#define NOEXCEPT noexcept
+#endif
+
 //=--------------------------------------------------------------------------=
 // Prefast helpers.
 //
@@ -506,10 +512,10 @@ _Ret_bytecap_(_Size) void * __cdecl
 operator new[](size_t n);
 
 void __cdecl
-operator delete(void *p);
+operator delete(void *p) NOEXCEPT;
 
 void __cdecl
-operator delete[](void *p);
+operator delete[](void *p) NOEXCEPT;
 
 #ifdef _DEBUG_IMPL
 HRESULT _OutOfMemory(LPCSTR szFile, int iLine);
@@ -743,6 +749,9 @@ public:
         m_nHashSize = 0;
         m_csMap = NULL;
         m_pResourceFile = NULL;
+#ifdef FEATURE_PAL
+        m_pResourceDomain = NULL;
+#endif // FEATURE_PAL
 
     }// CCompRC
 
@@ -857,6 +866,12 @@ private:
     CRITSEC_COOKIE m_csMap;
 
     LPCWSTR m_pResourceFile;
+#ifdef FEATURE_PAL
+    // Resource domain is an ANSI string identifying a native resources file
+    static LPCSTR  m_pDefaultResourceDomain;
+    static LPCSTR  m_pFallbackResourceDomain;
+    LPCSTR m_pResourceDomain;
+#endif // FEATURE_PAL
 
     // Main accessors for hash
     HRESOURCEDLL LookupNode(LocaleID langId, BOOL &fMissing);
@@ -4474,18 +4489,6 @@ UINT64 GetIA64Imm64(UINT64 qword0, UINT64 qword1);
 //  (Format X2)
 //*****************************************************************************
 void PutIA64Imm64(UINT64 * pBundle, UINT64 imm64);
-
-//*****************************************************************************
-//  Extract the addl 22-bit signed immediate from an IA64 bundle
-//  (Format A5)
-//*****************************************************************************
-INT32 GetIA64Imm22(UINT64 * pBundle, UINT32 slot);
-
-//*****************************************************************************
-//  Deposit the addl 22-bit signed immediate into an IA64 bundle
-//  (Format A5)
-//*****************************************************************************
-void  PutIA64Imm22(UINT64 * pBundle, UINT32 slot, INT32 imm22);
 
 //*****************************************************************************
 //  Extract the IP-Relative signed 25-bit immediate from an IA64 bundle

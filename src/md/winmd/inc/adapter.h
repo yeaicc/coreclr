@@ -83,7 +83,8 @@ public:
     enum FrameworkAssemblyIndex
     {
         FrameworkAssembly_Mscorlib,
-        FrameworkAssembly_System,
+        FrameworkAssembly_SystemObjectModel,
+        FrameworkAssembly_SystemRuntime,
         FrameworkAssembly_SystemRuntimeWindowsRuntime,
         FrameworkAssembly_SystemRuntimeWindowsRuntimeUIXaml,
         FrameworkAssembly_SystemNumericsVectors,
@@ -101,7 +102,8 @@ public:
         ContractAssembly_SystemObjectModel,
         ContractAssembly_SystemRuntimeWindowsRuntime,
         ContractAssembly_SystemRuntimeWindowsRuntimeUIXaml,
-        ContractAssembly_SystemNumericsVectors,
+        ContractAssembly_SystemNumericsVectors, // GetExtraAssemblyRefCount assumes SystemNumericsVectors is the last assembly.
+                                                // If you add an assembly you must update GetActualExtraAssemblyRefCount.
 
         ContractAssembly_Count,
     };
@@ -119,10 +121,7 @@ public:
         WinMDTypeKind_Runtimeclass,
     };
 
-    static int GetExtraAssemblyRefCount()
-    {
-        return ContractAssembly_Count;
-    }
+    int GetExtraAssemblyRefCount();
 
     // Factory and destructor
     static HRESULT Create(IMDCommon *pRawMDCommon, /*[out]*/ WinMDAdapter **ppAdapter);
@@ -625,8 +624,10 @@ public:
         _ASSERTE(index != FrameworkAssembly_Mscorlib);
         switch(index)
         {
-            case FrameworkAssembly_System:
-                return "System";
+            case FrameworkAssembly_SystemObjectModel:
+                return "System.ObjectModel";
+            case FrameworkAssembly_SystemRuntime:
+                return "System.Runtime";
             case FrameworkAssembly_SystemRuntimeWindowsRuntime:
                 return "System.Runtime.WindowsRuntime";
             case FrameworkAssembly_SystemRuntimeWindowsRuntimeUIXaml:
@@ -810,7 +811,8 @@ private:
     //-----------------------------------------------------------------------------------     
     mdAssemblyRef       m_assemblyRefMscorlib;
     BOOL                m_fReferencesMscorlibV4;    // m_assemblyRefMscorlib is a version=4.0.0.0 AssemblyRef
-    ULONG               m_rawAssemblyRefCount;      // the saw assembly ref count not including the extra ones.
+    ULONG               m_rawAssemblyRefCount;      // the raw assembly ref count not including the extra ones.
+    LONG                m_extraAssemblyRefCount;    // the assembly ref count to return from IMetaDataAssemblyImport::EnumAssemblyRefs
 
 
   private:

@@ -3577,7 +3577,7 @@ Thread::~Thread()
 #endif
 
 #ifdef _DEBUG
-    if (m_pFiberInfo) {
+    if (m_pFiberInfo != NULL) {
         delete [] (DWORD_PTR*)m_pFiberInfo[0];
     }
 #endif
@@ -6309,6 +6309,21 @@ void ThreadStore::AddThread(Thread *newThread, BOOL bRequiresTSL)
     }
 }
 
+// this function is just desgined to avoid deadlocks during abnormal process termination, and should not be used for any other purpose
+BOOL ThreadStore::CanAcquireLock()
+{
+    WRAPPER_NO_CONTRACT;
+#ifdef FEATURE_INCLUDE_ALL_INTERFACES
+    if (!s_pThreadStore->m_Crst.IsOSCritSec())
+    {
+        return true;
+    }
+    else
+#endif 
+    {
+        return (s_pThreadStore->m_Crst.m_criticalsection.LockCount == -1 || (size_t)s_pThreadStore->m_Crst.m_criticalsection.OwningThread == (size_t)GetCurrentThreadId());
+    }
+}
 
 // Whenever one of the components of OtherThreadsComplete() has changed in the
 // correct direction, see whether we can now shutdown the EE because only background
@@ -8180,16 +8195,16 @@ void Thread::FillRegDisplay(const PREGDISPLAY pRD, PT_CONTEXT pctx)
 
     ::FillRegDisplay(pRD, pctx);
 
-#if defined(DEBUG_REGDISPLAY) && (defined(_WIN64) || defined(_TARGET_ARM_))
+#if defined(DEBUG_REGDISPLAY) && !defined(_TARGET_X86_)
     CONSISTENCY_CHECK(!pRD->_pThread || pRD->_pThread == this);
     pRD->_pThread = this;
 
     CheckRegDisplaySP(pRD);
-#endif // defined(DEBUG_REGDISPLAY) && (defined(_WIN64) || defined(_TARGET_ARM_))
+#endif // defined(DEBUG_REGDISPLAY) && !defined(_TARGET_X86_)
 }
 
 
-#if defined(DEBUG_REGDISPLAY) && (defined(_WIN64) || defined(_TARGET_ARM_))
+#if defined(DEBUG_REGDISPLAY) && !defined(_TARGET_X86_)
 
 void CheckRegDisplaySP (REGDISPLAY *pRD)
 {
@@ -8200,7 +8215,7 @@ void CheckRegDisplaySP (REGDISPLAY *pRD)
     }
 }
 
-#endif // defined(DEBUG_REGDISPLAY) && (defined(_WIN64) || defined(_TARGET_ARM_))
+#endif // defined(DEBUG_REGDISPLAY) && !defined(_TARGET_X86_)
 
 //                      Trip Functions
 //                      ==============

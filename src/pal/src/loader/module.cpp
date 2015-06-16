@@ -56,7 +56,7 @@ Abstract:
 #include <sys/types.h>
 #include <sys/mman.h>
 
-#if !defined(__APPLE__)
+#if defined(__LINUX__)
 #include <gnu/lib-names.h>
 #endif
 
@@ -90,11 +90,6 @@ CRITICAL_SECTION module_critsec;
 
 MODSTRUCT exe_module; /* always the first, in the in-load-order list */
 MODSTRUCT pal_module; /* always the second, in the in-load-order list */
-
-PDLLMAIN g_pRuntimeDllMain = NULL;
-// Use the g_szCoreCLRPath global to determine whether we're really part of CoreCLR or just a standalone PAL
-// linked into some utility.
-extern char g_szCoreCLRPath[MAX_PATH];
 
 /* static function declarations ***********************************************/
 
@@ -485,9 +480,17 @@ FreeLibrary(
             // This module may be foreign to our PAL, so leave our PAL.
             // If it depends on us, it will re-enter.
             PAL_LeaveHolder holder;
-            module->pDllMain((HMODULE)module, DLL_PROCESS_DETACH, NULL);
+            module->pDllMain(module->hinstance, DLL_PROCESS_DETACH, NULL);
         }
 
+        if (module->hinstance)
+        {
+            PUNREGISTER_MODULE unregisterModule = (PUNREGISTER_MODULE)dlsym(module->dl_handle, "PAL_UnregisterModule");
+            if (unregisterModule)
+            {
+                 unregisterModule(module->hinstance);
+            }
+        }
 /* ...and set nesting level back to what it was */
 #if !_NO_DEBUG_MESSAGES_
         DBG_change_entrylevel(old_level);
@@ -634,6 +637,8 @@ GetModuleFileNameW(
 
     LockModuleList();
 
+    wcscpy_s(lpFileName, nSize, W(""));
+
     if(hModule && !LOADValidateModule((MODSTRUCT *)hModule))
     {
         TRACE("Can't find name for invalid module handle %p\n", hModule);
@@ -644,7 +649,7 @@ GetModuleFileNameW(
 
     if(!wide_name)
     {
-        ASSERT("Can't find name for valid module handle %p\n", hModule);
+        TRACE("Can't find name for valid module handle %p\n", hModule);
         SetLastError(ERROR_INTERNAL_ERROR);
         goto done;
     }
@@ -668,6 +673,57 @@ done:
     LOGEXIT("GetModuleFileNameW returns DWORD %u\n", retval);
     PERF_EXIT(GetModuleFileNameW);
     return retval;
+}
+
+/*++
+Function:
+  PAL_RegisterModule
+
+  Register the module with the target module and return a module handle in
+  the target module's context.
+
+--*/
+
+HINSTANCE
+PALAPI
+PAL_RegisterModule(
+    IN LPCSTR lpLibFileName)
+{
+    HINSTANCE hinstance = NULL;
+
+    int err = PAL_InitializeDLL();
+    if(err == 0)
+    {
+        PERF_ENTRY(PAL_RegisterModule);
+        ENTRY("PAL_RegisterModule(%s)\n", lpLibFileName ? lpLibFileName : "");
+
+        hinstance = (HINSTANCE)LOADLoadLibrary(lpLibFileName, FALSE);
+
+        LOGEXIT("PAL_RegisterModule returns HINSTANCE %p\n", hinstance);
+        PERF_EXIT(PAL_RegisterModule);
+    }
+
+    return hinstance;
+}
+
+/*++
+Function:
+  PAL_UnregisterModule
+
+  Used to cleanup the module HINSTANCE from PAL_RegisterModule.
+--*/
+VOID
+PALAPI
+PAL_UnregisterModule(
+    IN HINSTANCE hInstance)
+{
+    PERF_ENTRY(PAL_UnregisterModule);
+    ENTRY("PAL_UnregisterModule(hInstance=%p)\n", hInstance);
+
+    FreeLibrary(hInstance);
+
+    LOGEXIT("PAL_UnregisterModule returns\n");
+    PERF_EXIT(PAL_UnregisterModule);
 }
 
 /*++
@@ -800,7 +856,7 @@ int LOADGetLibRotorPalSoFileName(LPSTR pszBuf)
         SetLastError(ERROR_INTERNAL_ERROR);
         goto Done;
     }
-    iRetVal = FindLibrary((CHAR*)MAKEDLLNAME_A("CoreClrPal"), &pszFileName);
+    iRetVal = FindLibrary((CHAR*)MAKEDLLNAME_A("coreclrpal"), &pszFileName);
     if (pszFileName)
     {
         UINT cchFileName = strlen(pszFileName);
@@ -869,8 +925,6 @@ Notes :
 extern "C"
 BOOL LOADInitializeModules(LPWSTR exe_name)
 {
-    LPWSTR  lpwstr = NULL;
-
 #if RETURNS_NEW_HANDLES_ON_REPEAT_DLOPEN
     LPSTR   pszExeName = NULL;
     CPalThread *pThread = NULL;
@@ -889,56 +943,30 @@ BOOL LOADInitializeModules(LPWSTR exe_name)
 
     /* initialize module for main executable */
     TRACE("Initializing module for main executable\n");
-    exe_module.self=(HMODULE)&exe_module;
-    exe_module.dl_handle=dlopen(NULL, RTLD_LAZY);
+    exe_module.self = (HMODULE)&exe_module;
+    exe_module.dl_handle = dlopen(NULL, RTLD_LAZY);
     if(!exe_module.dl_handle)
     {
         ASSERT("Main executable module will be broken : dlopen(NULL) failed. "
              "dlerror message is \"%s\" \n", dlerror());
     }
     exe_module.lib_name = exe_name;
-    exe_module.refcount=-1;
-    exe_module.next=&pal_module;
-    exe_module.prev=&pal_module;
+    exe_module.refcount = -1;
+    exe_module.next = &pal_module;
+    exe_module.prev = &pal_module;
     exe_module.pDllMain = NULL;
+    exe_module.hinstance = NULL;
     exe_module.ThreadLibCalls = TRUE;
     
     TRACE("Initializing module for PAL library\n");
-    pal_module.self=(HANDLE)&pal_module;
-
-    if (g_szCoreCLRPath[0] == '\0')
-    {
-        pal_module.lib_name=NULL;
-        pal_module.dl_handle=NULL;
-    } else
-    {
-        TRACE("PAL library is %s\n", g_szCoreCLRPath);
-        lpwstr = UTIL_MBToWC_Alloc(g_szCoreCLRPath, -1);
-        if(NULL == lpwstr)
-        {
-            ERROR("MBToWC failure, unable to save full name of PAL module\n");
-            goto Done;
-        }
-        pal_module.lib_name=lpwstr;
-        pal_module.dl_handle=dlopen(g_szCoreCLRPath, RTLD_LAZY);
-
-        if(pal_module.dl_handle)
-        {
-            g_pRuntimeDllMain = (PDLLMAIN)dlsym(pal_module.dl_handle, "CoreDllMain");
-        }
-        else
-        {
-#if !defined(__hppa__)
-            ASSERT("PAL module will be broken : dlopen(%s) failed. dlerror "
-                 "message is \"%s\"\n ", g_szCoreCLRPath, dlerror());
-#endif
-        }
-    }
-
-    pal_module.refcount=-1;
-    pal_module.next=&exe_module;
-    pal_module.prev=&exe_module;
+    pal_module.self = (HANDLE)&pal_module;
+    pal_module.lib_name = NULL;
+    pal_module.dl_handle = NULL;
+    pal_module.refcount= - 1;
+    pal_module.next = &exe_module;
+    pal_module.prev = &exe_module;
     pal_module.pDllMain = NULL;
+    pal_module.hinstance = NULL;
     pal_module.ThreadLibCalls = TRUE;
 
     // For platforms where we can't trust the handle to be constant, we need to 
@@ -1135,7 +1163,7 @@ void LOADCallDllMain(DWORD dwReason, LPVOID lpReserved)
                     // This module may be foreign to our PAL, so leave our PAL.
                     // If it depends on us, it will re-enter.
                     PAL_LeaveHolder holder;
-                    module->pDllMain((HMODULE) module, dwReason, lpReserved);
+                    module->pDllMain(module->hinstance, dwReason, lpReserved);
                 }
 
 #if !_NO_DEBUG_MESSAGES_
@@ -1342,6 +1370,7 @@ static MODSTRUCT *LOADAllocModule(void *dl_handle, LPCSTR name)
     module->refcount = 1;
 #endif  // NEED_DLCOMPAT
     module->self = module;
+    module->hinstance = NULL;
     module->ThreadLibCalls = TRUE;
     module->next = NULL;
     module->prev = NULL;
@@ -1382,6 +1411,8 @@ static HMODULE LOADLoadLibrary(LPCSTR ShortAsciiName, BOOL fDynamic)
     {
 #if defined(__APPLE__)
         ShortAsciiName = "libc.dylib";
+#elif defined(__FreeBSD__)
+        ShortAsciiName = FREEBSD_LIBC;
 #else
         ShortAsciiName = LIBC_SO;
 #endif
@@ -1395,7 +1426,11 @@ static HMODULE LOADLoadLibrary(LPCSTR ShortAsciiName, BOOL fDynamic)
     {
         // See GetProcAddress for an explanation why we leave the PAL.
         PAL_LeaveHolder holder;
-        dl_handle = dlopen(ShortAsciiName, RTLD_LAZY);
+        dl_handle = dlopen(ShortAsciiName, RTLD_LAZY | RTLD_NOLOAD); 
+        if (!dl_handle)
+        {
+            dl_handle = dlopen(ShortAsciiName, RTLD_LAZY);
+        }
 
         // P/Invoke calls are often defined without an extension in the name of the 
         // target library. So if we failed to load the specified library, try adding
@@ -1404,7 +1439,11 @@ static HMODULE LOADLoadLibrary(LPCSTR ShortAsciiName, BOOL fDynamic)
         {
             if (snprintf(fullLibraryName, MAX_PATH, "%s%s", ShortAsciiName, PAL_SHLIB_SUFFIX) < MAX_PATH)
             {
-                dl_handle = dlopen(fullLibraryName, RTLD_LAZY);
+                dl_handle = dlopen(fullLibraryName, RTLD_LAZY | RTLD_NOLOAD); 
+                if (!dl_handle)
+                {
+                    dl_handle = dlopen(fullLibraryName, RTLD_LAZY);
+                }
                 if (dl_handle)
                 {
                     ShortAsciiName = fullLibraryName;
@@ -1477,11 +1516,27 @@ static HMODULE LOADLoadLibrary(LPCSTR ShortAsciiName, BOOL fDynamic)
     /* If it did contain a DllMain, call it. */
     if(module->pDllMain)
     {
-        DWORD dllmain_retval;
+        DWORD dllmain_retval = FALSE;
 
         TRACE("Calling DllMain (%p) for module %S\n", 
               module->pDllMain, 
               module->lib_name ? module->lib_name : W16_NULLSTRING);
+
+        if (NULL == module->hinstance)
+        {
+            PREGISTER_MODULE registerModule = (PREGISTER_MODULE)dlsym(module->dl_handle, "PAL_RegisterModule");
+            if (registerModule)
+            {
+                module->hinstance = registerModule(ShortAsciiName);
+            }
+            else
+            {
+                // If the target module doesn't have the PAL_RegisterModule export, then use this PAL's
+                // module handle assuming that the target module is referencing this PAL's exported 
+                // functions on said handle.
+                module->hinstance = (HINSTANCE)module;
+            }
+        }
 
         {
 #if !_NO_DEBUG_MESSAGES_
@@ -1494,8 +1549,7 @@ static HMODULE LOADLoadLibrary(LPCSTR ShortAsciiName, BOOL fDynamic)
                 // This module may be foreign to our PAL, so leave our PAL.
                 // If it depends on us, it will re-enter.
                 PAL_LeaveHolder holder;
-                dllmain_retval = module->pDllMain((HINSTANCE) module,
-                    DLL_PROCESS_ATTACH, fDynamic ? NULL : (LPVOID)-1);
+                dllmain_retval = module->pDllMain(module->hinstance, DLL_PROCESS_ATTACH, fDynamic ? NULL : (LPVOID)-1);
             }
 
 #if !_NO_DEBUG_MESSAGES_
@@ -1579,7 +1633,7 @@ static void LOAD_SEH_CallDllMain(MODSTRUCT *module, DWORD dwReason, LPVOID lpRes
             // This module may be foreign to our PAL, so leave our PAL.
             // If it depends on us, it will re-enter.
             PAL_LeaveHolder holder;
-            pParam->module->pDllMain((HMODULE)pParam->module, pParam->dwReason, pParam->lpReserved);
+            pParam->module->pDllMain(pParam->module->hinstance, pParam->dwReason, pParam->lpReserved);
         }
     }
     PAL_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -1895,58 +1949,71 @@ Done:
     mscorwks).
 
 Parameters:
-    void
+    Core CLR path
 
 Return value:
     TRUE if successful
     FALSE if failure
 --*/
-BOOL LOADInitCoreCLRModules()
+BOOL LOADInitCoreCLRModules(
+    const char *szCoreCLRPath)
 {
-    return g_pRuntimeDllMain((HMODULE)&pal_module, DLL_PROCESS_ATTACH, NULL);
+    TRACE("PAL library is %s\n", szCoreCLRPath);
+    LPWSTR lpwstr = UTIL_MBToWC_Alloc(szCoreCLRPath, -1);
+    if(!lpwstr)
+    {
+        ERROR("MBToWC failure, unable to save full name of PAL module\n");
+        return FALSE;
+    }
+    pal_module.lib_name = lpwstr;
+    pal_module.dl_handle = dlopen(szCoreCLRPath, RTLD_LAZY);
+    if(!pal_module.dl_handle)
+    {
+        ERROR("PAL module will be broken : dlopen(%s) failed. dlerror message is \"%s\"\n ", 
+            szCoreCLRPath, dlerror());
+        return FALSE;
+    }
+    PDLLMAIN pRuntimeDllMain = (PDLLMAIN)dlsym(pal_module.dl_handle, "CoreDllMain");
+    if (!pRuntimeDllMain)
+    {
+        ERROR("Can not find the CoreDllMain entry point in %s\n", szCoreCLRPath);
+        return FALSE;
+    }
+    pal_module.hinstance = (HINSTANCE)LOADLoadLibrary(szCoreCLRPath, FALSE);
+    return pRuntimeDllMain(pal_module.hinstance, DLL_PROCESS_ATTACH, NULL);
 }
 
-// Get base address of the coreclr module
+// Get base address of the module containing a given symbol 
 PALAPI
 LPCVOID
-PAL_GetCoreClrModuleBase()
+PAL_GetSymbolModuleBase(void *symbol)
 {
     LPCVOID retval = NULL;
 
-    PERF_ENTRY(PAL_GetModuleBaseFromHModule);
-    ENTRY("PAL_GetCoreClrModuleBase\n");
+    PERF_ENTRY(PAL_GetPalModuleBase);
+    ENTRY("PAL_GetPalModuleBase\n");
 
-    if(pal_module.dl_handle != NULL)
+    if (symbol == NULL)
     {
-        // To lookup module base address, we need an address inside of the module.
-        // The coreclr.so contains the DllMain function, so we use it here.
-        void* dllMain = dlsym(pal_module.dl_handle, "DllMain");
-        if (dllMain != NULL)
-        {
-            Dl_info info;
-            if (dladdr(dllMain, &info) != 0)
-            {
-                retval = info.dli_fbase;
-            }
-            else 
-            {
-                TRACE("Can't get base address of the libcoreclr.so\n");
-                SetLastError(ERROR_INVALID_DATA);
-            }
-        }
-        else
-        {
-            TRACE("Can't find DllMain in libcoreclr.so\n");
-            SetLastError(ERROR_INVALID_DATA);
-        }
+        TRACE("Can't get base address. Argument symbol == NULL\n");
+        SetLastError(ERROR_INVALID_DATA);
     }
     else 
     {
-        TRACE("Can't get libcoreclr.so base - the pal_module is not initialized\n");
-        SetLastError(ERROR_MOD_NOT_FOUND);
+        Dl_info info;
+        if (dladdr(symbol, &info) != 0)
+        {
+            retval = info.dli_fbase;
+        }
+        else 
+        {
+            TRACE("Can't get base address of the current module\n");
+            SetLastError(ERROR_INVALID_DATA);
+        }        
     }
 
-    LOGEXIT("PAL_GetCoreClrModuleBase returns %p\n", retval);
-    PERF_EXIT(PAL_GetCoreClrModuleBase);
+    LOGEXIT("PAL_GetPalModuleBase returns %p\n", retval);
+    PERF_EXIT(PAL_GetPalModuleBase);
     return retval;
+
 }

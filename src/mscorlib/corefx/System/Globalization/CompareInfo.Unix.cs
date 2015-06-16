@@ -18,6 +18,12 @@ namespace System.Globalization
             Contract.Assert(value != null);
 
             // TODO: Implement This Fully.
+
+            if (value.Length == 0)
+            {
+                return startIndex;
+            }
+
             if (ignoreCase)
             {
                 source = source.ToUpper(CultureInfo.InvariantCulture);
@@ -26,12 +32,10 @@ namespace System.Globalization
 
             source = source.Substring(startIndex, count);
 
-            if (value.Length > source.Length) return -1;
-
-            for (int i = 0; i < source.Length; i++)
+            for (int i = 0; i + value.Length <= source.Length; i++)
             {
                 for (int j = 0; j < value.Length; j++) {
-                   if (source[i + j] != value[i]) {
+                   if (source[i + j] != value[j]) {
                        break;
                    }
 
@@ -50,24 +54,31 @@ namespace System.Globalization
             Contract.Assert(value != null);
 
             // TODO: Implement This Fully.
+
+            if (value.Length == 0)
+            {
+                return startIndex;
+            }
+
             if (ignoreCase)
             {
                 source = source.ToUpper(CultureInfo.InvariantCulture);
                 value = value.ToUpper(CultureInfo.InvariantCulture);
             }
 
-            source = source.Substring(startIndex, count);
+            source = source.Substring(startIndex - count + 1, count);
 
             int last = -1;
-            int cur = 0;
 
-            while((cur = IndexOfOrdinal(source, value, 0, source.Length, false)) != -1)
+            int cur = 0;
+            while ((cur = IndexOfOrdinal(source, value, last + 1, source.Length - last - 1, false)) != -1)
             {
                 last = cur;
-                source = source.Substring(last + value.Length);
             }
 
-            return last;
+            return last >= 0 ? 
+                last + startIndex - count + 1 : 
+                -1;
         }
 
         private unsafe int GetHashCodeOfStringCore(string source, CompareOptions options)
@@ -187,11 +198,11 @@ namespace System.Globalization
                     char c1 = ignoreCase ? TextInfo.ChangeCaseAscii(s1[i]) : s1[i];
                     char c2 = ignoreCase ? TextInfo.ChangeCaseAscii(s2[i]) : s2[i];
 
-                    if (TextInfo.ChangeCaseAscii(s1[i]) < TextInfo.ChangeCaseAscii(s2[i]))
+                    if (c1 < c2)
                     {
                         return -1;
                     }
-                    else if (TextInfo.ChangeCaseAscii(s1[i]) > TextInfo.ChangeCaseAscii(s2[i]))
+                    else if (c1 > c2)
                     {
                         return 1;
                     }

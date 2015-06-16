@@ -695,12 +695,13 @@ namespace Microsoft.Win32 {
 #if !FEATURE_PAL
         internal const String KERNEL32 = "kernel32.dll";
         internal const String USER32   = "user32.dll";
+        internal const String OLE32    = "ole32.dll";
 #else //FEATURE_PAL
-        internal const String KERNEL32 = "libcoreclr.so";
-        internal const String USER32   = "libcoreclr.so";
+        internal const String KERNEL32 = "libcoreclr";
+        internal const String USER32   = "libcoreclr";
+        internal const String OLE32    = "libcoreclr";
 #endif //FEATURE_PAL         
         internal const String ADVAPI32 = "advapi32.dll";
-        internal const String OLE32    = "ole32.dll";
         internal const String OLEAUT32 = "oleaut32.dll";
         internal const String SHELL32  = "shell32.dll";
         internal const String SHIM     = "mscoree.dll";
@@ -1374,14 +1375,14 @@ namespace Microsoft.Win32 {
         [DllImport(OLE32)]
         internal extern static int CoCreateGuid(out Guid guid);
 
-        [DllImport(Win32Native.OLE32)]
+        [DllImport(OLE32)]
         internal static extern IntPtr CoTaskMemAlloc(UIntPtr cb);
 
-        [DllImport(Win32Native.OLE32)]
-        internal static extern IntPtr CoTaskMemRealloc(IntPtr pv, UIntPtr cb);
-
-        [DllImport(Win32Native.OLE32)]
+        [DllImport(OLE32)]
         internal static extern void CoTaskMemFree(IntPtr ptr);
+
+        [DllImport(OLE32)]
+        internal static extern IntPtr CoTaskMemRealloc(IntPtr pv, UIntPtr cb);
 
         [StructLayoutAttribute(LayoutKind.Sequential)]
         internal struct COORD

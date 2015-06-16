@@ -72,6 +72,53 @@ bool Lowering::CheckImmedAndMakeContained(GenTree* parentNode, GenTree* childNod
 }
 
 //------------------------------------------------------------------------
+// IsSafeToContainMem: Checks for conflicts between childNode and parentNode.
+//
+// Arguments:
+//    parentNode  - a non-leaf binary node
+//    childNode   - a memory op that is a child op of 'parentNode'
+//
+// Return value:
+//    returns true if it is safe to make childNode a contained memory op
+//
+// Notes:
+//    Checks for memory conflicts in the instructions between childNode and parentNode,
+//    and returns true iff childNode can be contained.
+
+bool Lowering::IsSafeToContainMem(GenTree* parentNode, GenTree* childNode)
+{
+    assert(parentNode->OperIsBinary());
+    assert(childNode->isMemoryOp());
+
+    // Check conflicts against nodes between 'childNode' and 'parentNode'
+    GenTree* node;
+    unsigned int childFlags = (childNode->gtFlags & GTF_ALL_EFFECT);
+    for (node = childNode->gtNext;
+         (node != parentNode) && (node != nullptr);
+         node = node->gtNext)
+    {
+        if ((childFlags != 0) && node->IsCall())
+        {
+            bool isPureHelper = (node->gtCall.gtCallType == CT_HELPER) && comp->s_helperCallProperties.IsPure(comp->eeGetHelperNum(node->gtCall.gtCallMethHnd));
+            if (!isPureHelper && ((node->gtFlags & childFlags & GTF_ALL_EFFECT) != 0))
+            {
+                return false;
+            }
+        }
+        else if (node->OperIsStore() && comp->fgNodesMayInterfere(node, childNode))
+        {
+            return false;
+        }
+    }
+    if (node != parentNode)
+    {
+        assert(!"Ran off end of stmt\n");
+        return false;
+    }
+    return true;
+}
+
+//------------------------------------------------------------------------
 
 Compiler::fgWalkResult Lowering::DecompNodeHelper(GenTreePtr* pTree, Compiler::fgWalkData* data)
 {
@@ -415,76 +462,6 @@ GenTreePtr Lowering::CreateLocalTempAsg(GenTreePtr rhs,
     store->gtFlags = (rhs->gtFlags & GTF_COMMON_MASK);
     store->gtFlags |= GTF_VAR_DEF;
     return store;
-}
-
-/** Creates a byref to byref assignment where the actual values are not
-  * GC pointers.  The assignment has the following shape:
-  * [dstObj + scale*index + offset] = [srcObj + scale*index + offset]
-  * The IR generated for this is:
-  *     GT_ASG(
-  *              GT_IND(
-  *                         GT_LEA(dstObj, index, scale, offset)),
-  *              GT_IND(
-  *                         GT_LEA(srcObj, index, scale, offset)))
-  */
-GenTreePtr  Lowering::CreateAsgByRefNonGcStmt (Compiler* comp,
-                                               BasicBlock* block,
-                                               GenTreePtr srcObj,
-                                               GenTreePtr dstObj,
-                                               GenTreePtr index,
-                                               unsigned scale,
-                                               unsigned offset)
-{
-    assert(srcObj != nullptr && dstObj != nullptr);
-    var_types type = TYP_INT;
-    switch (scale)
-    {
-    case 4:
-        type = TYP_INT;
-        break;
-    case 2:
-        type = TYP_USHORT;
-        break;
-    case 1:
-        type = TYP_UBYTE;
-        break;
-    default:
-        noway_assert(!"Unsupported scale size for addressing modes");
-    }
-    GenTreePtr gtClonedSrc = comp->gtClone(srcObj);
-    GenTreePtr gtClonedDst = comp->gtClone(dstObj);
-    GenTreePtr gtClonedIndex = nullptr;
-    GenTreePtr gtClonedIndex2 = nullptr;
-
-    assert(gtClonedSrc != nullptr && gtClonedDst != nullptr);
-
-    if (index != nullptr)
-    {
-        gtClonedIndex = comp->gtClone(index);
-        gtClonedIndex2 = comp->gtClone(index);
-        assert(gtClonedIndex != nullptr && gtClonedIndex2 != nullptr);
-    }
-
-    GenTreePtr gtSrcAddrNode = new(comp, GT_LEA) GenTreeAddrMode(type,
-        gtClonedSrc,
-        gtClonedIndex,
-        scale,
-        offset);
-    GenTreePtr gtSrcIndirNode = comp->gtNewOperNode(GT_IND,
-        type,
-        gtSrcAddrNode);
-    GenTreePtr gtDstAddrNode = new(comp, GT_LEA) GenTreeAddrMode(type,
-        gtClonedDst,
-        gtClonedIndex2,
-        scale,
-        offset);
-    GenTreePtr gtDstIndirNode = comp->gtNewOperNode(GT_IND,
-        type,
-        gtDstAddrNode);
-    GenTreePtr gtByRefAsgStmt = comp->fgNewStmtFromTree(
-        comp->gtNewAssignNode(gtDstIndirNode, gtSrcIndirNode),
-        block);
-    return gtByRefAsgStmt;
 }
 
 // This is the main entry point for Lowering.  
@@ -1383,12 +1360,12 @@ void Lowering::LowerCall(GenTree* node)
     comp->fgDebugCheckNodeLinks(comp->compCurBB, callStmt);
 #endif
 
-#if defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
-    CheckVSQuirkStackPaddingNeeded(call);
-#endif
+    if (comp->opts.IsJit64Compat())
+    {
+        CheckVSQuirkStackPaddingNeeded(call);
+    }
 }
 
-#if defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
 // Though the below described issue gets fixed in intellitrace dll of VS2015 (a.k.a Dev14), 
 // we still need this quirk for desktop so that older version of VS (e.g. VS2010/2012)
 // continues to work.
@@ -1438,6 +1415,9 @@ void Lowering::LowerCall(GenTree* node)
 // more tolerant fix.  One such fix is to padd the struct.
 void Lowering::CheckVSQuirkStackPaddingNeeded(GenTreeCall* call)
 {
+    assert(comp->opts.IsJit64Compat());
+
+#ifdef _TARGET_AMD64_
     // Confine this to IL stub calls which aren't marked as unmanaged.
     if (call->IsPInvoke() && !call->IsUnmanaged())
     {
@@ -1489,8 +1469,8 @@ void Lowering::CheckVSQuirkStackPaddingNeeded(GenTreeCall* call)
             comp->compVSQuirkStackPaddingNeeded = VSQUIRK_STACK_PAD;
         }
     }
+#endif // _TARGET_AMD64_
 }
-#endif //_TARGET_AMD64_ && !FEATURE_CORECLR
 
 // Inserts profiler hook, GT_PROF_HOOK for a tail call node.
 //
@@ -2083,6 +2063,7 @@ GenTree* Lowering::LowerDelegateInvoke(GenTreeCall* call)
     originalThisValue->InsertAfterSelf(newThisAddr);
 
     GenTree* newThis = comp->gtNewOperNode(GT_IND, TYP_REF, newThisAddr);
+    newThis->SetCosts(IND_COST_EX, 2);
     newThisAddr->InsertAfterSelf(newThis);
     *pThisExpr = newThis;
 

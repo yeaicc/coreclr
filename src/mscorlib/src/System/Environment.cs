@@ -428,6 +428,28 @@ namespace System {
 
             int currentSize = 100;
             StringBuilder blob = new StringBuilder(currentSize); // A somewhat reasonable default size
+
+#if PLATFORM_UNIX // Win32Native.ExpandEnvironmentStrings isn't available
+            int lastPos = 0, pos;
+            while (lastPos < name.Length && (pos = name.IndexOf('%', lastPos + 1)) >= 0)
+            {
+                if (name[lastPos] == '%')
+                {
+                    string key = name.Substring(lastPos + 1, pos - lastPos - 1);
+                    string value = Environment.GetEnvironmentVariable(key);
+                    if (value != null)
+                    {
+                        blob.Append(value);
+                        lastPos = pos + 1;
+                        continue;
+                    }
+                }
+                blob.Append(name.Substring(lastPos, pos - lastPos));
+                lastPos = pos;
+            }
+            blob.Append(name.Substring(lastPos));
+#else
+
             int size;
 
 #if !FEATURE_CORECLR
@@ -501,6 +523,7 @@ namespace System {
                 if (size == 0)
                     Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
             }
+#endif // PLATFORM_UNIX
 
             return blob.ToString();
         }
@@ -1032,7 +1055,12 @@ namespace System {
         ==============================================================================*/
         public static Version Version {
             get {
-                return new Version(ThisAssembly.InformationalVersion);
+
+                // Previously this represented the File version of mscorlib.dll.  Many other libraries in the framework and outside took dependencies on the first three parts of this version 
+                // remaining constant throughout 4.x.  From 4.0 to 4.5.2 this was fine since the file version only incremented the last part.Starting with 4.6 we switched to a file versioning
+                // scheme that matched the product version.  In order to preserve compatibility with existing libraries, this needs to be hard-coded.
+                
+                return new Version(4,0,30319,42000);
             }
         }
 

@@ -252,15 +252,21 @@
 #include <mscoruefwrapper.h>
 #endif // FEATURE_UEF_CHAINMANAGER
 
+#ifdef FEATURE_PERFMAP
+#include "perfmap.h"
+#endif
+
 #ifdef FEATURE_IPCMAN
 static HRESULT InitializeIPCManager(void);
 static void PublishIPCManager(void);
 static void TerminateIPCManager(void);
 #endif // FEATURE_IPCMAN
 
+#ifndef CROSSGEN_COMPILE
 static int GetThreadUICultureId(__out LocaleIDValue* pLocale);  // TODO: This shouldn't use the LCID.  We should rely on name instead
 
 static HRESULT GetThreadUICultureNames(__inout StringArrayList* pCultureNames);
+#endif // !CROSSGEN_COMPILE
 
 HRESULT EEStartup(COINITIEE fFlags);
 #ifdef FEATURE_FUSION
@@ -282,6 +288,7 @@ BOOL STDMETHODCALLTYPE ExecuteDLL(HINSTANCE hInst,
 BOOL STDMETHODCALLTYPE ExecuteEXE(HMODULE hMod);
 BOOL STDMETHODCALLTYPE ExecuteEXE(__in LPWSTR pImageNameIn);
 
+#ifndef CROSSGEN_COMPILE
 static void InitializeGarbageCollector();
 
 #ifdef DEBUGGING_SUPPORTED
@@ -289,6 +296,7 @@ static void InitializeDebugger(void);
 static void TerminateDebugger(void);
 extern "C" HRESULT __cdecl CorDBGetInterface(DebugInterface** rcInterface);
 #endif // DEBUGGING_SUPPORTED
+#endif // !CROSSGEN_COMPILE
 
 
 #if !defined(FEATURE_CORECLR) && !defined(CROSSGEN_COMPILE)
@@ -882,10 +890,7 @@ void EEStartupHelper(COINITIEE fFlags)
 
         // Fire the EE startup ETW event
         ETWFireEvent(EEStartupStart_V1);
-
-        // Fire the runtime information ETW event
-        ETW::InfoLog::RuntimeInformation(ETW::InfoLog::InfoStructs::Normal);
-#endif // FEATURE_EVENT_TRACE        
+#endif // FEATURE_EVENT_TRACE
 
 #ifdef FEATURE_IPCMAN
         // Give PerfMon a chance to hook up to us
@@ -929,6 +934,10 @@ void EEStartupHelper(COINITIEE fFlags)
         PerfLog::PerfLogInitialize();
 #endif //ENABLE_PERF_LOG
 
+#ifdef FEATURE_PERFMAP
+        PerfMap::Initialize();
+#endif
+
         STRESS_LOG0(LF_STARTUP, LL_ALWAYS, "===================EEStartup Starting===================");
 
 #ifndef CROSSGEN_COMPILE
@@ -953,6 +962,9 @@ void EEStartupHelper(COINITIEE fFlags)
         {
             IfFailGoLog(g_pConfig->sync());        
         }
+
+        // Fire the runtime information ETW event
+        ETW::InfoLog::RuntimeInformation(ETW::InfoLog::InfoStructs::Normal);
 
         if (breakOnEELoad.val(CLRConfig::UNSUPPORTED_BreakOnEELoad) == 1)
         {
@@ -1408,6 +1420,10 @@ HRESULT EEStartup(COINITIEE fFlags)
     STATIC_CONTRACT_NOTHROW;
 
     _ASSERTE(!g_fEEStarted && !g_fEEInit && SUCCEEDED (g_EEStartupStatus));
+
+#if defined(FEATURE_PAL) && !defined(CROSSGEN_COMPILE)
+    DacGlobals::Initialize();
+#endif
 
     PAL_TRY(COINITIEE *, pfFlags, &fFlags)
     {
@@ -1898,6 +1914,19 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
                 ThreadSuspend::RestartEE(FALSE, TRUE);
             }
         }
+
+#ifdef FEATURE_EVENT_TRACE
+        // Flush managed object allocation logging data.
+        // We do this after finalization is complete and returning threads have been trapped, so that
+        // no there will be no more managed allocations and no more GCs which will manipulate the
+        // allocation sampling data structures.
+        ETW::TypeSystemLog::FlushObjectAllocationEvents();
+#endif // FEATURE_EVENT_TRACE
+
+#ifdef FEATURE_PERFMAP
+        // Flush and close the perf map file.
+        PerfMap::Destroy();
+#endif
 
 #ifdef FEATURE_PREJIT
         // If we're doing basic block profiling, we need to write the log files to disk.

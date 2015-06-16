@@ -24,6 +24,7 @@ class Thread;
 #include "interoputil.h"
 
 BOOL IsExceptionFromManagedCode(const EXCEPTION_RECORD * pExceptionRecord);
+bool IsIPInMarkedJitHelper(UINT_PTR uControlPc);
 
 #if defined(_TARGET_AMD64_) && defined(FEATURE_HIJACK)
 
@@ -746,8 +747,6 @@ BOOL IsInFirstFrameOfHandler(Thread *pThread,
 // Handy helper functions
 //==========================================================================
 LONG FilterAccessViolation(PEXCEPTION_POINTERS pExceptionPointers, LPVOID lpvParam);
-
-bool IsInstrModifyFault(PEXCEPTION_POINTERS pExceptionInfo);
 
 bool IsContinuableException(Thread *pThread);
 

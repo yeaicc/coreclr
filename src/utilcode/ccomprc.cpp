@@ -10,12 +10,15 @@
 #include "ndpversion.h"
 
 #include "../dlls/mscorrc/resource.h"
+#include "../dlls/mscorrc/resourcestring.h"
 #include "sstring.h"
 #include "stringarraylist.h"
 
+#include <stdlib.h>
+
 #ifdef USE_FORMATMESSAGE_WRAPPER
 // we implement the wrapper for FormatMessageW. 
-// Need access to  the original 
+// Need access to the original 
 #undef WszFormatMessage
 #define WszFormatMessage ::FormatMessageW
 #endif
@@ -262,6 +265,11 @@ LPCWSTR CCompRC::m_pDefaultResource = W("mscorrc.debug.dll");
 LPCWSTR CCompRC::m_pFallbackResource= W("mscorrc.dll");
 #endif // !FEATURE_CORECLR
 
+#ifdef FEATURE_PAL
+LPCSTR CCompRC::m_pDefaultResourceDomain = "mscorrc.debug";
+LPCSTR CCompRC::m_pFallbackResourceDomain = "mscorrc";
+#endif // FEATURE_PAL
+
 HRESULT CCompRC::Init(LPCWSTR pResourceFile, BOOL bUseFallback)
 {
     CONTRACTL
@@ -307,6 +315,29 @@ HRESULT CCompRC::Init(LPCWSTR pResourceFile, BOOL bUseFallback)
     {
         return E_OUTOFMEMORY;
     }
+
+#ifdef FEATURE_PAL
+
+    if (m_pResourceFile == m_pDefaultResource)
+    {
+        m_pResourceDomain = m_pDefaultResourceDomain;
+    }
+    else if (m_pResourceFile == m_pFallbackResource)
+    {
+        m_pResourceDomain = m_pFallbackResourceDomain;
+    }
+    else
+    {
+        _ASSERTE(!"Unsupported resource file");
+    }
+
+    if (!PAL_BindResources(m_pResourceDomain))
+    {
+        // The function can fail only due to OOM
+        return E_OUTOFMEMORY;
+    }
+
+#endif // FEATURE_PAL
 
     if (m_csMap == NULL)
     {
@@ -666,6 +697,21 @@ HRESULT CCompRC::LoadString(ResourceCategory eCategory, UINT iResourceID, __out_
     return LoadString(eCategory, langId, iResourceID, szBuffer, iMax, pcwchUsed);
 }
 
+// Used for comparing NativeStringResource elements by ID.
+int CompareNativeStringResources(const void *a, const void *b)
+{
+    unsigned int resourceIdA = ((NativeStringResource*)a)->resourceId;
+    unsigned int resourceIdB = ((NativeStringResource*)b)->resourceId;
+
+    if (resourceIdA < resourceIdB)
+        return -1;
+
+    if (resourceIdA == resourceIdB)
+        return 0;
+
+    return 1;
+}
+
 HRESULT CCompRC::LoadString(ResourceCategory eCategory, LocaleID langId, UINT iResourceID, __out_ecount(iMax) LPWSTR szBuffer, int iMax, int *pcwchUsed)
 {
     CONTRACTL
@@ -773,7 +819,7 @@ HRESULT CCompRC::LoadString(ResourceCategory eCategory, LocaleID langId, UINT iR
                                 if (szBuffer && iMax)
                                     *szBuffer = W('\0');
 
-                                length = iMax;                                
+                                length = iMax;
                                 hr=HRESULT_FROM_GetLastError();
                             }
 
@@ -799,7 +845,7 @@ HRESULT CCompRC::LoadString(ResourceCategory eCategory, LocaleID langId, UINT iR
                 // if we got here then we couldn't get the fallback message
                 // the fallback message is required so just falling through into "Required"
                 
-#else  // FEATURE_CORECLR                  
+#else  // FEATURE_CORECLR
             // everything that's not optional goes here for Desktop
             case DesktopCLR:
             case Debugging:
@@ -809,9 +855,10 @@ HRESULT CCompRC::LoadString(ResourceCategory eCategory, LocaleID langId, UINT iR
 
                 if ( hr != E_OUTOFMEMORY)
                 {
-                    // Shouldn't be any reason for this condition but the case where we
-                    // used the wrong ID or didn't update the resource DLL.
-                    _ASSERTE(0);
+                    // Shouldn't be any reason for this condition but the case where
+                    // the resource dll is missing, code used the wrong ID or developer didn't 
+                    // update the resource DLL.
+                    _ASSERTE(!"Missing mscorrc.dll or mscorrc.debug.dll?");
                     hr = HRESULT_FROM_GetLastError();
                 }
                 break;
@@ -819,7 +866,7 @@ HRESULT CCompRC::LoadString(ResourceCategory eCategory, LocaleID langId, UINT iR
                 {
                     _ASSERTE(!"Invalid eCategory");
                 }
-        }                
+        }
     }
 
     // Return an empty string to save the people with a bad error handling
@@ -827,13 +874,46 @@ HRESULT CCompRC::LoadString(ResourceCategory eCategory, LocaleID langId, UINT iR
         *szBuffer = W('\0');
 
     return hr;
-#else  // !FEATURE_PAL
-    PORTABILITY_ASSERT("UNIXTODO: Implement string loading from resources");
+#else // !FEATURE_PAL
+    int len = 0;
+    if (szBuffer && iMax)
+    {
+        // Search the sorted set of resources for the ID we're interested in.
+        NativeStringResource searchEntry = {iResourceID, NULL};
+        NativeStringResource *resourceEntry = (NativeStringResource*)bsearch(
+            &searchEntry,
+            nativeStringResources,
+            NUMBER_OF_NATIVE_STRING_RESOURCES,
+            sizeof(NativeStringResource),
+            CompareNativeStringResources);
+
+        if (resourceEntry != NULL)
+        {
+            len = PAL_GetResourceString(m_pResourceDomain, resourceEntry->resourceString, szBuffer, iMax);
+        }
+        else
+        {
+            // The resource ID wasn't found in our array. Fall back on returning the ID as a string.
+            len = _snwprintf(szBuffer, iMax - 1, W("[Undefined resource string ID:0x%X]"), iResourceID);
+            if ((len < 0) || (len == (iMax - 1)))
+            {
+                // Add string terminator if the result of _snwprintf didn't fit the buffer.
+                szBuffer[iMax - 1] = W('\0');
+                len = iMax - 1;
+            }
+        }
+    }
+
+    if (pcwchUsed)
+    {
+        *pcwchUsed = len;
+    }
+
     return S_OK;
 #endif // !FEATURE_PAL
 }
 
-#ifndef DACCESS_COMPILE    
+#ifndef DACCESS_COMPILE
 HRESULT CCompRC::LoadMUILibrary(HRESOURCEDLL * pHInst)
 {
     WRAPPER_NO_CONTRACT;

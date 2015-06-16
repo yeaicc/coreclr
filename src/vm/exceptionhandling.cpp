@@ -93,6 +93,10 @@ bool FixNonvolatileRegisters(UINT_PTR  uOriginalSP,
 
 MethodDesc * GetUserMethodForILStub(Thread * pThread, UINT_PTR uStubSP, MethodDesc * pILStubMD, Frame ** ppFrameOut);
 
+#ifdef FEATURE_PAL
+VOID PALAPI HandleHardwareException(PAL_SEHException* ex);
+#endif // FEATURE_PAL
+
 static ExceptionTracker* GetTrackerMemory()
 {
     CONTRACTL
@@ -148,6 +152,11 @@ void InitializeExceptionHandling()
 
     // Initialize the lock used for synchronizing access to the stacktrace in the exception object
     g_StackTraceArrayLock.Init(LOCK_TYPE_DEFAULT, TRUE);
+
+#ifdef FEATURE_PAL
+    // Register handler of hardware exceptions like null reference in PAL
+    PAL_SetHardwareExceptionHandler(HandleHardwareException);
+#endif // FEATURE_PAL
 }
 
 struct UpdateObjectRefInResumeContextCallbackState
@@ -189,7 +198,7 @@ StackWalkAction UpdateObjectRefInResumeContextCallback(CrawlFrame* pCF, LPVOID p
         // 
         // It is possible that a managed frame may execute a PInvoke after performing a stackalloc:
         // 
-        // 1) The Evanesco JIT will always inline the PInvoke in the managed frame, whether or not the frame
+        // 1) The ARM JIT will always inline the PInvoke in the managed frame, whether or not the frame
         //    contains EH. As a result, the ICF will live in the same frame which performs stackalloc.
         //    
         // 2) JIT64 will only inline the PInvoke in the managed frame if the frame *does not* contain EH. If it does,
@@ -197,11 +206,11 @@ StackWalkAction UpdateObjectRefInResumeContextCallback(CrawlFrame* pCF, LPVOID p
         //    from the one (ILStub) that contains the ICF.
         //    
         // Thus, for the scenario where the catch handler lives in the frame that performed stackalloc, in case of
-        // Evanesco JIT, the SP returned by the OS will be the SP *after* the stackalloc has happened. However,
+        // ARM JIT, the SP returned by the OS will be the SP *after* the stackalloc has happened. However,
         // the stackwalker will invoke this callback with the CrawlFrameSP that was initialized at the time ICF was setup, i.e.,
         // it will be the SP after the prolog has executed (refer to InlinedCallFrame::UpdateRegDisplay). 
         // 
-        // Thus, checking only the SP will not work for this scenario when using the Evanesco JIT.
+        // Thus, checking only the SP will not work for this scenario when using the ARM JIT.
         // 
         // To address this case, the callback data also contains the frame pointer (FP) passed by the OS. This will
         // be the value that is saved in the "CalleeSavedFP" field of the InlinedCallFrame during ICF 
@@ -273,7 +282,7 @@ StackWalkAction UpdateObjectRefInResumeContextCallback(CrawlFrame* pCF, LPVOID p
 
 //
 // Locates the locations of the nonvolatile registers.  This will be used to
-// retrive the latest values of the object references before we resume
+// retrieve the latest values of the object references before we resume
 // execution from an exception.
 //
 //static
@@ -362,14 +371,26 @@ void ExceptionTracker::UpdateNonvolatileRegisters(CONTEXT *pContextRecord, REGDI
         pAbortContext = GetThread()->GetAbortContext();
     }
 
+#ifndef FEATURE_PAL
+#define HANDLE_NULL_CONTEXT_POINTER _ASSERTE(false)
+#else // FEATURE_PAL
+#define HANDLE_NULL_CONTEXT_POINTER
+#endif // FEATURE_PAL
+
 #define UPDATEREG(reg)                                                                      \
     do {                                                                                    \
-        _ASSERTE(pRegDisplay->pCurrentContextPointers->reg != NULL);                        \
-        STRESS_LOG3(LF_GCROOTS, LL_INFO100, "Updating reg %p to %p from %p\n",              \
-                pContextRecord->reg,                                                        \
-                *pRegDisplay->pCurrentContextPointers->reg,                                 \
-                pRegDisplay->pCurrentContextPointers->reg);                                 \
-        pContextRecord->reg = *pRegDisplay->pCurrentContextPointers->reg;                   \
+        if (pRegDisplay->pCurrentContextPointers->reg != NULL)                              \
+        {                                                                                   \
+            STRESS_LOG3(LF_GCROOTS, LL_INFO100, "Updating reg %p to %p from %p\n",          \
+                    pContextRecord->reg,                                                    \
+                    *pRegDisplay->pCurrentContextPointers->reg,                             \
+                    pRegDisplay->pCurrentContextPointers->reg);                             \
+            pContextRecord->reg = *pRegDisplay->pCurrentContextPointers->reg;               \
+        }                                                                                   \
+        else                                                                                \
+        {                                                                                   \
+            HANDLE_NULL_CONTEXT_POINTER;                                                    \
+        }                                                                                   \
         if (pAbortContext)                                                                  \
         {                                                                                   \
             pAbortContext->reg = pContextRecord->reg;                                       \
@@ -1014,6 +1035,7 @@ ProcessCLRException(IN     PEXCEPTION_RECORD   pExceptionRecord
 
             SetLastError(dwLastError);
 
+#ifndef FEATURE_PAL
             //
             // At this point (the end of the 1st pass) we don't know where
             // we are going to resume to.  So, we pass in an address, which
@@ -1039,6 +1061,14 @@ ProcessCLRException(IN     PEXCEPTION_RECORD   pExceptionRecord
             //
             // doesn't return
             //
+#else
+            // On Unix, we will return ExceptionStackUnwind back to the custom
+            // exception dispatch system. When it sees this disposition, it will
+            // know that we want to handle the exception and will commence unwind
+            // via the custom unwinder.
+            return ExceptionStackUnwind;
+
+#endif // FEATURE_PAL
         }
         else if (SecondPassComplete == status)
         {
@@ -1050,7 +1080,7 @@ ProcessCLRException(IN     PEXCEPTION_RECORD   pExceptionRecord
 
             pDispatcherContext->ContextRecord = pContextRecord;
 
-            // We maybe in COOP mode at this point - the indefinite switch was done
+            // We may be in COOP mode at this point - the indefinite switch was done
             // in ExceptionTracker::ProcessManagedCallFrame.
             // 
             // However, if a finally was invoked non-exceptionally and raised an exception
@@ -1559,7 +1589,7 @@ CLRUnwindStatus ExceptionTracker::ProcessOSExceptionNotification(
     // It should be kept in mind that by the virtue of copying the information below, we will
     // have it available for the first frame seen during the unwind pass (which will be the
     // frame where ThreadAbort was raised after the catch block) for us to skip any termination
-    // handlers that maybe present prior to the EH clause whose index we saved.
+    // handlers that may be present prior to the EH clause whose index we saved.
     DWORD dwTACatchHandlerClauseIndex = pThread->m_dwIndexClauseForCatch;
     StackFrame sfEstablisherOfActualHandlerFrame = pThread->m_sfEstablisherOfActualHandlerFrame;
     if (!fIsFirstPass)
@@ -1640,7 +1670,7 @@ CLRUnwindStatus ExceptionTracker::ProcessOSExceptionNotification(
             // To account for this ICF codegen difference, in the EH system we check if the current 
             // Frame is an ICF or not. If it is and lies inside the current managed method, we 
             // keep a reference to it and reset the LimitFrame to this saved reference before we
-            // return back to invoke the catc handler. 
+            // return back to invoke the catch handler. 
             //
             // Thus, if there is another PInvoke call post the catch handler, it will find ICF as expected.
             //
@@ -1753,8 +1783,8 @@ CLRUnwindStatus ExceptionTracker::ProcessOSExceptionNotification(
             //    unwound.
             //
             // If the current frame is NOT the target of unwind, update the last unwound
-            // establisher frame. We dont do this for "target of unwind" since it has the catch handler, for a
-            // dupilcate EH clause reported in the funclet, that needs to be invoked and thus, may have valid 
+            // establisher frame. We don't do this for "target of unwind" since it has the catch handler, for a
+            // duplicate EH clause reported in the funclet, that needs to be invoked and thus, may have valid 
             // references to report for GC reporting.
             //
             // If we are not skipping the managed frame, then LastUnwoundEstablisherFrame will be updated later in this method,
@@ -1803,7 +1833,7 @@ CLRUnwindStatus ExceptionTracker::ProcessOSExceptionNotification(
 lExit:
 
     // If we are unwinding and have returned successfully from unwinding the frame, then mark it as the last unwound frame for the current
-    // exception. We dont do this if the frame is target of unwind(i.e. handling the exception) since catch block invocation may have references to be
+    // exception. We don't do this if the frame is target of unwind (i.e. handling the exception) since catch block invocation may have references to be
     // reported (if a GC happens during catch block invocation).
     //
     // If an exception escapes out of a funclet (this is only possible for fault/finally/catch clauses), then we will not return here.
@@ -2023,6 +2053,13 @@ bool ExceptionTracker::HandleNestedExceptionEscape(StackFrame sf, bool fIsFirstP
 
         if (!fIsFirstPass)
         {
+
+            // During unwind, at each frame we collapse exception trackers only once i.e. there cannot be multiple
+            // exception trackers that are collapsed at each frame. Store the information of collapsed exception 
+            // tracker in current tracker to be able to find the parent frame when nested exception escapes.
+            m_csfEHClauseOfCollapsedTracker = m_pPrevNestedInfo->m_EHClauseInfo.GetCallerStackFrameForEHClause();
+            m_EnclosingClauseInfoOfCollapsedTracker = m_pPrevNestedInfo->m_EnclosingClauseInfoForGCReporting;
+
             EH_LOG((LL_INFO100, "    - removing previous tracker\n"));
 
             ExceptionTracker* pTrackerToFree = m_pPrevNestedInfo;
@@ -2558,7 +2595,7 @@ CLRUnwindStatus ExceptionTracker::ProcessManagedCallFrame(
             
             if (!fIsFirstPass)
             {
-                // For a method that may have nested funclets, it is possible that a reference maybe
+                // For a method that may have nested funclets, it is possible that a reference may be
                 // dead at the point where control flow left the method but may become active once
                 // a funclet is executed.
                 // 
@@ -2571,7 +2608,7 @@ CLRUnwindStatus ExceptionTracker::ProcessManagedCallFrame(
                 // To address this, we will indefinitely switch to COOP mode while enumerating, and invoking,
                 // funclets.
                 //
-                // This switch is also required for another scenario: we maybe in unwind phase and the current frame
+                // This switch is also required for another scenario: we may be in unwind phase and the current frame
                 // may not have any termination handlers to be invoked (i.e. it may have zero EH clauses applicable to
                 // the unwind phase). If we do not switch to COOP mode for such a frame, we could remain in preemp mode.
                 // Upon returning back from ProcessOSExceptionNotification in ProcessCLRException, when we attempt to
@@ -3228,6 +3265,19 @@ DWORD_PTR ExceptionTracker::CallHandler(
     this->m_EHClauseInfo.SetManagedCodeEntered(TRUE);
     this->m_EHClauseInfo.SetCallerStackFrame(csfFunclet);
 
+    switch(funcletType)
+    {
+    case EHFuncletType::Filter:
+        ETW::ExceptionLog::ExceptionFilterBegin(pMD, (PVOID)uHandlerStartPC);
+        break;
+    case EHFuncletType::FaultFinally:
+        ETW::ExceptionLog::ExceptionFinallyBegin(pMD, (PVOID)uHandlerStartPC);
+        break;
+    case EHFuncletType::Catch:
+        ETW::ExceptionLog::ExceptionCatchBegin(pMD, (PVOID)uHandlerStartPC);
+        break;
+    }
+
 #if defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
     // Invoke the funclet. We pass throwable only when invoking the catch block.
     // Since the actual caller of the funclet is the assembly helper, pass the reference
@@ -3266,6 +3316,20 @@ DWORD_PTR ExceptionTracker::CallHandler(
     //    
     dwResumePC = pfnHandler(sf.SP, OBJECTREFToObject(throwable));
 #endif // _TARGET_ARM_
+
+    switch(funcletType)
+    {
+    case EHFuncletType::Filter:
+        ETW::ExceptionLog::ExceptionFilterEnd();
+        break;
+    case EHFuncletType::FaultFinally:
+        ETW::ExceptionLog::ExceptionFinallyEnd();
+        break;
+    case EHFuncletType::Catch:
+        ETW::ExceptionLog::ExceptionCatchEnd();
+        ETW::ExceptionLog::ExceptionThrownEnd();
+        break;
+    }
 
     this->m_EHClauseInfo.SetManagedCodeEntered(FALSE);
 
@@ -3488,6 +3552,34 @@ void ExceptionTracker::PopTrackers(
     }
 }
 
+// Save the state of the source exception tracker
+void ExceptionTracker::PartialTrackerState::Save(const ExceptionTracker* pSourceTracker)
+{
+    m_uCatchToCallPC = pSourceTracker->m_uCatchToCallPC;
+    m_pClauseForCatchToken = pSourceTracker->m_pClauseForCatchToken;
+    m_ClauseForCatch = pSourceTracker->m_ClauseForCatch;
+    m_ExceptionFlags = pSourceTracker->m_ExceptionFlags;
+    m_sfLastUnwoundEstablisherFrame = pSourceTracker->m_sfLastUnwoundEstablisherFrame;
+    m_EHClauseInfo = pSourceTracker->m_EHClauseInfo;
+    m_EnclosingClauseInfo = pSourceTracker->m_EnclosingClauseInfo;
+    m_EnclosingClauseInfoForGCReporting = pSourceTracker->m_EnclosingClauseInfoForGCReporting;
+    m_fFixupCallerSPForGCReporting = pSourceTracker->m_fFixupCallerSPForGCReporting;
+}
+
+// Restore the state into the target exception tracker
+void ExceptionTracker::PartialTrackerState::Restore(ExceptionTracker* pTargetTracker)
+{
+    pTargetTracker->m_uCatchToCallPC = m_uCatchToCallPC;
+    pTargetTracker->m_pClauseForCatchToken = m_pClauseForCatchToken;
+    pTargetTracker->m_ClauseForCatch = m_ClauseForCatch;
+    pTargetTracker->m_ExceptionFlags = m_ExceptionFlags;
+    pTargetTracker->m_sfLastUnwoundEstablisherFrame = m_sfLastUnwoundEstablisherFrame;
+    pTargetTracker->m_EHClauseInfo = m_EHClauseInfo;
+    pTargetTracker->m_EnclosingClauseInfo = m_EnclosingClauseInfo;
+    pTargetTracker->m_EnclosingClauseInfoForGCReporting = m_EnclosingClauseInfoForGCReporting;
+    pTargetTracker->m_fFixupCallerSPForGCReporting = m_fFixupCallerSPForGCReporting;
+}
+
 //
 // static
 ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
@@ -3517,12 +3609,19 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
 
     bool fCreateNewTracker = false;
     bool fIsRethrow = false;
+    bool fIsInterleavedHandling = false;
+    bool fTransitionFromSecondToFirstPass = false;
+
+    PartialTrackerState previousTrackerPartialState;
 
     // Initialize the out parameter.
     *pStackTraceState = STS_Append;
 
     if (NULL != pTracker)
     {
+        fTransitionFromSecondToFirstPass = fIsFirstPass && !pTracker->IsInFirstPass();
+        fIsInterleavedHandling = !!pTracker->m_ExceptionFlags.IsInterleavedHandling();
+
         CONSISTENCY_CHECK(!pTracker->m_ScannedStackRange.IsEmpty());
 
         if (pTracker->m_ExceptionFlags.IsRethrown())
@@ -3546,12 +3645,24 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
             _ASSERTE( ( sf == pTracker->m_ScannedStackRange.GetUpperBound() ) ||
                       ( fIsFirstPass || !pTracker->IsInFirstPass() ) );
 
-            if (fIsFirstPass && !pTracker->IsInFirstPass())
+            if (fTransitionFromSecondToFirstPass)
             {
-                // We just transition from 2nd pass to 1st pass without knowing it.
-                // This means that some unmanaged frame outside of the EE catches the previous exception,
-                // so we should trash the current tracker and create a new one.
-                EH_LOG((LL_INFO100, ">>NEW exception (the previous second pass finishes at some unmanaged frame outside of the EE)\n"));
+                if (fIsInterleavedHandling)
+                {
+                    // Remember part of the current state that needs to be transferred to
+                    // the newly created tracker.
+                    previousTrackerPartialState.Save(pTracker);
+
+                    // We just transitioned from 2nd pass to 1st pass when we handle the exception in an interleaved manner
+                    EH_LOG((LL_INFO100, ">>continued processing of PREVIOUS exception (interleaved handling)\n"));
+                }
+                else
+                {
+                    // We just transition from 2nd pass to 1st pass without knowing it.
+                    // This means that some unmanaged frame outside of the EE catches the previous exception,
+                    // so we should trash the current tracker and create a new one.
+                    EH_LOG((LL_INFO100, ">>NEW exception (the previous second pass finishes at some unmanaged frame outside of the EE)\n"));
+                }
 
                 {
                     GCX_COOP();
@@ -3630,6 +3741,17 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
                                            pExceptionRecord,
                                            pContextRecord);
 
+        if (fIsInterleavedHandling && fTransitionFromSecondToFirstPass)
+        {
+            // In interleaved exception handling a single exception is handled in an interleaved
+            // series of first and second passes. When we create a new tracker as a result
+            // of switching from the 2nd pass back to the 1st pass, we need to carry over
+            // several members that were set when processing one of the previous frames.
+            previousTrackerPartialState.Restore(pNewTracker);
+            // Reset the 'unwind has started' flag to indicate we are in the first pass again
+            pNewTracker->m_ExceptionFlags.ResetUnwindHasStarted();
+        }
+
         CONSISTENCY_CHECK(pNewTracker->IsValid());
         CONSISTENCY_CHECK(pThread == pNewTracker->m_pThread);
 
@@ -3640,11 +3762,11 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
 
         // We always create a throwable in the first pass when we first see an exception.
         //
-        // On 64bit, everytime the exception passes beyond a boundary (e.g. RPInvoke call, or CallDescrWorker call),
+        // On 64bit, every time the exception passes beyond a boundary (e.g. RPInvoke call, or CallDescrWorker call),
         // the exception trackers that were created below (stack growing down) that boundary are released, during the 2nd pass,
-        //  if the exception was not caught in managed code. This is because the catcher is in native code and managed exception
+        // if the exception was not caught in managed code. This is because the catcher is in native code and managed exception
         // data structures are for use of VM only when the exception is caught in managed code. Also, passing by such 
-        // boundaries is our only oppurtunity to release such internal structures and not leak the memory.
+        // boundaries is our only opportunity to release such internal structures and not leak the memory.
         //
         // However, in certain case, release of exception trackers at each boundary can prove to be a bit aggressive.
         // Take the example below where "VM" prefix refers to a VM frame and "M" prefix refers to a managed frame on the stack.
@@ -3686,13 +3808,13 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
         }
         
         // When dealing with SQL Hosting like scenario, a real SO
-        // maybe caught in native code. As a result, CRT will perform
+        // may be caught in native code. As a result, CRT will perform
         // STATUS_UNWIND_CONSOLIDATE that will result in replacing
         // the exception record in ProcessCLRException. This replaced
         // exception record will point to the exception record for original
         // SO for which we will not have created a throwable in the first pass
         // due to the SO-specific early exit code in ProcessCLRException.
-        // //
+        //
         // Thus, if we see that we are here for SO in the 2nd pass, then
         // we shouldn't attempt to create a throwable.
         if ((!fIsFirstPass) && (IsSOExceptionCode(pExceptionRecord->ExceptionCode)))
@@ -3777,10 +3899,11 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
                 // scanned stack range.
                 pTracker->m_sfFirstPassTopmostFrame = pTracker->m_ScannedStackRange.GetUpperBound();
 
-                // We have to detect this transition becuase otherwise we break when unmanaged code
+                // We have to detect this transition because otherwise we break when unmanaged code
                 // catches our exceptions.
                 EH_LOG((LL_INFO100, ">>tracker transitioned to second pass\n"));
                 pTracker->m_ScannedStackRange.Reset();
+
                 pTracker->m_ExceptionFlags.SetUnwindHasStarted();
                 if (pTracker->m_ExceptionFlags.UnwindingToFindResumeFrame())
                 {
@@ -3798,7 +3921,10 @@ ExceptionTracker* ExceptionTracker::GetOrCreateTracker(
                 // Lean on the safe side and just reset everything unconditionally.
                 pTracker->FirstPassIsComplete();
 
-                EEToDebuggerExceptionInterfaceWrapper::ManagedExceptionUnwindBegin(pThread);
+                if (!fIsInterleavedHandling)
+                {
+                    EEToDebuggerExceptionInterfaceWrapper::ManagedExceptionUnwindBegin(pThread);
+                }
 
                 pTracker->ResetLimitFrame();
             }
@@ -4212,6 +4338,738 @@ static void DoEHLog(
     va_end(args);
 }
 #endif // _DEBUG
+
+#ifdef FEATURE_PAL
+//---------------------------------------------------------------------------------------
+//
+// This functions return True if the given stack address is
+// within the specified stack boundaries.
+//
+// Arguments:
+//      sp - a stack pointer that needs to be verified
+//      stackLowAddress, stackHighAddress - these values specify stack boundaries
+//
+bool IsSpInStackLimits(ULONG64 sp, ULONG64 stackLowAddress, ULONG64 stackHighAddress)
+{
+    return ((sp > stackLowAddress) && (sp < stackHighAddress));
+}
+
+//---------------------------------------------------------------------------------------
+//
+// This function initiates unwinding of native frames during the unwinding of a managed 
+// exception. The managed exception can be propagated over several managed / native ranges 
+// until it is finally handled by a managed handler or leaves the stack unhandled and
+// aborts the current process.
+// This function is an assembler helper.
+//
+// Arguments:
+//      context - context at which to start the native unwinding
+extern "C" void StartUnwindingNativeFrames(CONTEXT* context);
+
+//---------------------------------------------------------------------------------------
+//
+// This functions performs an unwind procedure for a managed exception. The stack is unwound
+// until the target frame is reached. For each frame we use its PC value to find
+// a handler using information that has been built by JIT.
+//
+// Arguments:
+//      exceptionRecord          - an exception record that stores information about the managed exception
+//      unwindStartContext       - the context that the unwind should start at. Either the original exception
+//                                 context (when the exception didn't cross native frames) or the first managed
+//                                 frame after crossing native frames.
+//      targetFrameSp            - specifies the call frame that is the target of the unwind
+//
+VOID UnwindManagedExceptionPass2(EXCEPTION_RECORD* exceptionRecord, CONTEXT* unwindStartContext, UINT_PTR targetFrameSp)
+{
+    UINT_PTR controlPc;
+    EXCEPTION_DISPOSITION disposition;
+    CONTEXT* currentFrameContext;
+    CONTEXT* callerFrameContext;
+    CONTEXT contextStorage;
+    DISPATCHER_CONTEXT dispatcherContext;
+    EECodeInfo codeInfo;
+    ULONG64 establisherFrame = NULL;
+    PVOID handlerData;
+    ULONG64 stackHighAddress = (ULONG64)PAL_GetStackBase();
+    ULONG64 stackLowAddress = (ULONG64)PAL_GetStackLimit();
+
+    // Indicate that we are performing second pass.
+    exceptionRecord->ExceptionFlags = EXCEPTION_UNWINDING;
+
+    currentFrameContext = unwindStartContext;
+    callerFrameContext = &contextStorage;
+
+    memset(&dispatcherContext, 0, sizeof(DISPATCHER_CONTEXT));
+    disposition = ExceptionContinueSearch;
+
+    do
+    {
+        controlPc = currentFrameContext->Rip;
+
+        codeInfo.Init(controlPc);
+        dispatcherContext.FunctionEntry = codeInfo.GetFunctionEntry();
+        dispatcherContext.ControlPc = controlPc;
+        dispatcherContext.ImageBase = codeInfo.GetModuleBase();
+
+        // Check whether we have a function table entry for the current controlPC.
+        // If yes, then call RtlVirtualUnwind to get the establisher frame pointer.
+        if (dispatcherContext.FunctionEntry != NULL)
+        {
+            // Create a copy of the current context because we don't want
+            // the current context record to be updated by RtlVirtualUnwind.
+            memcpy(callerFrameContext, currentFrameContext, sizeof(CONTEXT));
+            RtlVirtualUnwind(UNW_FLAG_EHANDLER,
+                dispatcherContext.ImageBase,
+                dispatcherContext.ControlPc,
+                dispatcherContext.FunctionEntry,
+                callerFrameContext,
+                &handlerData,
+                &establisherFrame,
+                NULL);
+
+            // Make sure that the establisher frame pointer is within stack boundaries
+            // and we did not go below that target frame.
+            // TODO: make sure the establisher frame is properly aligned.
+            if (!IsSpInStackLimits(establisherFrame, stackLowAddress, stackHighAddress) ||
+                establisherFrame > targetFrameSp)
+            {
+                // TODO: add better error handling
+                UNREACHABLE();
+            }
+
+            dispatcherContext.EstablisherFrame = establisherFrame;
+            dispatcherContext.ContextRecord = currentFrameContext;
+
+            if (establisherFrame == targetFrameSp)
+            {
+                // We have reached the frame that will handle the exception.
+                exceptionRecord->ExceptionFlags |= EXCEPTION_TARGET_UNWIND;
+            }
+
+            // Perform unwinding of the current frame
+            disposition = ProcessCLRException(exceptionRecord,
+                establisherFrame,
+                currentFrameContext,
+                &dispatcherContext);
+
+            if (disposition == ExceptionContinueSearch)
+            {
+                // Exception handler not found. Try the parent frame.
+                CONTEXT* temp = currentFrameContext;
+                currentFrameContext = callerFrameContext;
+                callerFrameContext = temp;
+            }
+            else
+            {
+                // TODO: This needs to implemented. Make it fail for now.
+                UNREACHABLE();
+            }
+        }
+        else
+        {
+            Thread::VirtualUnwindLeafCallFrame(currentFrameContext);
+        }
+
+        // Check whether we are crossing managed-to-native boundary
+        if (!ExecutionManager::IsManagedCode(currentFrameContext->Rip))
+        {
+            // Return back to the UnwindManagedExceptionPass1 and let it unwind the native frames
+            return;
+        }
+
+    } while (IsSpInStackLimits(currentFrameContext->Rsp, stackLowAddress, stackHighAddress) &&
+        (establisherFrame != targetFrameSp));
+
+    _ASSERTE(!"UnwindManagedExceptionPass2: Unwinding failed. Reached the end of the stack");
+    EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);
+}
+
+//---------------------------------------------------------------------------------------
+//
+// This functions performs dispatching of a managed exception.
+// It tries to find an exception handler by examining each frame in the call stack.
+// The search is started from the managed frame caused the exception to be thrown.
+// For each frame we use its PC value to find a handler using information that
+// has been built by JIT. If an exception handler is found then this function initiates
+// the second pass to unwind the stack and execute the handler.
+//
+// Arguments:
+//      ex - a PAL_SEHException that stores information about the managed
+//           exception that needs to be dispatched.
+//
+VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
+{
+    CONTEXT frameContext;
+    CONTEXT unwindStartContext;
+    EXCEPTION_DISPOSITION disposition;
+    DISPATCHER_CONTEXT dispatcherContext;
+    EECodeInfo codeInfo;
+    UINT_PTR controlPc;
+    ULONG64 establisherFrame = NULL;
+    PVOID handlerData;
+    ULONG64 stackHighAddress = (ULONG64)PAL_GetStackBase();
+    ULONG64 stackLowAddress = (ULONG64)PAL_GetStackLimit();
+
+    RtlCaptureContext(&frameContext);
+
+    controlPc = Thread::VirtualUnwindToFirstManagedCallFrame(&frameContext);
+    
+    unwindStartContext = frameContext;
+
+    if (!ExecutionManager::IsManagedCode(ex.ContextRecord.Rip))
+    {
+        // This is the first time we see the managed exception, set its context to the managed frame that has caused
+        // the exception to be thrown
+        ex.ContextRecord = frameContext;
+        ex.ExceptionRecord.ExceptionAddress = (VOID*)controlPc;
+    }
+
+    ex.ExceptionRecord.ExceptionFlags = 0;
+
+    memset(&dispatcherContext, 0, sizeof(DISPATCHER_CONTEXT));
+    disposition = ExceptionContinueSearch;
+
+    do
+    {
+        codeInfo.Init(controlPc);
+        dispatcherContext.FunctionEntry = codeInfo.GetFunctionEntry();
+        dispatcherContext.ControlPc = controlPc;
+        dispatcherContext.ImageBase = codeInfo.GetModuleBase();
+
+        // Check whether we have a function table entry for the current controlPC.
+        // If yes, then call RtlVirtualUnwind to get the establisher frame pointer
+        // and then check whether an exception handler exists for the frame.
+        if (dispatcherContext.FunctionEntry != NULL)
+        {
+            RtlVirtualUnwind(UNW_FLAG_EHANDLER,
+                dispatcherContext.ImageBase,
+                dispatcherContext.ControlPc,
+                dispatcherContext.FunctionEntry,
+                &frameContext,
+                &handlerData,
+                &establisherFrame,
+                NULL);
+
+            // Make sure that the establisher frame pointer is within stack boundaries.
+            // TODO: make sure the establisher frame is properly aligned.
+            if (!IsSpInStackLimits(establisherFrame, stackLowAddress, stackHighAddress))
+            {
+                // TODO: add better error handling
+                UNREACHABLE();
+            }
+
+            dispatcherContext.EstablisherFrame = establisherFrame;
+            dispatcherContext.ContextRecord = &frameContext;
+
+            // Find exception handler in the current frame
+            disposition = ProcessCLRException(&ex.ExceptionRecord,
+                establisherFrame,
+                &ex.ContextRecord,
+                &dispatcherContext);
+
+            if (disposition == ExceptionContinueSearch)
+            {
+                // Exception handler not found. Try the parent frame.
+                controlPc = frameContext.Rip;
+            }
+            else if (disposition == ExceptionStackUnwind)
+            {
+                // The first pass is complete. We have found the frame that
+                // will handle the exception. Start the second pass.
+                UnwindManagedExceptionPass2(&ex.ExceptionRecord, &unwindStartContext, establisherFrame);
+            }
+            else
+            {
+                // TODO: This needs to implemented. Make it fail for now.
+                UNREACHABLE();
+            }
+        }
+        else
+        {
+            controlPc = Thread::VirtualUnwindLeafCallFrame(&frameContext);
+        }
+
+        // Check whether we are crossing managed-to-native boundary
+        if (!ExecutionManager::IsManagedCode(controlPc))
+        {
+            // Save the exception flags of the first pass so that we can restore them after
+            // the partial second pass.
+            ExceptionFlags* currentFlags = GetThread()->GetExceptionState()->GetFlags();
+            ExceptionFlags firstPassFlags = *currentFlags;
+
+            // The second pass needs this flag to be reset
+            currentFlags->ResetUnwindingToFindResumeFrame();
+
+            // First we need to run the unwind second pass until we hit the current native frame.
+            // The targetFrameSp is set to max value to indicate that the target is not known yet.
+            const UINT_PTR TargetFrameSp = ULONG_PTR_MAX;
+            UnwindManagedExceptionPass2(&ex.ExceptionRecord, &unwindStartContext, TargetFrameSp);
+
+            // Restore back the state of the first pass. We need to reread the current flags pointer
+            // since if the exception tracker changed in the second pass, the pointer would be different.
+            currentFlags = GetThread()->GetExceptionState()->GetFlags();
+
+            // Set back the UnwindHasStarted flag so that the ExceptionTracker::GetOrCreateTracker
+            // detects that there was a second pass and that it needs to recreate the tracker.
+            firstPassFlags.SetUnwindHasStarted();
+
+            // Tell the tracker that we are starting interleaved handling of the exception.
+            // The interleaved handling is used when an exception unwinding passes through
+            // interleaved managed and native stack frames. In that case, instead of
+            // performing first pass of the unwinding over all the stack range and then 
+            // second pass over the same range, we unwind each managed / native subrange
+            // separately, performing both passes on a subrange before moving to the next one.
+            firstPassFlags.SetIsInterleavedHandling();
+
+            *currentFlags = firstPassFlags;
+
+            {
+                GCX_COOP();
+                // Pop all frames that are below the block of native frames and that would be
+                // in the unwound part of the stack when UnwindManagedExceptionPass1 is resumed 
+                // at the next managed frame.
+                UnwindFrameChain(GetThread(), (VOID*)frameContext.Rsp);
+
+                // We are going to reclaim the stack range that was scanned by the exception tracker
+                // until now. We need to reset the explicit frames range so that if GC fires before
+                // we recreate the tracker at the first managed frame after unwinding the native 
+                // frames, it doesn't attempt to scan the reclaimed stack range.
+                ExceptionTracker* pTracker = GetThread()->GetExceptionState()->GetCurrentExceptionTracker();
+                pTracker->ResetUnwoundExplicitFramesRange();
+            }
+
+            // Now we need to unwind the native frames until we reach managed frames again or the exception is
+            // handled in the native code.
+            StartUnwindingNativeFrames(&frameContext);
+            UNREACHABLE();
+        }
+
+    } while (IsSpInStackLimits(frameContext.Rsp, stackLowAddress, stackHighAddress));
+
+    _ASSERTE(!"UnwindManagedExceptionPass1: Failed to find a handler. Reached the end of the stack");
+    EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);
+}
+
+VOID DECLSPEC_NORETURN DispatchManagedException(PAL_SEHException& ex)
+{
+    try
+    {
+        UnwindManagedExceptionPass1(ex);
+    }
+    catch (PAL_SEHException& ex)
+    {
+        DispatchManagedException(ex);
+    }
+}
+
+#ifdef _AMD64_
+
+/*++
+Function :
+    GetRegisterAddressByIndex
+
+    Get address of a register in a context
+
+Parameters:
+    PCONTEXT pContext : context containing the registers
+    UINT index :        index of the register (Rax=0 .. R15=15)
+
+Return value :
+    Pointer to the context member represeting the register
+--*/
+VOID* GetRegisterAddressByIndex(PCONTEXT pContext, UINT index)
+{
+    _ASSERTE(index < 16);
+    return &((&pContext->Rax)[index]);
+}
+
+/*++
+Function :
+    GetRegisterValueByIndex
+
+    Get value of a register in a context
+
+Parameters:
+    PCONTEXT pContext : context containing the registers
+    UINT index :        index of the register (Rax=0 .. R15=15)
+
+Return value :
+    Value of the context member represeting the register
+--*/
+DWORD64 GetRegisterValueByIndex(PCONTEXT pContext, UINT index)
+{
+    _ASSERTE(index < 16);
+    return *(DWORD64*)GetRegisterAddressByIndex(pContext, index);
+}
+
+/*++
+Function :
+    GetModRMOperandValue
+
+    Get value of an instruction operand represented by the ModR/M field
+
+Parameters:
+    BYTE rex :              REX prefix, 0 if there was none
+    BYTE* ip :              instruction pointer pointing to the ModR/M field
+    PCONTEXT pContext :     context containing the registers
+    bool is8Bit :           true if the operand size is 8 bit
+    bool hasOpSizePrefix :  true if the instruction has op size prefix (0x66)
+
+Return value :
+    Value of the context member represeting the register
+--*/
+DWORD64 GetModRMOperandValue(BYTE rex, BYTE* ip, PCONTEXT pContext, bool is8Bit, bool hasOpSizePrefix)
+{
+    DWORD64 result;
+
+    BYTE rex_b = (rex & 0x1);       // high bit to modrm r/m field or SIB base field
+    BYTE rex_x = (rex & 0x2) >> 1;  // high bit to sib index field
+    BYTE rex_r = (rex & 0x4) >> 2;  // high bit to modrm reg field
+    BYTE rex_w = (rex & 0x8) >> 3;  // 1 = 64 bit operand size, 0 = operand size determined by hasOpSizePrefix
+
+    BYTE modrm = *ip++;
+
+    _ASSERTE(modrm != 0);
+
+    BYTE mod = (modrm & 0xC0) >> 6;
+    BYTE reg = (modrm & 0x38) >> 3;
+    BYTE rm = (modrm & 0x07);
+
+    reg |= (rex_r << 3);
+    rm |= (rex_b << 3);
+
+    // 8 bit idiv without the REX prefix uses registers AH, CH, DH, BH for rm 4..8
+    // which is an exception from the regular register indexes.
+    bool isAhChDhBh = is8Bit && (rex == 0) && (rm >= 4);
+
+    // See: Tables A-15,16,17 in AMD Dev Manual 3 for information
+    //      about how the ModRM/SIB/REX bytes interact.
+
+    switch (mod)
+    {
+    case 0:
+    case 1:
+    case 2:
+        if (rm == 4) // we have an SIB byte following
+        {
+            //
+            // Get values from the SIB byte
+            //
+            BYTE sib = *ip++;
+
+            _ASSERTE(sib != 0);
+
+            BYTE ss = (sib & 0xC0) >> 6;
+            BYTE index = (sib & 0x38) >> 3;
+            BYTE base = (sib & 0x07);
+
+            index |= (rex_x << 3);
+            base |= (rex_b << 3);
+
+            //
+            // Get starting value
+            //
+            if ((mod == 0) && (base == 5))
+            {
+                result = 0;
+            }
+            else
+            {
+                result = GetRegisterValueByIndex(pContext, base);
+            }
+
+            //
+            // Add in the [index]
+            //
+            if (index != 4)
+            {
+                result += GetRegisterValueByIndex(pContext, index) << ss;
+            }
+
+            //
+            // Finally add in the offset
+            //
+            if (mod == 0)
+            {
+                if (base == 5)
+                {
+                    result += *((INT32*)ip);
+                }
+            }
+            else if (mod == 1)
+            {
+                result += *((INT8*)ip);
+            }
+            else // mod == 2
+            {
+                result += *((INT32*)ip);
+            }
+
+        }
+        else
+        {
+            //
+            // Get the value we need from the register.
+            //
+
+            // Check for RIP-relative addressing mode.
+            if ((mod == 0) && (rm == 5))
+            {
+                result = (DWORD64)ip + sizeof(INT32) + *(INT32*)ip;
+            }
+            else
+            {
+                result = GetRegisterValueByIndex(pContext, rm);
+
+                if (mod == 1)
+                {
+                    result += *((INT8*)ip);
+                }
+                else if (mod == 2)
+                {
+                    result += *((INT32*)ip);
+                }
+            }
+        }
+
+        break;
+
+    case 3:
+    default:
+        // The operand is stored in a register.
+        if (isAhChDhBh)
+        {
+            // 8 bit idiv without the REX prefix uses registers AH, CH, DH or BH for rm 4..8.
+            // So we shift the register index to get the real register index.
+            rm -= 4;
+        }
+
+        result = (DWORD64)GetRegisterAddressByIndex(pContext, rm);
+
+        if (isAhChDhBh)
+        {
+            // Move one byte higher to get an address of the AH, CH, DH or BH
+            result++;
+        }
+
+        break;
+
+    }
+
+    //
+    // Now dereference thru the result to get the resulting value.
+    //
+    if (is8Bit)
+    {
+        result = *((BYTE*)result);
+    }
+    else if (rex_w != 0)
+    {
+        result = *((DWORD64*)result);
+    }
+    else if (hasOpSizePrefix)
+    {
+        result = *((USHORT*)result);
+    }
+    else
+    {
+        result = *((UINT32*)result);
+    }
+
+    return result;
+}
+
+/*++
+Function :
+    SkipPrefixes
+
+    Skip all prefixes until the instruction code or the REX prefix is found
+
+Parameters:
+    BYTE** ip :             Pointer to the current instruction pointer. Updated 
+                            as the function walks the codes.
+    bool* hasOpSizePrefix : Pointer to bool, on exit set to true if a op size prefix
+                            was found.
+
+Return value :
+    Code of the REX prefix or the instruction code after the prefixes.
+--*/
+BYTE SkipPrefixes(BYTE **ip, bool* hasOpSizePrefix)
+{
+    *hasOpSizePrefix = false;
+
+    while (true)
+    {
+        BYTE code = *(*ip)++;
+
+        switch (code)
+        {
+        case 0x66: // Operand-Size
+            *hasOpSizePrefix = true;
+            break;
+            
+            // Segment overrides
+        case 0x26: // ES
+        case 0x2E: // CS
+        case 0x36: // SS
+        case 0x3E: // DS 
+        case 0x64: // FS
+        case 0x65: // GS
+
+            // Size overrides
+        case 0x67: // Address-Size
+
+            // Lock
+        case 0xf0:
+
+            // String REP prefixes
+        case 0xf2: // REPNE/REPNZ
+        case 0xf3:
+            break;
+
+        default:
+            // Return address of the nonprefix code
+            return code;
+        }
+    }
+}
+
+/*++
+Function :
+    IsDivByZeroAnIntegerOverflow
+
+    Check if a division by zero exception is in fact a division overflow. The
+    x64 processor generate the same exception in both cases for the IDIV / DIV
+    instruction. So we need to decode the instruction argument and check
+    whether it was zero or not.
+
+Parameters:
+    PCONTEXT pContext :           context containing the registers
+    PEXCEPTION_RECORD pExRecord : exception record of the exception
+
+Return value :
+    true if the division error was an overflow
+--*/
+bool IsDivByZeroAnIntegerOverflow(PCONTEXT pContext)
+{
+    BYTE * ip = (BYTE*)pContext->Rip;
+    BYTE rex = 0;
+    bool hasOpSizePrefix = false;
+
+    BYTE code = SkipPrefixes(&ip, &hasOpSizePrefix);
+
+    // The REX prefix must directly preceed the instruction code
+    if ((code & 0xF0) == 0x40)
+    {
+        rex = code;
+        code = *ip++;
+    }
+
+    DWORD64 divisor = 0;
+
+    // Check if the instruction is IDIV or DIV. The instruction code includes the three
+    // 'reg' bits in the ModRM byte. These are 7 for IDIV and 6 for DIV
+    BYTE regBits = (*ip & 0x38) >> 3;
+    if ((code == 0xF7 || code == 0xF6) && (regBits == 7 || regBits == 6))
+    {
+        bool is8Bit = (code == 0xF6);
+        divisor = GetModRMOperandValue(rex, ip, pContext, is8Bit, hasOpSizePrefix);
+    }
+    else
+    {
+        _ASSERTE(!"Invalid instruction (expected IDIV or DIV)");
+    }
+
+    // If the division operand is zero, it was division by zero. Otherwise the failure 
+    // must have been an overflow.
+    return divisor != 0;
+}
+#endif //_AMD64_
+
+
+VOID PALAPI HandleHardwareException(PAL_SEHException* ex)
+{
+    if (!g_fEEStarted)
+    {
+        return;
+    }
+
+    if (ex->ExceptionRecord.ExceptionCode != STATUS_BREAKPOINT && ex->ExceptionRecord.ExceptionCode != STATUS_SINGLE_STEP)
+    {
+        // A hardware exception is handled only if it happened in a jitted code or 
+        // in one of the JIT helper functions (JIT_MemSet, ...)
+        PCODE controlPc = GetIP(&ex->ContextRecord);
+        if (ExecutionManager::IsManagedCode(controlPc) || IsIPInMarkedJitHelper(controlPc))
+        {
+            // Create frame necessary for the exception handling
+            FrameWithCookie<FaultingExceptionFrame> fef;
+#if defined(WIN64EXCEPTIONS)
+            *((&fef)->GetGSCookiePtr()) = GetProcessGSCookie();
+#endif // WIN64EXCEPTIONS
+            {
+                GCX_COOP();     // Must be cooperative to modify frame chain.
+                fef.InitAndLink(&ex->ContextRecord);
+            }
+
+#ifdef _AMD64_
+            // It is possible that an overflow was mapped to a divide-by-zero exception. 
+            // This happens when we try to divide the maximum negative value of a
+            // signed integer with -1. 
+            //
+            // Thus, we will attempt to decode the instruction @ RIP to determine if that
+            // is the case using the faulting context.
+            if ((ex->ExceptionRecord.ExceptionCode == EXCEPTION_INT_DIVIDE_BY_ZERO) &&
+                IsDivByZeroAnIntegerOverflow(&ex->ContextRecord))
+            {
+                // The exception was an integer overflow, so augment the exception code.
+                ex->ExceptionRecord.ExceptionCode = EXCEPTION_INT_OVERFLOW;
+            }
+#endif //_AMD64_
+
+            // We throw the exception and catch it right away so that in case the DispatchManagedException
+            // needs to cross managed to native stack frames boundary, there is an exception that can
+            // be rethrow in the StartUnwindingNativeFrames.
+            try
+            {
+                throw *ex;
+            }
+            catch (PAL_SEHException& ex2)
+            {
+                DispatchManagedException(ex2);
+            }
+            UNREACHABLE();
+        }
+    }
+    else
+    {
+        // This is a breakpoint or single step stop, we report it to the debugger.
+        Thread *pThread = GetThread();
+        if (pThread != NULL && g_pDebugInterface != NULL)
+        {
+            if (ex->ExceptionRecord.ExceptionCode == STATUS_BREAKPOINT)
+            {
+                // If this is breakpoint context, it is set up to point to an instruction after the break instruction.
+                // But debugger expects to see context that points to the break instruction, that's why we correct it.
+                SetIP(&ex->ContextRecord, GetIP(&ex->ContextRecord) - CORDbg_BREAK_INSTRUCTION_SIZE);
+                ex->ExceptionRecord.ExceptionAddress = (void *)GetIP(&ex->ContextRecord);
+            }
+
+            if (g_pDebugInterface->FirstChanceNativeException(&ex->ExceptionRecord,
+                &ex->ContextRecord,
+                ex->ExceptionRecord.ExceptionCode,
+                pThread))
+            {
+                RtlRestoreContext(&ex->ContextRecord, &ex->ExceptionRecord);
+            }
+            else
+            {
+                _ASSERTE(!"Looks like a random breakpoint/trap that was not prepared by the EE debugger");
+            }
+        }
+    }
+}
+
+#endif // FEATURE_PAL
 
 void ClrUnwindEx(EXCEPTION_RECORD* pExceptionRecord, UINT_PTR ReturnValue, UINT_PTR TargetIP, UINT_PTR TargetFrameSp)
 {
@@ -4750,6 +5608,31 @@ void CleanUpForSecondPass(Thread* pThread, bool fIsSO, LPVOID MemoryStackFpForFr
     }
 }
 
+#ifdef FEATURE_PAL
+
+// This is a personality routine for TheUMEntryPrestub and UMThunkStub Unix asm stubs.
+// An exception propagating through these stubs is an unhandled exception.
+// This function dumps managed stack trace and terminates the current process.
+EXTERN_C _Unwind_Reason_Code
+UnhandledExceptionHandlerUnix(
+                IN int version, 
+                IN _Unwind_Action action, 
+                IN uint64_t exceptionClass, 
+                IN struct _Unwind_Exception *exception,
+                IN struct _Unwind_Context *context            
+              )
+{
+    // Unhandled exception happened, so dump the managed stack trace and terminate the process
+
+    DefaultCatchHandler(NULL /*pExceptionInfo*/, NULL /*Throwable*/, TRUE /*useLastThrownObject*/,
+        TRUE /*isTerminating*/, FALSE /*isThreadBaseFIlter*/, FALSE /*sendAppDomainEvents*/);
+    
+    EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);
+    return _URC_FATAL_PHASE1_ERROR;
+}
+
+#else // FEATURE_PAL
+
 EXTERN_C EXCEPTION_DISPOSITION
 UMThunkUnwindFrameChainHandler(IN     PEXCEPTION_RECORD   pExceptionRecord
                      WIN64_ARG(IN     ULONG64             MemoryStackFp)
@@ -4933,6 +5816,8 @@ CallDescrWorkerUnwindFrameChainHandler(IN     PEXCEPTION_RECORD   pExceptionReco
     return retVal;
 }
 
+#endif // FEATURE_PAL
+
 #ifdef FEATURE_COMINTEROP
 EXTERN_C EXCEPTION_DISPOSITION
 ReverseComUnwindFrameChainHandler(IN     PEXCEPTION_RECORD   pExceptionRecord
@@ -5042,6 +5927,15 @@ void ExceptionTracker::StackRange::CombineWith(StackFrame sfCurrent, StackRange*
     }
     else
     {
+#ifdef FEATURE_PAL
+        // When the current range is empty, copy the low bound too. Otherwise a degenerate range would get
+        // created and tests for stack frame in the stack range would always fail.
+        // TODO: Check if we could enable it for non-PAL as well.
+        if (IsEmpty())
+        {
+            m_sfLowBound = pPreviousRange->m_sfLowBound;
+        }
+#endif // FEATURE_PAL
         m_sfHighBound = pPreviousRange->m_sfHighBound;
     }
 }
@@ -5172,8 +6066,8 @@ bool ExceptionTracker::IsInStackRegionUnwoundBySpecifiedException(CrawlFrame * p
     // M5 (50) -> M4 (40) -> M3 (30) -> M2 (20) -> M1 (10) ->throw
     //
     // These are all managed frames, where M1 throws and the exception is caught
-    // in M4. The numbers in the brackets is the value of stack pointer after
-    // the prolog is executed (or, incase of dynamic allocation, its SP after
+    // in M4. The numbers in the brackets are the values of the stack pointer after
+    // the prolog is executed (or, in case of dynamic allocation, its SP after
     // dynamic allocation) and will be the SP at the time the callee function
     // is invoked.
     //
@@ -5185,7 +6079,7 @@ bool ExceptionTracker::IsInStackRegionUnwoundBySpecifiedException(CrawlFrame * p
     // At such a point, the exception tracker's scanned stack range's 
     // lowerbound will correspond to the frame that had the exception
     // and the upper bound will correspond to the frame that had the funclet.
-    // For scenarios like security stackwalk that maybe triggered out of a
+    // For scenarios like security stackwalk that may be triggered out of a
     // funclet (e.g. a catch block), skipping funclets and frames in this fashion
     // is expected to lead us to the parent frame containing the funclet as it
     // will contain an object of interest (e.g. security descriptor).
@@ -5204,13 +6098,13 @@ bool ExceptionTracker::IsInStackRegionUnwoundBySpecifiedException(CrawlFrame * p
     //
     // if ((sfLowerBound < csfToCheck) && (csfToCheck <= sfUpperBound))
     //
-    // On ARM & ARM64, while the lower and upper bounds are populated using the Establisher
+    // On ARM and ARM64, while the lower and upper bounds are populated using the Establisher
     // frame given by the OS during exception dispatch, they actually correspond to the
     // SP of the caller of a given frame, instead of being the SP of the given frame.
-    // That is, on ARM, we will have lowerBound as 20 (corresponding to M1) and 
+    // Thus, in the example, we will have lowerBound as 20 (corresponding to M1) and 
     // upperBound as 50 (corresponding to M4 which contains the catch funclet).
     //
-    // Thus, to skip frames on ARM until we reach the frame containing funclet of
+    // Thus, to skip frames on ARM and ARM64 until we reach the frame containing funclet of
     // interest, the skipping will done by the following clause:
     //
     // if ((sfLowerBound <= csfToCheck) && (csfToCheck < sfUpperBound))
@@ -5248,6 +6142,8 @@ bool ExceptionTracker::IsInStackRegionUnwoundByCurrentException(CrawlFrame * pCF
     return ExceptionTracker::IsInStackRegionUnwoundBySpecifiedException(pCF, pCurrentTracker);
 }
 
+
+
 // Returns a bool indicating if the specified CrawlFrame has been unwound by any active (e.g. nested) exceptions.
 // 
 // This method uses various fields of the ExceptionTracker data structure to do its work. Since this code runs on the thread
@@ -5281,7 +6177,7 @@ bool ExceptionTracker::HasFrameBeenUnwoundByAnyActiveException(CrawlFrame * pCF)
 
         // The tracker must be in the second pass, and its stack range must not be empty.
         if (pCurrentTracker->IsInFirstPass() ||
-             pCurrentTracker->m_ScannedStackRange.IsEmpty())
+            pCurrentTracker->m_ScannedStackRange.IsEmpty())
         {
             fSkipCurrentTracker = true;
         }
@@ -5300,16 +6196,16 @@ bool ExceptionTracker::HasFrameBeenUnwoundByAnyActiveException(CrawlFrame * pCF)
                 csfToCheck = CallerStackFrame((UINT_PTR)pCF->GetFrame());
             }
 
-            STRESS_LOG4(LF_EH|LF_GCROOTS, LL_INFO100, "CrawlFrame (%p): Frameless: %s %s: %p\n", pCF, fFrameless?"Yes":"No", fFrameless?"CallerSP":"Address", csfToCheck.SP);
+            STRESS_LOG4(LF_EH|LF_GCROOTS, LL_INFO100, "CrawlFrame (%p): Frameless: %s %s: %p\n",
+                        pCF, fFrameless ? "Yes" : "No", fFrameless ? "CallerSP" : "Address", csfToCheck.SP);
 
-    
             StackFrame sfLowerBound = pCurrentTracker->m_ScannedStackRange.GetLowerBound();
             StackFrame sfUpperBound = pCurrentTracker->m_ScannedStackRange.GetUpperBound();
             StackFrame sfCurrentEstablisherFrame = pCurrentTracker->GetCurrentEstablisherFrame();
             StackFrame sfLastUnwoundEstablisherFrame = pCurrentTracker->GetLastUnwoundEstablisherFrame();
 
-            STRESS_LOG4(LF_EH|LF_GCROOTS, LL_INFO100, "LowerBound/UpperBound/CurrentEstablisherFrame/LastUnwoundManagedFrame: %p/%p/%p/%p\n", sfLowerBound.SP, sfUpperBound.SP, 
-                sfCurrentEstablisherFrame.SP, sfLastUnwoundEstablisherFrame.SP);
+            STRESS_LOG4(LF_EH|LF_GCROOTS, LL_INFO100, "LowerBound/UpperBound/CurrentEstablisherFrame/LastUnwoundManagedFrame: %p/%p/%p/%p\n",
+                        sfLowerBound.SP, sfUpperBound.SP, sfCurrentEstablisherFrame.SP, sfLastUnwoundEstablisherFrame.SP);
 
             // Refer to the detailed comment in ExceptionTracker::IsInStackRegionUnwoundBySpecifiedException on the nature
             // of this check.
@@ -5328,7 +6224,7 @@ bool ExceptionTracker::HasFrameBeenUnwoundByAnyActiveException(CrawlFrame * pCF)
 
             //
             // The frame in question was not found to be covered by the scanned stack range of the exception tracker.
-            // If the frame is managed, then its possible that it forms the upper bound of the scanned stack range.
+            // If the frame is managed, then it is possible that it forms the upper bound of the scanned stack range.
             // 
             // The scanned stack range is updated by our personality routine once ExceptionTracker::ProcessOSExceptionNotification is invoked.
             // However, it is possible that we have unwound a frame and returned back to the OS (in preemptive mode) and:
@@ -5351,7 +6247,11 @@ bool ExceptionTracker::HasFrameBeenUnwoundByAnyActiveException(CrawlFrame * pCF)
                 // For case (2) above, sfLastUnwoundEstbalisherFrame would be the same as the managed frame's SP (or upper bound)
                 //
                 // For these scenarios, the frame is considered unwound.
-                if (GetRegdisplaySP(pCF->GetRegisterSet()) == sfUpperBound.SP)
+
+                // For most cases which satisfy above condition GetRegdisplaySP(pCF->GetRegisterSet()) will be equal to sfUpperBound.SP. 
+                // However, frames where Sp is modified after prolog ( eg. localloc) this might not be the case. For those scenarios,
+                // we need to check if sfUpperBound.SP is in between GetRegdisplaySP(pCF->GetRegisterSet()) & callerSp.
+                if (GetRegdisplaySP(pCF->GetRegisterSet()) <= sfUpperBound.SP && sfUpperBound < csfToCheck)
                 {
                     if (csfToCheck == sfCurrentEstablisherFrame)
                     {
@@ -5410,7 +6310,7 @@ bool ExceptionTracker::HasFrameBeenUnwoundByAnyActiveException(CrawlFrame * pCF)
                 // This works for frames across function calls but if we have multiple
                 // explicit frames in the same function, then the compiler is free to
                 // assign an address it deems fit. Thus, its totally possible for a
-                // frame at the head of the frame chain to be @ a higher address than
+                // frame at the head of the frame chain to be at a higher address than
                 // its predecessor. This has been observed to be true with VC++ compiler
                 // in the CLR ret build.
                 //
@@ -5537,7 +6437,7 @@ bool ExceptionTracker::IsUnwoundToTargetParentFrame(StackFrame sfToCheck, StackF
 }
 
 // Given the CrawlFrame for a funclet frame, return the frame pointer of the enclosing funclet frame.
-// For filter funclet frames and a normal method frames, this function returns a NULL StackFrame.
+// For filter funclet frames and normal method frames, this function returns a NULL StackFrame.
 //
 // <WARNING>
 // It is not valid to call this function on an arbitrary funclet.  You have to be doing a full stackwalk from
@@ -5696,12 +6596,16 @@ StackFrame ExceptionTracker::FindParentStackFrameHelper(CrawlFrame* pCF,
 
             // Check if the caller IP is in mscorwks.  If it is not, then it is an out-of-line finally.
             // Normally, the caller of a finally is ExceptionTracker::CallHandler().
+#ifdef FEATURE_PAL
+            fIsCallerInVM = !ExecutionManager::IsManagedCode(callerIP);
+#else
 #if defined(DACCESS_COMPILE)
             HMODULE_TGT hEE = DacGlobalBase();
 #else  // !DACCESS_COMPILE
             HMODULE_TGT hEE = g_pMSCorEE;
 #endif // !DACCESS_COMPILE
             fIsCallerInVM = IsIPInModule(hEE, callerIP);
+#endif // FEATURE_PAL
 
             if (!fIsCallerInVM)
             {
@@ -5739,12 +6643,13 @@ StackFrame ExceptionTracker::FindParentStackFrameHelper(CrawlFrame* pCF,
         // Since the current frame is a non-filter funclet, determine if its caller is the same one
         // as was saved against the exception tracker before the funclet was invoked in ExceptionTracker::CallHandler.
         CallerStackFrame csfFunclet = pCurrentTracker->m_EHClauseInfo.GetCallerStackFrameForEHClause();
-        if (csfCurrent == csfFunclet)
+        if (csfCurrent == csfFunclet) 
         {
             // The EnclosingClauseCallerSP is initialized in ExceptionTracker::ProcessManagedCallFrame, just before
             // invoking the funclets. Basically, we are using the SP of the caller of the frame containing the funclet
             // to determine if we have reached the frame containing the funclet.
-            EnclosingClauseInfo srcEnclosingClause = (fForGCReporting)?pCurrentTracker->m_EnclosingClauseInfoForGCReporting:pCurrentTracker->m_EnclosingClauseInfo;
+            EnclosingClauseInfo srcEnclosingClause = (fForGCReporting) ? pCurrentTracker->m_EnclosingClauseInfoForGCReporting
+                                                                       : pCurrentTracker->m_EnclosingClauseInfo;
             sfResult = (StackFrame)(CallerStackFrame(srcEnclosingClause.GetEnclosingClauseCallerSP()));
 
             // Check whether the tracker has called any funclet yet.
@@ -5768,6 +6673,17 @@ StackFrame ExceptionTracker::FindParentStackFrameHelper(CrawlFrame* pCF,
             }
 
             break;
+        }
+        // Check if this tracker was collapsed with another tracker and if caller of funclet clause for collapsed exception tracker matches.
+        else if (fForGCReporting && !(pCurrentTracker->m_csfEHClauseOfCollapsedTracker.IsNull()) && csfCurrent == pCurrentTracker->m_csfEHClauseOfCollapsedTracker)
+        {
+            EnclosingClauseInfo srcEnclosingClause = pCurrentTracker->m_EnclosingClauseInfoOfCollapsedTracker;
+            sfResult = (StackFrame)(CallerStackFrame(srcEnclosingClause.GetEnclosingClauseCallerSP()));
+
+            _ASSERTE(!sfResult.IsNull());
+
+            break;
+
         }
     }
 

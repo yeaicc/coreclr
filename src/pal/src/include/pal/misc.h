@@ -50,16 +50,6 @@ int __cdecl PAL_rand(void);
 
 /*++
 Function :
-
-    FMTMSG_FormatMessageCleanUp
-    
-    Frees the satellite file from memory.
-    
---*/
-BOOL FMTMSG_FormatMessageCleanUp( void );
-
-/*++
-Function :
     MsgBoxInitialize
 
     Initialize the critical sections.
@@ -122,14 +112,6 @@ Removes a variable from the environment. Does nothing if the variable
 does not exist in the environment.
 --*/
 void MiscUnsetenv(const char *name);
-
-/*++
-Function:
-  TIMECleanUpTransitionDates
-
-Free the memory allocated in TIMEGetStdDstDates.
---*/
-void TIMECleanUpTransitionDates();
 
 #ifdef __cplusplus
 }

@@ -476,6 +476,15 @@ BOOL DacDbiInterfaceImpl::IsTransitionStub(CORDB_ADDRESS address)
 
     BOOL fIsStub = FALSE;     
 
+#if defined(FEATURE_PAL)
+    // Currently IsIPInModule() is not implemented in the PAL.  Rather than skipping the check, we should
+    // either E_NOTIMPL this API or implement IsIPInModule() in the PAL.  Since ICDProcess::IsTransitionStub()
+    // is only called by VS in mixed-mode debugging scenarios, and mixed-mode debugging is not supported on 
+    // POSIX systems, there is really no incentive to implement this API at this point.
+    ThrowHR(E_NOTIMPL);
+
+#else // !FEATURE_PAL    
+
     TADDR ip = (TADDR)address;
 
     if (ip == NULL)
@@ -492,6 +501,8 @@ BOOL DacDbiInterfaceImpl::IsTransitionStub(CORDB_ADDRESS address)
     {
         fIsStub = IsIPInModule(m_globalBase, ip);
     }
+
+#endif // FEATURE_PAL
 
     return fIsStub;
 }
@@ -1887,7 +1898,7 @@ TypeHandle DacDbiInterfaceImpl::TypeDataWalk::ReadLoadedTypeArg(TypeHandleReadTy
     return ReadLoadedTypeHandle(kGetExact);
 #else
 
-    if ((retrieveWhich == kGetExact))
+    if (retrieveWhich == kGetExact)
         return ReadLoadedTypeHandle(kGetExact);
 
     // This nasty bit of code works out what the "canonicalization" of a
@@ -5604,12 +5615,26 @@ void DacDbiInterfaceImpl::GetContext(VMPTR_Thread vmThread, DT_CONTEXT * pContex
     if (pFilterContext == NULL)
     {
         // If the filter context is NULL, then we use the true context of the thread.
+        
+#ifdef FEATURE_DBGIPC_TRANSPORT_DI
+        // GetThreadContext() is currently not implemented in ShimRemoteDataTarget, which is used with our pipe transport 
+        // (FEATURE_DBGIPC_TRANSPORT_DI). Pipe transport is used on POSIX system, but occasionally we can turn it on for Windows for testing,
+        // and then we'd like to have same behavior as on POSIX system (zero context).
+        //
+        // We don't have a good way to implement GetThreadContext() in ShimRemoteDataTarget yet, because we have no way to convert a thread ID to a 
+        // thread handle.  The function to do the conversion is OpenThread(), which is not implemented in PAL. Even if we had a handle, PAL implementation 
+        // of GetThreadContext() is very limited and doesn't work when we're not attached with ptrace. 
+        // Instead, we just zero out the seed CONTEXT for the stackwalk.  This tells the stackwalker to
+        // start the stackwalk with the first explicit frame.  This won't work when we do native debugging, 
+        // but that won't happen on the POSIX systems since they don't support native debugging.
+        ZeroMemory(pContextBuffer, sizeof(*pContextBuffer));        
+#else  // DFEATURE_DBGIPC_TRANSPORT_DI
         pContextBuffer->ContextFlags = CONTEXT_ALL;
-
         IfFailThrow(m_pTarget->GetThreadContext(pThread->GetOSThreadId(), 
                                                 pContextBuffer->ContextFlags, 
                                                 sizeof(*pContextBuffer),
                                                 reinterpret_cast<BYTE *>(pContextBuffer)));
+#endif // DFEATURE_DBGIPC_TRANSPORT_DI        
     }
     else
     {
@@ -6362,22 +6387,11 @@ bool DacHeapWalker::GetSize(TADDR tMT, size_t &size)
 
         if (cs)
         {
-            if (mt->IsString())
-            {
-                DWORD tmp = 0;
-                if (mCache.Read(mCurrObj+sizeof(TADDR), &tmp))
-                    cs *= tmp;
-                else
-                    ret = false;
-            }
+            DWORD tmp = 0;
+            if (mCache.Read(mCurrObj+sizeof(TADDR), &tmp))
+                cs *= tmp;
             else
-            {
-                DWORD tmp = 0;
-                if (mCache.Read(mCurrObj+sizeof(TADDR), &tmp))
-                    cs *= tmp;
-                else
-                    ret = false;
-            }
+                ret = false;
         }
 
         size = mt->GetBaseSize() + cs;

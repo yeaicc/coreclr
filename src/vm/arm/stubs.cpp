@@ -2192,11 +2192,6 @@ LONG CLRNoCatchHandler(EXCEPTION_POINTERS* pExceptionInfo, PVOID pv)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-bool IsInstrModifyFault(PEXCEPTION_POINTERS pExceptionInfo)
-{
-    return false;
-}
-
 void UpdateRegDisplayFromCalleeSavedRegisters(REGDISPLAY * pRD, CalleeSavedRegisters * pRegs)
 {
     LIMITED_METHOD_CONTRACT;
@@ -3856,7 +3851,7 @@ PCODE DynamicHelpers::CreateReturnIndirConst(LoaderAllocator * pAllocator, TADDR
 
 PCODE DynamicHelpers::CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADDR arg, PCODE target)
 {
-    BEGIN_DYNAMIC_HELPER_EMIT(15);
+    BEGIN_DYNAMIC_HELPER_EMIT(18);
 
     // mov r2, arg
     MovRegImm(p, 2, arg);

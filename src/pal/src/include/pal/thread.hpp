@@ -26,6 +26,7 @@ Abstract:
 #include "cs.hpp"
 
 #include <pthread.h>    
+#include <sys/syscall.h>
 #if HAVE_MACH_EXCEPTIONS
 #include <mach/mach.h>
 #endif // HAVE_MACH_EXCEPTIONS
@@ -33,6 +34,7 @@ Abstract:
 #include "threadsusp.hpp"
 #include "tls.hpp"
 #include "synchobjects.hpp"
+#include <errno.h>
 
 namespace CorUnix
 {
@@ -185,7 +187,7 @@ namespace CorUnix
 #if !HAVE_MACH_EXCEPTIONS
         BOOL safe_state;
         int signal_code;
-#endif // !HAVE_MACH_EXCEPTIONS
+#endif // !HAVE_MACH_EXCEPTIONSG
 
         CThreadSEHInfo()
         {
@@ -277,13 +279,6 @@ namespace CorUnix
     private:
 
         CPalThread *m_pNext;
-        
-#ifdef _DEBUG
-        DWORD m_dwGuard;
-        friend CPalThread *InternalGetCurrentThread();
-#endif
-        
-        DWORD m_dwLastError;
         DWORD m_dwExitCode;
         BOOL m_fExitCodeSet;
         CRITICAL_SECTION m_csLock;
@@ -317,6 +312,7 @@ namespace CorUnix
 
         SIZE_T m_threadId;
         DWORD m_dwLwpId;
+        pthread_t m_pthreadSelf;        
 
         //
         // Start info
@@ -389,10 +385,6 @@ namespace CorUnix
         CPalThread()
             :
             m_pNext(NULL),
-#ifdef _DEBUG
-            m_dwGuard(0),
-#endif
-            m_dwLastError(0),
             m_dwExitCode(STILL_ACTIVE),
             m_fExitCodeSet(FALSE),
             m_fLockInitialized(FALSE),
@@ -401,6 +393,7 @@ namespace CorUnix
             m_pThreadObject(NULL),
             m_threadId(0),
             m_dwLwpId(0),
+            m_pthreadSelf(0),
             m_lpStartAddress(NULL),
             m_lpStartParameter(NULL),
             m_bCreateSuspended(FALSE),
@@ -495,20 +488,22 @@ namespace CorUnix
             return synchronizationInfo.TryAcquireNativeWaitLock();
         }
 
-        void
+        static void
         SetLastError(
             DWORD dwLastError
             )
         {
-            m_dwLastError = dwLastError;    
+            // Reuse errno to store last error
+            errno = dwLastError;
         };
 
-        DWORD
+        static DWORD
         GetLastError(
             void
             )
         {
-            return m_dwLastError;
+            // Reuse errno to store last error
+            return errno;
         };
 
         void
@@ -543,6 +538,14 @@ namespace CorUnix
             )
         {
             return m_dwLwpId;
+        };
+
+        pthread_t
+        GetPThreadSelf(
+            void
+            )
+        {
+            return m_pthreadSelf;
         };
 
         LPTHREAD_START_ROUTINE
@@ -672,20 +675,25 @@ namespace CorUnix
             return &m_sMachExceptionHandlers;
         }
 #endif // HAVE_MACH_EXCEPTIONS
-        
-#ifdef _DEBUG
-        void CheckGuard();
-#endif // _DEBUG
 #endif // FEATURE_PAL_SXS
-
     };
 
-    inline CPalThread *InternalGetCurrentThread() {
-        CPalThread *pThread = reinterpret_cast<CPalThread*>(pthread_getspecific(thObjKey));
-#if defined(FEATURE_PAL_SXS) && defined(_DEBUG)
-        if (pThread)
-            pThread->CheckGuard();
-#endif // FEATURE_PAL_SXS && _DEBUG
+#if defined(FEATURE_PAL_SXS)
+    extern "C" CPalThread *CreateCurrentThreadData();
+#endif // FEATURE_PAL_SXS
+
+    inline CPalThread *GetCurrentPalThread()
+    {
+        return reinterpret_cast<CPalThread*>(pthread_getspecific(thObjKey));
+    }
+
+    inline CPalThread *InternalGetCurrentThread()
+    {
+        CPalThread *pThread = GetCurrentPalThread();
+#if defined(FEATURE_PAL_SXS)
+        if (pThread == nullptr)
+            pThread = CreateCurrentThreadData();
+#endif // FEATURE_PAL_SXS
         return pThread;
     }
 
@@ -755,7 +763,20 @@ Abstract:
   bounds based lookaside system, why aren't we using it in the
   cache?
 
+  In order to match the thread ids that debuggers use at least for
+  linux we need to use gettid(). 
+
 --*/
-#define THREADSilentGetCurrentThreadId() (SIZE_T) pthread_self()
+#if defined(__LINUX__)
+#define THREADSilentGetCurrentThreadId() (SIZE_T)syscall(SYS_gettid)
+#elif defined(__APPLE__)
+inline SIZE_T THREADSilentGetCurrentThreadId() {
+    uint64_t tid;
+    pthread_threadid_np(pthread_self(), &tid);
+    return (SIZE_T)tid;
+}
+#else
+#define THREADSilentGetCurrentThreadId() (SIZE_T)pthread_self()
+#endif
 
 #endif // _PAL_THREAD_HPP_

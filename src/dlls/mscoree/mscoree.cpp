@@ -180,7 +180,6 @@ BOOL WINAPI DllMain(HANDLE hInstance, DWORD dwReason, LPVOID lpReserved)
             // If buffer is overrun, it is possible the saved callback has been trashed.
             // The callback is unsafe.
             //SetBufferOverrunHandler();
-
             if (!EEDllMain((HINSTANCE)hInstance, dwReason, lpReserved))
             {
                 return FALSE;
@@ -723,6 +722,10 @@ STDAPI LoadStringRCEx(
 
 #if defined(FEATURE_CORECLR) || defined(CROSSGEN_COMPILE)
 
+extern HINSTANCE            g_pMSCorEE;
+
+#ifndef FEATURE_PAL
+
 //
 // Returns path name from a file name. The path name will be (null-terminated, incl. the last '\' if present).
 // Example: For input "C:\Windows\System.dll" returns "C:\Windows\".
@@ -782,10 +785,6 @@ HRESULT CopySystemDirectory(__in WCHAR *pFileName,
     }
     return hr;
 }
-
-extern HINSTANCE            g_pMSCorEE;
-
-#ifndef FEATURE_PAL
 
 BOOL PAL_GetPALDirectory(__out_ecount(cchBuffer) LPWSTR pbuffer, 
                          DWORD  cchBuffer)
@@ -908,9 +907,23 @@ STDAPI GetCORSystemDirectoryInternal(__out_ecount_part_opt(cchBuffer, *pdwLength
     if (pBuffer == NULL)
         IfFailGo(E_POINTER);
 
+#ifdef CROSSGEN_COMPILE
+    if (WszGetModuleFileName(NULL, pBuffer, cchBuffer) == 0)
+    {
+        IfFailGo(HRESULT_FROM_GetLastError());
+    }
+    WCHAR *pSeparator;
+    pSeparator = wcsrchr(pBuffer, DIRECTORY_SEPARATOR_CHAR_W);
+    if (pSeparator == NULL)
+    {
+        IfFailGo(HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND));
+    }
+    *pSeparator = W('\0');
+#else
     if (!PAL_GetPALDirectory(pBuffer, cchBuffer)) {
         IfFailGo(HRESULT_FROM_GetLastError());
     }
+#endif
 
     // Include the null terminator in the length
     *pdwLength = (DWORD)wcslen(pBuffer)+1;
@@ -1268,7 +1281,7 @@ HRESULT SetInternalSystemDirectory()
 }
 
 #if defined(CROSSGEN_COMPILE) && defined(FEATURE_CORECLR)
-void SetMscorlibPath(LPCWCHAR wzSystemDirectory)
+void SetMscorlibPath(LPCWSTR wzSystemDirectory)
 {
     wcscpy_s(g_pSystemDirectory, COUNTOF(g_pSystemDirectory), wzSystemDirectory);
 

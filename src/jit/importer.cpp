@@ -1913,9 +1913,9 @@ void                Compiler::impSpillSideEffects(bool      spillGlobEffects,
         GenTreePtr lclVarTree;
             
         if  ((tree->gtFlags & spillFlags) != 0        ||
-              spillGlobEffects &&                         // Only consider the following when  spillGlobEffects == TRUE               
+              (spillGlobEffects &&                        // Only consider the following when  spillGlobEffects == TRUE               
               !impIsAddressInLocal(tree, &lclVarTree) &&  // No need to spill the GT_ADDR node on a local.
-              gtHasLocalsWithAddrOp(tree))                // Spill if we still see GT_LCL_VAR that contains lvHasLdAddrOp or lvAddrTaken flag.
+              gtHasLocalsWithAddrOp(tree)))               // Spill if we still see GT_LCL_VAR that contains lvHasLdAddrOp or lvAddrTaken flag.
         {
             impSpillStackEntry(i, BAD_VAR_NUM 
                                DEBUGARG(false) DEBUGARG(reason));
@@ -5273,7 +5273,7 @@ bool                Compiler::impIsTailCallILPattern(bool tailPrefixed,
         return false;
     }
 
-#if FEATURE_TAILCALL_OPT
+#if FEATURE_TAILCALL_OPT_SHARED_RETURN
     // we can actually handle if the ret is in a fallthrough block, as long as that is the only part of the sequence.
     // Make sure we don't go past the end of the IL however.
     codeEnd = min(codeEnd + 1, info.compCode+info.compILCodeSize);
@@ -5356,6 +5356,12 @@ bool                Compiler::impIsImplicitTailCallCandidate(OPCODE opcode,
     // must not be tail prefixed
     if (prefixFlags & PREFIX_TAILCALL_EXPLICIT)  
         return false;
+
+#if !FEATURE_TAILCALL_OPT_SHARED_RETURN
+    // the block containing call is marked as BBJ_RETURN
+    if (compCurBB->bbJumpKind != BBJ_RETURN)
+        return false;
+#endif // !FEATURE_TAILCALL_OPT_SHARED_RETURN
 
     // must be call+ret or call+pop+ret 
     if (!impIsTailCallILPattern(false, opcode, codeAddrOfNextOpcode,codeEnd)) 
@@ -5443,19 +5449,14 @@ var_types           Compiler::impImportCall (OPCODE         opcode,
 #endif // _TARGET_ARM64_
 
     // We only need to cast the return value of pinvoke inlined calls that return small types
-    bool            checkForSmallType = false;
-
-#ifdef _TARGET_AMD64_
 
     // TODO-AMD64-Cleanup: Remove this when we stop interoperating with JIT64, or if we decide to stop
-    // widening everything!
-
+    // widening everything! CoreCLR does not support JIT64 interoperation so no need to widen there.
     // The existing x64 JIT doesn't bother widening all types to int, so we have to assume for
     // the time being that the callee might be compiled by the other JIT and thus the return
     // value will need to be widened by us (or not widened at all...)
-    checkForSmallType = true;
 
-#endif // _TARGET_AMD64_
+    bool            checkForSmallType = opts.IsJit64Compat();
 
     bool            bIntrinsicImported = false;
 
@@ -6079,12 +6080,13 @@ var_types           Compiler::impImportCall (OPCODE         opcode,
     }
     else
 #endif  //INLINE_NDIRECT
-    if  (opcode == CEE_CALLI &&
-         (sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_STDCALL  ||
-         (sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_C        ||
-         (sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_THISCALL ||
-         (sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_FASTCALL)
-
+    if  ((opcode == CEE_CALLI) &&
+         (
+          ((sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_STDCALL)  ||
+          ((sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_C)        ||
+          ((sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_THISCALL) ||
+          ((sig->callConv & CORINFO_CALLCONV_MASK) == CORINFO_CALLCONV_FASTCALL)
+         ))
     {
         if (!info.compCompHnd->canGetCookieForPInvokeCalliSig(sig))
         {
@@ -8172,7 +8174,7 @@ GenTreePtr Compiler::impCastClassOrIsInstToTree(GenTreePtr op1, GenTreePtr op2, 
     //             op1Copy CNS_INT
     //                      null
     //                      
-    condNull = gtNewOperNode(GT_EQ, TYP_INT, gtClone(op1), gtNewIconNode(0, TYP_I_IMPL));  
+    condNull = gtNewOperNode(GT_EQ, TYP_INT, gtClone(op1), gtNewIconNode(0, TYP_REF));
 
     //
     // expand the true and false trees for the condMT
@@ -9368,8 +9370,8 @@ RET:
                     {
                         Verify(tiRetVal.IsType(arrayElemTi.GetType()), "bad array");
                     }
-                    tiRetVal.NormaliseForStack();
                 }
+                tiRetVal.NormaliseForStack();
             }
 ARR_LD_POST_VERIFY:
    
@@ -10299,6 +10301,9 @@ _CONV:
                 case CEE_CONV_OVF_U_UN:
                 case CEE_CONV_U:
                     isNative = true;
+                default:
+                    // leave 'isNative' = false;
+                    break;
                 }
                 if (isNative)
                 {
@@ -10473,22 +10478,28 @@ _CONV:
                 impStackTop(0);
             }
 
-            /* Convert a (dup, stloc) sequence into a (stloc, ldloc)
-               sequence so that CSE will recognize the two as
-               equal (this helps eliminate a redundant bounds check
-               in cases such as:  ariba[i+3] += some_value;
-            */
+            // Convert a (dup, stloc) sequence into a (stloc, ldloc) sequence in the following cases:
+            // - If this is non-debug code - so that CSE will recognize the two as equal.
+            //   This helps eliminate a redundant bounds check in cases such as:
+            //       ariba[i+3] += some_value;
+            // - If the top of the stack is a non-leaf that may be expensive to clone.
 
             if (codeAddr < codeEndp)
             {
                 OPCODE nextOpcode = (OPCODE) getU1LittleEndian(codeAddr);
-                if (!opts.compDbgCode &&
-                    (nextOpcode == CEE_STLOC)   ||
-                    (nextOpcode == CEE_STLOC_S) ||
-                    ((nextOpcode >= CEE_STLOC_0) && (nextOpcode <= CEE_STLOC_3)))
+                if (impIsAnySTLOC(nextOpcode))
                 {
-                    insertLdloc = true;
-                    break;
+                    if (!opts.compDbgCode)
+                    {
+                        insertLdloc = true;
+                        break;
+                    }
+                    GenTree* stackTop = impStackTop().val;
+                    if (!stackTop->IsZero() && !stackTop->IsLocal())
+                    {
+                        insertLdloc = true;
+                        break;
+                    }
                 }
             }
 

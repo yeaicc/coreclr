@@ -73,6 +73,10 @@
 #include "eventmsg.h"
 #endif
 
+#ifdef FEATURE_TRACELOGGING
+#include "clrtracelogging.h"
+#endif // FEATURE_TRACELOGGING
+
 
 // Define these macro's to do strict validation for jit lock and class init entry leaks.
 // This defines determine if the asserts that verify for these leaks are defined or not.
@@ -140,7 +144,6 @@ Assembly::Assembly(BaseDomain *pDomain, PEAssembly* pFile, DebuggerAssemblyContr
     m_pbStrongNameKeyPair(NULL),
     m_pwStrongNameKeyContainer(NULL),
     m_isDynamic(false),
-    m_isDisabledPrivateReflection(0),
 #ifdef FEATURE_COLLECTIBLE_TYPES
     m_isCollectible(fIsCollectible),
 #endif
@@ -148,6 +151,7 @@ Assembly::Assembly(BaseDomain *pDomain, PEAssembly* pFile, DebuggerAssemblyContr
     m_dwDynamicAssemblyAccess(ASSEMBLY_ACCESS_RUN),
     m_nextAvailableModuleIndex(1),
     m_pLoaderAllocator(NULL),
+    m_isDisabledPrivateReflection(0),
 #ifdef FEATURE_COMINTEROP
     m_pITypeLib(NULL),
     m_winMDStatus(WinMDStatus_Unknown),
@@ -178,6 +182,43 @@ Assembly::Assembly(BaseDomain *pDomain, PEAssembly* pFile, DebuggerAssemblyContr
 // This name needs to stay in sync with AssemblyBuilder.MANIFEST_MODULE_NAME
 // which is used in AssemblyBuilder.InitManifestModule
 #define REFEMIT_MANIFEST_MODULE_NAME W("RefEmit_InMemoryManifestModule")
+
+
+#ifdef FEATURE_TRACELOGGING
+//----------------------------------------------------------------------------------------------
+// Reads and logs the TargetFramework attribute for an assembly. For example: [assembly: TargetFramework(".NETFramework,Version=v4.0")]
+//----------------------------------------------------------------------------------------------
+void Assembly::TelemetryLogTargetFrameworkAttribute()
+{
+    const BYTE  *pbAttr;                // Custom attribute data as a BYTE*.
+    ULONG       cbAttr;                 // Size of custom attribute data.
+    HRESULT hr = GetManifestImport()->GetCustomAttributeByName(GetManifestToken(), TARGET_FRAMEWORK_TYPE, (const void**)&pbAttr, &cbAttr);
+    bool dataLogged = false; 
+    if (hr == S_OK)
+    {
+        CustomAttributeParser cap(pbAttr, cbAttr);
+        LPCUTF8 lpTargetFramework;
+        ULONG cbTargetFramework;
+        if (SUCCEEDED(cap.ValidateProlog()))
+        {
+            if (SUCCEEDED(cap.GetString(&lpTargetFramework, &cbTargetFramework)))
+            {
+                if ((lpTargetFramework != NULL) && (cbTargetFramework != 0))
+                {
+                    SString s(SString::Utf8, lpTargetFramework, cbTargetFramework);
+                    CLRTraceLog::Logger::LogTargetFrameworkAttribute(s.GetUnicode(), GetSimpleName());
+                    dataLogged = true;
+                }
+            }
+        }
+    }
+    if (!dataLogged) 
+    { 
+        CLRTraceLog::Logger::LogTargetFrameworkAttribute(L"", GetSimpleName());
+    }
+}
+
+#endif // FEATURE_TRACELOGGING
 
 //----------------------------------------------------------------------------------------------
 // Does most Assembly initialization tasks. It can assume the ctor has already run
@@ -252,10 +293,20 @@ void Assembly::Init(AllocMemTracker *pamTracker, LoaderAllocator *pLoaderAllocat
     ReportAssemblyUse();
 #endif
 
-    // Check for the special System.Numerics.Vectors assembly.
-    // If we encounter a non-trusted assembly by this name, we will simply not recognize any of its
+#ifdef FEATURE_TRACELOGGING
+
+    TelemetryLogTargetFrameworkAttribute();
+
+#endif // FEATURE_TRACELOGGING
+
+
+    // Check for the assemblies that contain SIMD Vector types.
+    // If we encounter a non-trusted assembly with these names, we will simply not recognize any of its
     // methods as intrinsics.
-    if (!strcmp(GetSimpleName(), "System.Numerics.Vectors"))
+    LPCUTF8 assemblyName = GetSimpleName();
+    const int length = sizeof("System.Numerics") - 1;
+    if ((strncmp(assemblyName, "System.Numerics", length) == 0) &&
+        ((assemblyName[length] == '\0') || (strcmp(assemblyName+length, ".Vectors") == 0)))
     {
         m_fIsSIMDVectorAssembly = true;
     }
@@ -443,7 +494,7 @@ void Assembly::Terminate( BOOL signalProfiler )
     if (this->m_fTerminated)
         return;
     
-    delete m_pSharedSecurityDesc;
+    Security::DeleteSharedSecurityDescriptor(m_pSharedSecurityDesc);
     m_pSharedSecurityDesc = NULL;
 
     if (m_pClassLoader != NULL)
@@ -2610,7 +2661,7 @@ INT32 Assembly::ExecuteMainMethod(PTRARRAYREF *stringArgs)
         INJECT_FAULT(COMPlusThrowOM());
     }
     CONTRACTL_END;
-            
+
     // reset the error code for std C
     errno=0; 
 
@@ -2662,7 +2713,6 @@ INT32 Assembly::ExecuteMainMethod(PTRARRAYREF *stringArgs)
             AppDomain * pDomain = pThread->GetDomain();
             pDomain->SetRootAssembly(pMeth->GetAssembly());
 #endif
-
             hr = RunMain(pMeth, 1, &iRetVal, stringArgs);
         }
     }

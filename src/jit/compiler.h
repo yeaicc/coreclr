@@ -186,7 +186,6 @@ typedef ExpandArray<LclSsaVarDsc> PerSsaArray;
 class  LclVarDsc
 {
 public:
-
     // The constructor. Most things can just be zero'ed.
     LclVarDsc(Compiler* comp);
 
@@ -1969,14 +1968,6 @@ public:
     // is such an object pointer.
     bool                    gtIsStaticFieldPtrToBoxedStruct(var_types fieldNodeType, CORINFO_FIELD_HANDLE fldHnd);
 
-
-    // Assignment trees which contain an unmanged PInvoke call need to have a simple op1
-    // in order to prevent us from have a TYP_BYREF live accross a call to a PInvoke
-    // If necessary this method will morph such an assignment to honor this restriction
-    //
-    GenTreePtr              gtCheckReorderAssignmentForUnmanagedCall(GenTreePtr tree);
-
-
     //-------------------------------------------------------------------------
 
     GenTreePtr              gtFoldExpr       (GenTreePtr    tree);
@@ -2001,9 +1992,10 @@ public:
     void                    gtDispNodeName  (GenTreePtr             tree);
     void                    gtDispRegVal    (GenTreePtr             tree);
 
+    enum IndentInfo { IINone, IIArc, IIArcTop, IIArcBottom, IIEmbedded, IIError, IndentInfoCount };
     void                    gtDispChild     (GenTreePtr             child,
                                              IndentStack*           indentStack,
-                                             unsigned               childNum,
+                                             IndentInfo             arcType,
                                              __in_opt               const char * msg = nullptr,
                                              bool                   topOnly = false);
     void                    gtDispTree      (GenTreePtr             tree,
@@ -2274,7 +2266,11 @@ public :
 #endif // !LEGACY_BACKEND
 
     void                lvaAssignVirtualFrameOffsetsToArgs();
+#ifdef UNIX_AMD64_ABI
+    int                 lvaAssignVirtualFrameOffsetToArg(unsigned lclNum, unsigned argSize, int argOffs, int * callerArgOffset);
+#else // !UNIX_AMD64_ABI
     int                 lvaAssignVirtualFrameOffsetToArg(unsigned lclNum, unsigned argSize, int argOffs);
+#endif // !UNIX_AMD64_ABI
     void                lvaAssignVirtualFrameOffsetsToLocals();
     int                 lvaAllocLocalAndSetVirtualOffset(unsigned lclNum, unsigned size, int stkOffs);
 #ifdef _TARGET_AMD64_
@@ -2392,6 +2388,7 @@ public :
     static fgWalkPreFn  lvaDecRefCntsCB;
     void                lvaDecRefCnts           (GenTreePtr tree);
     void                lvaRecursiveDecRefCounts(GenTreePtr tree);
+    void                lvaRecursiveIncRefCounts(GenTreePtr tree);
 
     void                lvaAdjustRefCnts    ();
 
@@ -2818,6 +2815,12 @@ private:
     bool                impIsThis               (GenTreePtr     obj);
     bool                impIsLDFTN_TOKEN        (const BYTE * delegateCreateStart, const BYTE * newobjCodeAddr);
     bool                impIsDUP_LDVIRTFTN_TOKEN(const BYTE * delegateCreateStart, const BYTE * newobjCodeAddr);
+    bool                impIsAnySTLOC           (OPCODE         opcode)
+    {
+        return     ((opcode == CEE_STLOC)   ||
+                    (opcode == CEE_STLOC_S) ||
+                    ((opcode >= CEE_STLOC_0) && (opcode <= CEE_STLOC_3)));
+    }
 
     GenTreeArgList*     impPopList              (unsigned       count,
                                                  unsigned *     flagsPtr,
@@ -3447,10 +3450,11 @@ public :
     VARSET_VALRET_TP    fgComputeLife     (VARSET_VALARG_TP life,
                                            GenTreePtr   startNode,
                                            GenTreePtr   endNode,
-                                           VARSET_VALARG_TP volatileVars
+                                           VARSET_VALARG_TP volatileVars,
+                                           bool*        pStmtInfoDirty
                                  DEBUGARG( bool *       treeModf));
 
-    bool fgRemoveDeadStore(GenTree** pTree, LclVarDsc* varDsc, VARSET_TP life, bool* doAgain DEBUGARG(bool* treeModf));
+    bool fgRemoveDeadStore(GenTree** pTree, LclVarDsc* varDsc, VARSET_TP life, bool* doAgain, bool* pStmtInfoDirty DEBUGARG(bool* treeModf));
 
     // For updating liveset during traversal AFTER fgComputeLife has completed
     VARSET_VALRET_TP    fgGetVarBits    (GenTreePtr tree);
@@ -3866,6 +3870,14 @@ public:
             m_switchDescMap = new (getAllocator()) BlockToSwitchDescMap(getAllocator());
         }
         return m_switchDescMap;
+    }
+
+    // Invalidate the map of unique switch block successors. For example, since the hash key of the map
+    // depends on block numbers, we must invalidate the map when the blocks are renumbered, to ensure that
+    // we don't accidentally look up and return the wrong switch data.
+    void InvalidateUniqueSwitchSuccMap()
+    {
+        m_switchDescMap = nullptr;
     }
 
     // Requires "switchBlock" to be a block that ends in a switch.  Returns
@@ -4681,8 +4693,8 @@ protected:
         }
 
         LoopHoistContext(Compiler* comp) :
-            m_hoistedInParentLoops(comp->getAllocatorLoopHoist()),
             m_pHoistedInCurLoop(nullptr),
+            m_hoistedInParentLoops(comp->getAllocatorLoopHoist()),
             m_curLoopVnInvariantCache(comp->getAllocatorLoopHoist())
             {}
     };
@@ -5043,7 +5055,7 @@ protected :
     void                optUpdateLoopHead(unsigned loopInd, BasicBlock* from, BasicBlock* to);
 
     // Updates the successors of "blk": if "blk2" is a successor of "blk", and there is a mapping for "blk2->blk3" in "redirectMap",
-    // change "blk" so that "blk3" is this successor.
+    // change "blk" so that "blk3" is this successor. Note that the predecessor lists are not updated.
     void                optRedirectBlock(BasicBlock* blk, BlockToBlockMap* redirectMap);
 
     // Marks the containsCall information to "lnum" and any parent loops.
@@ -5506,6 +5518,10 @@ public:
             case O2K_SUBRANGE:
                 return ((op2.u2.loBound == that->op2.u2.loBound) &&
                         (op2.u2.hiBound == that->op2.u2.hiBound));
+
+            case O2K_INVALID:
+                // we will return false
+                break;
             }
             return false;
         }
@@ -7153,6 +7169,17 @@ public :
 #else
         inline bool         IsReadyToRun() { return false; }
 #endif
+
+        // true if we must generate compatible code with Jit64 quirks
+        inline bool         IsJit64Compat()
+        {
+#if defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
+            // JIT64 interop not required for ReadyToRun since it can simply fall-back
+            return !IsReadyToRun();
+#else // defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
+            return false;
+#endif
+        }
 
 #ifdef DEBUGGING_SUPPORT
         bool                compScopeInfo;  // Generate the LocalVar info ?

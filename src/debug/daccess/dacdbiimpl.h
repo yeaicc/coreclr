@@ -43,7 +43,7 @@ public:
     DacDbiInterfaceImpl(ICorDebugDataTarget * pTarget, CORDB_ADDRESS baseAddress, IAllocator * pAllocator, IMetaDataLookup * pLookup);
 
     // Destructor.
-    ~DacDbiInterfaceImpl(void);
+    virtual ~DacDbiInterfaceImpl(void);
 
     // Overridden from ClrDataAccess. Gets an internal metadata importer for the file.
     virtual IMDInternalImport* GetMDImport(
@@ -286,9 +286,9 @@ public:
     VMPTR_TypeHandle GetApproxTypeHandle(TypeInfoList * pTypeData);
 
     // Get the exact type handle from type data
-    HRESULT DacDbiInterfaceImpl::GetExactTypeHandle(DebuggerIPCE_ExpandedTypeData * pTypeData,
-                                                    ArgInfoList *   pArgInfo,
-                                                    VMPTR_TypeHandle& vmTypeHandle);
+    HRESULT GetExactTypeHandle(DebuggerIPCE_ExpandedTypeData * pTypeData,
+                               ArgInfoList *   pArgInfo,
+                               VMPTR_TypeHandle& vmTypeHandle);
 
     // Retrieve the generic type params for a given MethodDesc.  This function is specifically 
     // for stackwalking because it requires the generic type token on the stack.
@@ -642,6 +642,9 @@ public:
 // CordbAssembly, CordbModule
 // ============================================================================
  
+    using ClrDataAccess::GetModuleData;
+    using ClrDataAccess::GetAddressType;
+
 public:
     // Get the full path and file name to the assembly's manifest module.
     BOOL GetAssemblyPath(VMPTR_Assembly  vmAssembly, 

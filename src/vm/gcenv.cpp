@@ -146,6 +146,74 @@ inline bool SafeToReportGenericParamContext(CrawlFrame* pCF)
     return true;
 }
 
+#if defined(WIN64EXCEPTIONS)
+
+struct FindFirstInterruptiblePointState
+{
+    unsigned offs;
+    unsigned endOffs;
+    unsigned returnOffs;
+};
+
+bool FindFirstInterruptiblePointStateCB(
+        UINT32 startOffset,
+        UINT32 stopOffset,
+        LPVOID hCallback)
+{
+    FindFirstInterruptiblePointState* pState = (FindFirstInterruptiblePointState*)hCallback;
+
+    _ASSERTE(startOffset < stopOffset);
+    _ASSERTE(pState->offs < pState->endOffs);
+
+    if (stopOffset <= pState->offs)
+    {
+        // The range ends before the requested offset.
+        return false;
+    }
+
+    // The offset is in the range.
+    if (startOffset <= pState->offs &&
+                       pState->offs < stopOffset)
+    {
+        pState->returnOffs = pState->offs;
+        return true;
+    }
+
+    // The range is completely after the desired offset. We use the range start offset, if
+    // it comes before the given endOffs. We assume that the callback is called with ranges
+    // in increasing order, so earlier ones are reported before later ones. That is, if we
+    // get to this case, it will be the closest interruptible range after the requested
+    // offset.
+
+    _ASSERTE(pState->offs < startOffset);
+    if (startOffset < pState->endOffs)
+    {
+        pState->returnOffs = startOffset;
+        return true;
+    }
+
+    return false;
+}
+
+// Find the first interruptible point in the range [offs .. endOffs) (the beginning of the range is inclusive,
+// the end is exclusive). Return -1 if no such point exists.
+unsigned FindFirstInterruptiblePoint(CrawlFrame* pCF, unsigned offs, unsigned endOffs)
+{
+    PTR_BYTE gcInfoAddr = dac_cast<PTR_BYTE>(pCF->GetCodeInfo()->GetGCInfo());
+    GcInfoDecoder gcInfoDecoder(gcInfoAddr, DECODE_FOR_RANGES_CALLBACK, 0);
+
+    FindFirstInterruptiblePointState state;
+    state.offs = offs;
+    state.endOffs = endOffs;
+    state.returnOffs = -1;
+
+    gcInfoDecoder.EnumerateInterruptibleRanges(&FindFirstInterruptiblePointStateCB, &state);
+
+    return state.returnOffs;
+}
+
+#endif // WIN64EXCEPTIONS
+
 //-----------------------------------------------------------------------------
 StackWalkAction GcStackCrawlCallBack(CrawlFrame* pCF, VOID* pData)
 {
@@ -180,7 +248,7 @@ StackWalkAction GcStackCrawlCallBack(CrawlFrame* pCF, VOID* pData)
 
     bool fReportGCReferences = true;
 #if defined(WIN64EXCEPTIONS)
-    // On Win64 and ARM, we may have unwound this crawlFrame and thus, shouldn't report the invalid
+    // We may have unwound this crawlFrame and thus, shouldn't report the invalid
     // references it may contain.
     fReportGCReferences = pCF->ShouldCrawlframeReportGCReferences();
 #endif // defined(WIN64EXCEPTIONS)
@@ -209,15 +277,47 @@ StackWalkAction GcStackCrawlCallBack(CrawlFrame* pCF, VOID* pData)
                     pMD->m_pszDebugClassName, pMD->m_pszDebugMethodName));
     #endif // _DEBUG
 
-#if 0
-        printf("Scanning Frame for method %s\n", pMD->m_pszDebugMethodName);
-#endif // _DEBUG
+            DWORD relOffsetOverride = NO_OVERRIDE_OFFSET;
+#if defined(WIN64EXCEPTIONS)
+            if (pCF->ShouldParentToFuncletUseUnwindTargetLocationForGCReporting())
+            {
+                PTR_BYTE gcInfoAddr = dac_cast<PTR_BYTE>(pCF->GetCodeInfo()->GetGCInfo());
+                GcInfoDecoder _gcInfoDecoder(
+                                    gcInfoAddr,
+                                    DECODE_CODE_LENGTH,
+                                    0
+                                    );
+                
+                if(_gcInfoDecoder.WantsReportOnlyLeaf())
+                {
+                    // We're in a special case of unwinding from a funclet, and resuming execution in
+                    // another catch funclet associated with same parent function. We need to report roots. 
+                    // Reporting at the original throw site gives incorrect liveness information. We choose to
+                    // report the liveness information at the first interruptible instruction of the catch funclet 
+                    // that we are going to execute. We also only report stack slots, since no registers can be
+                    // live at the first instruction of a handler, except the catch object, which the VM protects 
+                    // specially. If the catch funclet has not interruptible point, we fall back and just report 
+                    // what we used to: at the original throw instruction. This might lead to bad GC behavior 
+                    // if the liveness is not correct.
+                    const EE_ILEXCEPTION_CLAUSE& ehClauseForCatch = pCF->GetEHClauseForCatch();
+                    relOffsetOverride = FindFirstInterruptiblePoint(pCF, ehClauseForCatch.HandlerStartPC,
+                                                                    ehClauseForCatch.HandlerEndPC);
+                    _ASSERTE(relOffsetOverride != NO_OVERRIDE_OFFSET);
+
+                    STRESS_LOG3(LF_GCROOTS, LL_INFO1000, "Setting override offset = %u for method %pM ControlPC = %p\n", 
+                        relOffsetOverride, pMD, GetControlPC(pCF->GetRegisterSet()));
+                }
+
+            }
+#endif // WIN64EXCEPTIONS
 
             pCM->EnumGcRefs(pCF->GetRegisterSet(),
                             pCF->GetCodeInfo(),
                             flags,
                             GcEnumObject,
-                            pData);
+                            pData,
+                            relOffsetOverride);
+
         }
         else
         {
@@ -325,25 +425,6 @@ StackWalkAction GcStackCrawlCallBack(CrawlFrame* pCF, VOID* pData)
     pCF->CheckGSCookies();
 
     return SWA_CONTINUE;
-}
-
-static void CALLBACK CheckPromoted(_UNCHECKED_OBJECTREF *pObjRef, LPARAM *pExtraInfo, LPARAM lp1, LPARAM lp2)
-{
-    LIMITED_METHOD_CONTRACT;
-
-    LOG((LF_GC, LL_INFO100000, LOG_HANDLE_OBJECT_CLASS("Checking referent of Weak-", pObjRef, "to ", *pObjRef)));
-
-    Object **pRef = (Object **)pObjRef;
-    if (!GCHeap::GetGCHeap()->IsPromoted(*pRef))
-    {
-        LOG((LF_GC, LL_INFO100, LOG_HANDLE_OBJECT_CLASS("Severing Weak-", pObjRef, "to unreachable ", *pObjRef)));
-
-        *pRef = NULL;
-    }
-    else
-    {
-        LOG((LF_GC, LL_INFO1000000, "reachable " LOG_OBJECT_CLASS(*pObjRef)));
-    }
 }
 
 VOID GCToEEInterface::SyncBlockCacheWeakPtrScan(HANDLESCANPROC scanProc, LPARAM lp1, LPARAM lp2)

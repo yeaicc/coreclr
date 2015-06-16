@@ -436,6 +436,8 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
             {
                 MakeSrcContained(tree, tree->gtOp.gtOp1);
             }
+            info->internalIntCount = 1;
+            info->setInternalCandidates(l, l->allRegs(TYP_INT));
             break;
 
         case GT_MOD:
@@ -704,6 +706,7 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
             {
                 source->gtLsraInfo.setSrcCandidates(l, l->allRegs(TYP_INT) & ~RBM_RCX);
                 shiftBy->gtLsraInfo.setSrcCandidates(l, RBM_RCX);
+                info->setDstCandidates(l, l->allRegs(TYP_INT) & ~RBM_RCX);
             }
             else
             {
@@ -785,6 +788,15 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                     // so that epilog sequence can generate "jmp rax" to achieve fast tail call.
                     ctrlExpr->gtLsraInfo.setSrcCandidates(l, RBM_RAX);
                 }
+            }
+
+            // If this is a varargs call, we will clear the internal candidates in case we need
+            // to reserve some integer registers for copying float args.
+            // We have to do this because otherwise the default candidates are allRegs, and adding
+            // the individual specific registers will have no effect.
+            if (tree->gtCall.IsVarargs())
+            {
+                tree->gtLsraInfo.setInternalCandidates(l, RBM_NONE);
             }
 
             // Set destination candidates for return value of the call.
@@ -918,6 +930,17 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                 if (argNode->gtOper == GT_PUTARG_REG)
                 {
                     argNode->gtOp.gtOp1->gtLsraInfo.setSrcCandidates(l, l->getUseCandidates(argNode));
+                }
+                // In the case of a varargs call, the ABI dictates that if we have floating point args,
+                // we must pass the enregistered arguments in both the integer and floating point registers.
+                // Since the integer register is not associated with this arg node, we will reserve it as
+                // an internal register so that it is not used during the evaluation of the call node
+                // (e.g. for the target).
+                if (tree->gtCall.IsVarargs() && varTypeIsFloating(argNode))
+                {
+                    regNumber targetReg = compiler->getCallArgIntRegister(argReg);
+                    tree->gtLsraInfo.setInternalIntCount(tree->gtLsraInfo.internalIntCount + 1);
+                    tree->gtLsraInfo.addInternalCandidates(l, genRegMask(targetReg));
                 }
             }
 
@@ -1851,19 +1874,32 @@ Lowering::TreeNodeInfoInitSIMD(GenTree* tree, LinearScan* lsra)
         // Otherwise, if the baseType is floating point, the targetReg will be a xmm reg and we
         // can use that in the process of extracting the element.
         // 
-        // If the index is a constant and base type is a small int we can use pextrw.
+        // If the index is a constant and base type is a small int we can use pextrw, but on AVX
+        // we will need a temp if are indexing into the upper half of the AVX register.
         // In all other cases with constant index, we need a temp xmm register to extract the 
         // element if index is other than zero.
+
         if (!op2->IsCnsIntOrI())
         {
             (void) comp->getSIMDInitTempVarNum();
         }
-        else if (!varTypeIsFloating(simdTree->gtSIMDBaseType) &&
-                 !varTypeIsSmallInt(simdTree->gtSIMDBaseType) &&
-                 !op2->IsZero())
+        else if (!varTypeIsFloating(simdTree->gtSIMDBaseType))
         {
-            info->internalFloatCount = 1;
-            info->setInternalCandidates(lsra, lsra->allSIMDRegs());
+            bool needFloatTemp;
+            if (varTypeIsSmallInt(simdTree->gtSIMDBaseType) && (comp->getSIMDInstructionSet() == InstructionSet_AVX))
+            {
+                int byteShiftCnt = (int) op2->AsIntCon()->gtIconVal * genTypeSize(simdTree->gtSIMDBaseType);
+                needFloatTemp = (byteShiftCnt >= 16);
+            }
+            else
+            {
+                needFloatTemp = !op2->IsZero();
+            }
+            if (needFloatTemp)
+            {
+                info->internalFloatCount = 1;
+                info->setInternalCandidates(lsra, lsra->allSIMDRegs());
+            }
         }
         break;
 
@@ -2199,9 +2235,16 @@ void Lowering::LowerCmp(GenTreePtr tree)
         }
 
         assert(otherOp != nullptr);
-        if (otherOp->isMemoryOp() || otherOp->IsCnsNonZeroFltOrDbl())
+        if (otherOp->IsCnsNonZeroFltOrDbl())
         {
             MakeSrcContained(tree, otherOp);
+        }
+        else if (otherOp->isMemoryOp())
+        {
+            if ((otherOp == op2) || IsSafeToContainMem(tree, otherOp)) 
+            {
+                MakeSrcContained(tree, otherOp);
+            }
         }
 
         return;
@@ -2396,6 +2439,12 @@ void Lowering::LowerCmp(GenTreePtr tree)
                         tree->gtOp.gtOp1 = castOp1;
                         castOp1->gtType = TYP_UBYTE;
 
+                        // trim down the value if castOp1 is an int constant since its type changed to UBYTE.
+                        if (castOp1Oper == GT_CNS_INT)
+                        {                            
+                            castOp1->gtIntCon.gtIconVal = (UINT8)castOp1->gtIntCon.gtIconVal;
+                        }
+
                         if (op2->isContainedIntOrIImmed())
                         {
                             ssize_t val = (ssize_t)op2->AsIntConCommon()->IconValue();
@@ -2425,11 +2474,11 @@ void Lowering::LowerCmp(GenTreePtr tree)
             }
         }
     }
-    else if (op1->isMemoryOp()) 
+    else if (op2->isMemoryOp())
     {
-        if(op1Type == op2Type)
+        if (op1Type == op2Type)
         {
-            MakeSrcContained(tree, op1);
+            MakeSrcContained(tree, op2);
 
             // Mark the tree as doing unsigned comparison if
             // both the operands are small and unsigned types.
@@ -2442,11 +2491,11 @@ void Lowering::LowerCmp(GenTreePtr tree)
             }
         }
     }
-    else if (op2->isMemoryOp())
+    else if (op1->isMemoryOp()) 
     {
-        if(op1Type == op2Type)
+        if ((op1Type == op2Type) && IsSafeToContainMem(tree, op1))
         {
-            MakeSrcContained(tree, op2);
+            MakeSrcContained(tree, op1);
 
             // Mark the tree as doing unsigned comparison if
             // both the operands are small and unsigned types.
@@ -2657,7 +2706,8 @@ bool Lowering::LowerStoreInd(GenTreePtr tree)
         GenTreePtr indirOpSource = nullptr;
 
         if (rhsLeft->OperGet() == GT_IND &&
-            rhsLeft->gtGetOp1()->OperGet() == indirDst->OperGet())
+            rhsLeft->gtGetOp1()->OperGet() == indirDst->OperGet() &&
+            IsSafeToContainMem(indirSrc, rhsLeft))
         {
             indirCandidate = rhsLeft;
             indirOpSource = rhsRight;
@@ -2807,6 +2857,7 @@ void Lowering::SetMulOpCounts(GenTreePtr tree)
     
     bool isUnsignedMultiply    = ((tree->gtFlags & GTF_UNSIGNED) != 0);
     bool requiresOverflowCheck = tree->gtOverflowEx();
+    bool useLeaEncoding = false;
     GenTreePtr memOp = nullptr;
 
     // There are three forms of x86 multiply:
@@ -2853,18 +2904,17 @@ void Lowering::SetMulOpCounts(GenTreePtr tree)
             other = op2; 
         }
 
-#if 0   // TODO-XArch-CQ: We want to rewrite this into a LEA
-        if (!requiresOverflowCheck && (imm->gtIconVal == 3 || imm->gtIconVal == 5 || imm->gtIconVal == 9))
+        // CQ: We want to rewrite this into a LEA
+        ssize_t immVal = imm->AsIntConCommon()->IconValue();
+        if (!requiresOverflowCheck && (immVal == 3 || immVal == 5 || immVal == 9))
         {
+            useLeaEncoding = true;
         }
-        else
-#endif
+
+        MakeSrcContained(tree, imm);   // The imm is always contained
+        if (other->isIndir())
         {
-            MakeSrcContained(tree, imm);
-            if (other->isIndir())
-            {
-                memOp = other;
-            }
+            memOp = other;             // memOp may be contained below
         }
     }
     // We allow one operand to be a contained memory operand.
@@ -2877,7 +2927,13 @@ void Lowering::SetMulOpCounts(GenTreePtr tree)
         memOp = op2;
     }
 
-    if ((memOp != nullptr) && (memOp->TypeGet() == tree->TypeGet()))
+    // To generate an LEA we need to force memOp into a register
+    // so don't allow memOp to be 'contained'
+    //
+    if ((memOp != nullptr)                    &&
+        !useLeaEncoding                       &&
+        (memOp->TypeGet() == tree->TypeGet()) &&
+        IsSafeToContainMem(tree, memOp))
     {
         MakeSrcContained(tree, memOp);
     }
@@ -2890,7 +2946,10 @@ void Lowering::SetMulOpCounts(GenTreePtr tree)
 //    tree      - a binary tree node
 //
 // Return Value:
-//    returns true if we can use the read-modify-write memory instruction form
+//    Returns true if we can use the read-modify-write instruction form
+//
+// Notes:
+//    This is used to determine whether to preference the source to the destination register.
 //
 bool Lowering::isRMWRegOper(GenTreePtr tree)
 {

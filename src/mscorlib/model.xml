@@ -1007,7 +1007,7 @@
     <Member MemberType="Property" Name="Default" />
     <Member Name="GetAssemblyName(System.String)" />
     <Member Name="GetLoadContext(System.Reflection.Assembly)" />
-	<Member Name="InitializeDefaultContext(System.Runtime.Loader.AssemblyLoadContext)" />
+    <Member Name="InitializeDefaultContext(System.Runtime.Loader.AssemblyLoadContext)" />
     <Member Name="LoadFromAssemblyName(System.Reflection.AssemblyName)" />
     <Member Name="Load(System.Reflection.AssemblyName)" />
     <Member Name="LoadFromAssemblyPath(System.String)" />
@@ -2039,7 +2039,7 @@
 
     </Type>
     <Type Name="System.ExecutionEngineException" />
-	<Type Name="System.FieldAccessException">
+    <Type Name="System.FieldAccessException">
       <Member Name="#ctor" />
       <Member Name="#ctor(System.String)" />
       <Member Name="#ctor(System.String,System.Exception)" />
@@ -3526,7 +3526,7 @@
       <Member Name="EndInvoke(System.IAsyncResult)" />
       <Member Name="Invoke(T)" />
     </Type>
-    <Type Name="System.Progress&lt;T&gt;" Condition="FEATURE_COMINTEROP">
+    <Type Name="System.Progress&lt;T&gt;">
       <Member Name="#ctor" />
       <Member Name="#ctor(System.Action&lt;T&gt;)" />
       <Member MemberType="Event" Name="ProgressChanged" />
@@ -5750,6 +5750,10 @@
     </Type>
     <Type Name="System.Runtime.CompilerServices.IsCopyConstructed"> <!-- for MC++ -->
     </Type>
+    <Type Name="System.Runtime.CompilerServices.ICastable"> 
+      <Member Name="IsInstanceOfInterface(System.RuntimeTypeHandle,System.Exception@)" /> <!-- EE -->
+      <Member Name="GetImplType(System.RuntimeTypeHandle)" /> <!-- EE -->
+    </Type>
     <Type Name="System.Runtime.CompilerServices.IsExplicitlyDereferenced"> <!-- for MC++ -->
     </Type>
     <Type Name="System.Runtime.CompilerServices.IsImplicitlyDereferenced">  <!-- for MC++ -->
@@ -6150,13 +6154,16 @@
       <Member Name="UnsafeAddrOfPinnedArrayElement(System.Array,System.Int32)" />
       <Member Name="WriteByte(System.IntPtr,System.Byte)" />
       <Member Name="WriteByte(System.IntPtr,System.Int32,System.Byte)" />
+      <Member Name="WriteInt16(System.IntPtr,System.Char)" />      
       <Member Name="WriteInt16(System.IntPtr,System.Int16)" />
+      <Member Name="WriteInt16(System.IntPtr,System.Int32,System.Char)" />      
       <Member Name="WriteInt16(System.IntPtr,System.Int32,System.Int16)" />
       <Member Name="WriteInt32(System.IntPtr,System.Int32)" />
       <Member Name="WriteInt32(System.IntPtr,System.Int32,System.Int32)" />
       <Member Name="WriteInt64(System.IntPtr,System.Int32,System.Int64)" />
-      <Member Name="WriteInt64(System.IntPtr,System.Int64)" />
-      <Member Name="WriteIntPtr(System.IntPtr,System.IntPtr)" />
+      <Member Name="WriteInt64(System.IntPtr,System.Int64)" />            
+      <Member Name="WriteIntPtr(System.IntPtr,System.Int32,System.IntPtr)" />
+      <Member Name="WriteIntPtr(System.IntPtr,System.IntPtr)" />      
       <Member Name="ZeroFreeCoTaskMemUnicode(System.IntPtr)" />
       <Member Status="ImplRoot" Name="InitializeWrapperForWinRT(System.Object,System.IntPtr@)" Condition="FEATURE_COMINTEROP" />
       <Member Status="ImplRoot" Name="LoadLicenseManager" Condition="FEATURE_COMINTEROP" /><Member MemberType="Field" Name="SystemMaxDBCSCharSize" />
@@ -6186,11 +6193,11 @@
       <Member Name="PtrToStringBSTR(System.IntPtr)" />
       <Member Name="PtrToStructure&lt;T&gt;(System.IntPtr)" />
       <Member Name="PtrToStructure&lt;T&gt;(System.IntPtr,T)" />
-      <Member Name="ReadByte(System.Object,System.Int32)" />
-      <Member Name="ReadInt16(System.Object,System.Int32)" />
-      <Member Name="ReadInt32(System.Object,System.Int32)" />
-      <Member Name="ReadInt64(System.Object,System.Int32)" />
-      <Member Name="ReadIntPtr(System.Object,System.Int32)" />
+      <Member Name="ReadByte(System.Object,System.Int32)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="ReadInt16(System.Object,System.Int32)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="ReadInt32(System.Object,System.Int32)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="ReadInt64(System.Object,System.Int32)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="ReadIntPtr(System.Object,System.Int32)" Condition="FEATURE_LEGACYSURFACE" />
       <Member Name="ReAllocCoTaskMem(System.IntPtr,System.Int32)" />
       <Member Name="ReAllocHGlobal(System.IntPtr,System.IntPtr)" />
       <Member Name="SizeOf&lt;T&gt;" />
@@ -6202,15 +6209,12 @@
       <Member Name="StringToHGlobalUni(System.String)" />
       <Member Name="StructureToPtr&lt;T&gt;(T,System.IntPtr,System.Boolean)" />
       <Member Name="UnsafeAddrOfPinnedArrayElement&lt;T&gt;(T[],System.Int32)" />
-      <Member Name="WriteByte(System.Object,System.Int32,System.Byte)" />
-      <Member Name="WriteInt16(System.IntPtr,System.Char)" />
-      <Member Name="WriteInt16(System.IntPtr,System.Int32,System.Char)" />
-      <Member Name="WriteInt16(System.Object,System.Int32,System.Char)" />
-      <Member Name="WriteInt16(System.Object,System.Int32,System.Int16)" />
-      <Member Name="WriteInt32(System.Object,System.Int32,System.Int32)" />
-      <Member Name="WriteInt64(System.Object,System.Int32,System.Int64)" />
-      <Member Name="WriteIntPtr(System.IntPtr,System.Int32,System.IntPtr)" />
-      <Member Name="WriteIntPtr(System.Object,System.Int32,System.IntPtr)" />
+      <Member Name="WriteByte(System.Object,System.Int32,System.Byte)" Condition="FEATURE_LEGACYSURFACE" />      
+      <Member Name="WriteInt16(System.Object,System.Int32,System.Char)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="WriteInt16(System.Object,System.Int32,System.Int16)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="WriteInt32(System.Object,System.Int32,System.Int32)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="WriteInt64(System.Object,System.Int32,System.Int64)" Condition="FEATURE_LEGACYSURFACE" />
+      <Member Name="WriteIntPtr(System.Object,System.Int32,System.IntPtr)" Condition="FEATURE_LEGACYSURFACE" />
       <Member Name="ZeroFreeBSTR(System.IntPtr)" />
       <Member Name="ZeroFreeCoTaskMemAnsi(System.IntPtr)" />
       <Member Name="ZeroFreeGlobalAllocAnsi(System.IntPtr)" />
@@ -9744,6 +9748,7 @@
     <Type Name="System.Diagnostics.Tracing.EventAttribute">
       <Member Name="#ctor(System.Int32)" />
       <Member Name="get_EventId" />
+      <Member MemberType="Property" Name="ActivityOptions" />
       <Member MemberType="Property" Name="Channel" />
       <Member MemberType="Property" Name="Keywords" />  
       <Member MemberType="Property" Name="Level" />  
@@ -9772,19 +9777,19 @@
       <Member MemberType="Field" Name="Xml" />
     </Type>
 
-	<Type Name="System.Diagnostics.Tracing.EventDescriptor">
-	  <Member Name="#ctor(System.Int32,System.Byte,System.Byte,System.Int64)" />
+    <Type Name="System.Diagnostics.Tracing.EventDescriptor">
+      <Member Name="#ctor(System.Int32,System.Byte,System.Byte,System.Int64)" />
       <Member Name="#ctor(System.Int32,System.Byte,System.Byte,System.Byte,System.Byte,System.Int32,System.Int64)" />
       <Member Name="get_EventId" />
       <Member Name="get_Channel" /> 
       <Member Name="get_Level" />  
       <Member Name="get_Opcode" />
-	  <Member Name="get_Task" />
-	  <Member Name="get_Version" />
-	  <Member Name="Equals(System.Object)" />
-	  <Member Name="Equals(System.Diagnostics.Tracing.EventDescriptor)" />
-    </Type>	
-	
+      <Member Name="get_Task" />
+      <Member Name="get_Version" />
+      <Member Name="Equals(System.Object)" />
+      <Member Name="Equals(System.Diagnostics.Tracing.EventDescriptor)" />
+    </Type> 
+    
     <Type Name="System.Diagnostics.Tracing.EventChannel">
       <Member MemberType="Field" Name="Admin" />
       <Member MemberType="Field" Name="Analytic" />
@@ -9810,7 +9815,7 @@
     <Type Name="System.Diagnostics.Tracing.EventDataAttribute">
       <Member Name="#ctor" />
       <Member MemberType="Property" Name="Name" /> 
-	  <Member MemberType="Property" Name="Level" />  
+      <Member MemberType="Property" Name="Level" />  
       <Member MemberType="Property" Name="Opcode" />  
       <Member MemberType="Property" Name="Keywords" />  
       <Member MemberType="Property" Name="Tags" />  
@@ -9849,7 +9854,7 @@
       <Member Name="OnEventWritten(System.Diagnostics.Tracing.EventWrittenEventArgs)" />
     </Type>    
     
-	<Type Name="System.Diagnostics.Tracing.EventManifestOptions">
+    <Type Name="System.Diagnostics.Tracing.EventManifestOptions">
       <Member MemberType="Field" Name="AllCultures" />
       <Member MemberType="Field" Name="AllowEventSourceOverride" />
       <Member MemberType="Field" Name="None" />
@@ -9874,11 +9879,11 @@
     <Type Name="System.Diagnostics.Tracing.EventSource"> 
       <Member Name="#ctor" />
       <Member Name="#ctor(System.Boolean)" />
-	  <Member Name="#ctor(System.Diagnostics.Tracing.EventSourceSettings)" />
-	  <Member Name="#ctor(System.Diagnostics.Tracing.EventSourceSettings,System.String[])" />
-	  <Member Name="#ctor(System.String)" />
-	  <Member Name="#ctor(System.String,System.Diagnostics.Tracing.EventSourceSettings)" />
-	  <Member Name="#ctor(System.String,System.Diagnostics.Tracing.EventSourceSettings,System.String[])" />
+      <Member Name="#ctor(System.Diagnostics.Tracing.EventSourceSettings)" />
+      <Member Name="#ctor(System.Diagnostics.Tracing.EventSourceSettings,System.String[])" />
+      <Member Name="#ctor(System.String)" />
+      <Member Name="#ctor(System.String,System.Diagnostics.Tracing.EventSourceSettings)" />
+      <Member Name="#ctor(System.String,System.Diagnostics.Tracing.EventSourceSettings,System.String[])" />
       <Member Name="get_Guid" />
       <Member Name="get_Name" />
       <Member MemberType="Property" Name="ConstructionException" />
@@ -9889,7 +9894,7 @@
       <Member Name="GenerateManifest(System.Type,System.String,System.Diagnostics.Tracing.EventManifestOptions)" />
       <Member Name="GetGuid(System.Type)" />
       <Member Name="GetName(System.Type)" />
-	  <Member Name="GetTrait(System.String)" />
+      <Member Name="GetTrait(System.String)" />
       <Member Name="GetSources" />
       <Member Name="IsEnabled" />
       <Member Name="IsEnabled(System.Diagnostics.Tracing.EventLevel,System.Diagnostics.Tracing.EventKeywords)" />
@@ -9927,7 +9932,7 @@
       <Member Name="WriteEventCore(System.Int32,System.Int32,System.Diagnostics.Tracing.EventSource+EventData*)" />
       <Member Name="WriteEventWithRelatedActivityId(System.Int32,System.Guid,System.Object[])" />
       <Member Name="WriteEventWithRelatedActivityIdCore(System.Int32,System.Guid*,System.Int32,System.Diagnostics.Tracing.EventSource+EventData*)" />
-	  <Member Name="get_Settings" /> 
+      <Member Name="get_Settings" /> 
     </Type>
 
     <Type Name="System.Diagnostics.Tracing.EventSource+EventData">
@@ -9979,8 +9984,8 @@
       <Member MemberType="Field" Name="None" /> 
     </Type>  
 
-	<Type Name="System.Diagnostics.Tracing.EventFieldAttribute">
-	  <Member Name="#ctor" />
+    <Type Name="System.Diagnostics.Tracing.EventFieldAttribute">
+      <Member Name="#ctor" />
       <Member MemberType="Property" Name="Tags" />
       <Member MemberType="Property" Name="Name" />
       <Member MemberType="Property" Name="Format" />
@@ -9995,10 +10000,10 @@
       <Member Name="get_Message" />
       <Member Name="get_Opcode" />
       <Member Name="get_Payload" />
-	  <Member Name="get_PayloadNames" />
+      <Member Name="get_PayloadNames" />
       <Member Name="get_Task" />
       <Member Name="get_Version" />
-	  <Member Name="get_Tags" />
+      <Member Name="get_Tags" />
       <Member MemberType="Property" Name="ActivityId" />
       <Member MemberType="Property" Name="EventName" />
       <Member MemberType="Property" Name="RelatedActivityId" />
@@ -10578,8 +10583,8 @@
       <Member Name="MakeVersionSafeName(System.String,System.Runtime.Versioning.ResourceScope,System.Runtime.Versioning.ResourceScope)" />
       <Member Name="MakeVersionSafeName(System.String,System.Runtime.Versioning.ResourceScope,System.Runtime.Versioning.ResourceScope,System.Type)" />
     </Type>
-    <Type Status="ApiFxInternal" Name="System.Runtime.Serialization.FormatterServices">
-        <Member Status="ApiFxInternal" Name="GetUninitializedObject(System.Type)" />
+    <Type Name="System.Runtime.Serialization.FormatterServices">
+        <Member Name="GetUninitializedObject(System.Type)" />
     </Type>
     <Type Name="System.Runtime.Serialization.SerializationException">
       <Member Name="#ctor" />
@@ -11330,6 +11335,7 @@
     </Type>
 
     <Type Status="ImplRoot" Name="System.StubHelpers.StubHelpers">
+      <Member Name="ClearLastError" />
       <Member Name="SetLastError" />
       <Member Name="IsQCall(System.IntPtr)" />
       <Member Name="InitDeclaringType(System.IntPtr)" />
@@ -11667,10 +11673,10 @@
       <Member Status="ImplRoot" Name="CreateUnwrapPromise&lt;TResult&gt;(System.Threading.Tasks.Task,System.Boolean)" />
       <Member Status="ImplRoot" Name="NotifyDebuggerOfWaitCompletion"                       />
       <Member Status="ImplRoot" Name="SetNotificationForWaitCompletion(System.Boolean)"     />
-	  <!--Internal helper members exposed to be used by VS Debugger-->
-	  <Member Status="ImplRoot" Name="GetDelegateContinuationsForDebugger" />
-	  <Member Status="ImplRoot" Name="GetActiveTaskFromId(System.Int32)" />
-	  <Member Status="ImplRoot" Name="GetActiveTasks" />
+      <!--Internal helper members exposed to be used by VS Debugger-->
+      <Member Status="ImplRoot" Name="GetDelegateContinuationsForDebugger" />
+      <Member Status="ImplRoot" Name="GetActiveTaskFromId(System.Int32)" />
+      <Member Status="ImplRoot" Name="GetActiveTasks" />
     </Type>
     <Type Status="ImplRoot" Name="System.Threading.Tasks.SystemThreadingTasks_TaskDebugView">
       <Member Status="ImplRoot" Name="#ctor(System.Threading.Tasks.Task)" />

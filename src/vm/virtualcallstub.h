@@ -9,7 +9,6 @@
 
 
 //
-
 // See code:VirtualCallStubManager for details
 //
 // ============================================================================
@@ -326,6 +325,11 @@ public:
         WRAPPER_NO_CONTRACT;
         SUPPORTS_DAC;
 
+        // This method can called with stubStartAddress==NULL, e.g. when handling null reference exceptions
+        // caused by IP=0. Early out for this case to avoid confusing handled access violations inside predictStubKind.
+        if (PCODEToPINSTR(stubStartAddress) == NULL)
+            return SK_UNKNOWN;
+
         // Rather than calling IsInRange(stubStartAddress) for each possible stub kind
         // we can peek at the assembly code and predict which kind of a stub we have
         StubKind predictedKind = predictStubKind(stubStartAddress);
@@ -494,11 +498,12 @@ private:
                                           size_t token,
                                           void *target);
 
-    //Given a dispatch token and a method table, determine the
+    //Given a dispatch token, an object and a method table, determine the
     //target address to go to.  The return value (BOOL) states whether this address
     //is cacheable or not.
     static BOOL Resolver(MethodTable   * pMT,
                          DispatchToken   token,
+                         OBJECTREF     * protectedObj,
                          PCODE         * ppTarget);
 
     // This can be used to find a target without needing the ability to throw
@@ -554,7 +559,7 @@ private:
     static void STDCALL BackPatchWorkerStatic(PCODE returnAddr, TADDR siteAddrForRegisterIndirect);
 
 public:
-    PCODE ResolveWorker(StubCallSite* pCallSite, OBJECTREF pObj, DispatchToken token, StubKind stubKind);
+    PCODE ResolveWorker(StubCallSite* pCallSite, OBJECTREF *protectedObj, DispatchToken token, StubKind stubKind);
     void BackPatchWorker(StubCallSite* pCallSite);
 
     //Change the callsite to point to stub

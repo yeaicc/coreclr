@@ -12,6 +12,7 @@
 #include "sos.h"
 #include "safemath.h"
 
+
 // This is the increment for the segment lookup data
 const int nSegLookupStgIncrement = 100;
 
@@ -301,7 +302,7 @@ void HeapStat::Print(const char* label /* = NULL */)
             }
             else
             {
-                wcscpy_s(g_mdName, mdNameLen, L"UNKNOWN");
+                wcscpy_s(g_mdName, mdNameLen, W("UNKNOWN"));
                 NameForMT_s((DWORD_PTR) root->data, g_mdName, mdNameLen);
                 ExtOut("%S\n", g_mdName);
             }
@@ -421,6 +422,8 @@ void MethodTableCache::Clear()
     ReverseLeftMost (root);
 }
 
+MethodTableCache g_special_mtCache;
+
 size_t Align (size_t nbytes)
 {
     return (nbytes + ALIGNCONST) & ~ALIGNCONST;
@@ -430,6 +433,8 @@ size_t AlignLarge(size_t nbytes)
 {
     return (nbytes + ALIGNCONSTLARGE) & ~ALIGNCONSTLARGE;
 }
+
+#ifndef FEATURE_PAL
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -670,7 +675,7 @@ BOOL GCObjInHeap(TADDR taddrObj, const DacpGcHeapDetails &heap,
 
 #ifndef FEATURE_PAL
 // this function updates genUsage to reflect statistics from the range defined by [start, end)
-void GCGenUsageStats(TADDR start, TADDR end, const std::hash_set<TADDR> &liveObjs, 
+void GCGenUsageStats(TADDR start, TADDR end, const std::unordered_set<TADDR> &liveObjs,
     const DacpGcHeapDetails &heap, BOOL bLarge, const AllocInfo *pAllocInfo, GenUsageStat *genUsage)
 {
     // if this is an empty segment or generation return
@@ -779,7 +784,7 @@ BOOL GCHeapUsageStats(const DacpGcHeapDetails& heap, BOOL bIncUnreachable, HeapU
 #ifndef FEATURE_PAL
     // this will create the bitmap of rooted objects only if bIncUnreachable is true
     GCRootImpl gcroot;
-    const std::hash_set<TADDR> &liveObjs = gcroot.GetLiveObjects();
+    const std::unordered_set<TADDR> &liveObjs = gcroot.GetLiveObjects();
     
     // 1a. enumerate all non-ephemeral segments
     while (taddrSeg != (TADDR)heap.generation_table[0].start_segment)
@@ -846,7 +851,7 @@ BOOL GCHeapUsageStats(const DacpGcHeapDetails& heap, BOOL bIncUnreachable, HeapU
     return TRUE;
 }
 
-MethodTableCache g_special_mtCache;
+#endif // FEATURE_PAL
 
 DWORD GetNumComponents(TADDR obj)
 {
@@ -1270,7 +1275,6 @@ BOOL GCHeapsTraverse(VISITGCHEAPFUNC pFunc, LPVOID token, BOOL verify)
     return TRUE;
 }
 
-
 GCHeapSnapshot::GCHeapSnapshot() 
 { 
     m_isBuilt = FALSE; 
@@ -1571,6 +1575,8 @@ int GCHeapSnapshot::GetGeneration(CLRDATA_ADDRESS objectPointer)
     
     return 2;
 }
+
+#ifndef FEATURE_PAL
 
 DWORD_PTR g_trav_totalSize = 0;
 DWORD_PTR g_trav_wastedSize = 0;
@@ -1909,3 +1915,5 @@ DWORD_PTR PrintModuleHeapInfo(__out_ecount(count) DWORD_PTR *moduleList, int cou
 
     return toReturn;
 }
+
+#endif // !FEATURE_PAL
