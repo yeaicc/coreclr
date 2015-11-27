@@ -1191,7 +1191,7 @@ BOOL OnGcCoverageInterrupt(PCONTEXT regs)
     Thread* pThread = GetThread();
     _ASSERTE(pThread);
    
-#ifdef USE_REDIRECT_FOR_GCSTRESS
+#if defined(USE_REDIRECT_FOR_GCSTRESS) && !defined(PLATFORM_UNIX)
     // If we're unable to redirect, then we simply won't test GC at this
     // location.
     if (!pThread->CheckForAndDoRedirectForGCStress(regs))
@@ -1608,7 +1608,7 @@ void DoGcStress (PCONTEXT regs, MethodDesc *pMD)
 #elif defined(_TARGET_ARM_)
         retVal = regs->R0;
 #elif defined(_TARGET_ARM64_)
-        retVal = regs->X[0];
+        retVal = regs->X0;
 #else
         PORTABILITY_ASSERT("DoGCStress - return register");
 #endif

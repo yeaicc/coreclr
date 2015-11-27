@@ -6,7 +6,7 @@ This repo includes several documents that explain both high-level and low-level 
 Intro to .NET Core
 ==================
 
-.NET Core is a self-contained .NET runtime and framework that implements [ECMA 335](project-docs/dotnet-standards.md). It can be (and has been) ported to multiple architectures and platforms. It support a variety of installation options, having no specific deployment requirements itself.
+.NET Core is a self-contained .NET runtime and framework that implements [ECMA 335](project-docs/dotnet-standards.md). It can be (and has been) ported to multiple architectures and platforms. It supports a variety of installation options, having no specific deployment requirements itself.
 
 Learn about .NET Core
 ====================
@@ -30,6 +30,7 @@ Project Docs
 - [Contributing Workflow](project-docs/contributing-workflow.md)
 - [Performance Guidelines](project-docs/performance-guidelines.md)
 - [Garbage Collector Guidelines](project-docs/garbage-collector-guidelines.md)
+- [Adding new public APIs to mscorlib](project-docs/adding_new_public_apis.md)
 
 Coding Guidelines
 =================
@@ -47,6 +48,7 @@ Build CoreCLR from Source
 - [Building CoreCLR on Windows](building/windows-instructions.md)
 - [Debugging CoreCLR on Windows](building/windows-debugging-instructions.md)
 - [Testing Changes on Windows](building/windows-test-instructions.md)
+- [Testing Changes on Linux, OS X, and FreeBSD](building/unix-test-instructions.md)
 - [Testing with CoreFX](building/testing-with-corefx.md)
 - [Creating a Custom DNX](building/custom-dnx-instructions.md)
 
@@ -68,6 +70,7 @@ Book of the Runtime
 - [Profiling](botr/profiling.md)
 - [Implementing Profilability](botr/profilability.md)
 - [What Every Dev needs to Know About Exceptions in the Runtime](botr/exceptions.md)
+- [ReadyToRun Overview](botr/readytorun-overview.md)
 
 Decoder Rings
 =============
@@ -79,7 +82,7 @@ Other Information
 =================
 
 - [CoreFX Repo documentation](https://github.com/dotnet/corefx/tree/master/Documentation)
-- [Porting to .NET Core](https://github.com/dotnet/corefx/blob/master/Documentation/support-dotnet-core-instructions.md)
+- [Porting to .NET Core](https://github.com/dotnet/corefx/blob/master/Documentation/project-docs/support-dotnet-core-instructions.md)
 - [.NET Standards (Ecma)](project-docs/dotnet-standards.md)
 - [CLR Configuration Knobs](project-docs/clr-configuration-knobs.md)
 - [MSDN Entry for the CLR](http://msdn.microsoft.com/library/8bs2ecf4.aspx)

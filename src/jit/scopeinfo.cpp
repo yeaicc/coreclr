@@ -875,9 +875,44 @@ void                CodeGen::psiEndPrologScope(psiScope * scope)
 
 
 /*============================================================================
- *           INTERFACE (public) Functions for PrologScopeInfo
+ *           INTERFACE (protected) Functions for PrologScopeInfo
  *============================================================================
  */
+
+//------------------------------------------------------------------------
+// psSetScopeOffset: Set the offset of the newScope to the offset of the LslVar
+//
+// Arguments:
+//    'newScope'  the new scope object whose offset is to be set to the lclVarDsc offset.
+//    'lclVarDsc' is an op that will now be contained by its parent.
+//
+//
+void                CodeGen::psSetScopeOffset(psiScope* newScope, LclVarDsc * lclVarDsc)
+{
+    newScope->scRegister = false;
+    newScope->u2.scBaseReg = REG_SPBASE;
+
+#ifdef _TARGET_AMD64_                
+    // scOffset = offset from caller SP - REGSIZE_BYTES
+    // TODO-Cleanup - scOffset needs to be understood.  For now just matching with the existing definition.
+    newScope->u2.scOffset = compiler->lvaToCallerSPRelativeOffset(lclVarDsc->lvStkOffs, lclVarDsc->lvFramePointerBased) + REGSIZE_BYTES;
+#else // !_TARGET_AMD64_
+    if (doubleAlignOrFramePointerUsed())
+    {
+        // REGSIZE_BYTES - for the pushed value of EBP
+        newScope->u2.scOffset = lclVarDsc->lvStkOffs - REGSIZE_BYTES;
+    }
+    else
+    {
+        newScope->u2.scOffset = lclVarDsc->lvStkOffs - genTotalFrameSize();
+    }
+#endif // !_TARGET_AMD64_
+}
+
+/*============================================================================
+*           INTERFACE (public) Functions for PrologScopeInfo
+*============================================================================
+*/
 
 /*****************************************************************************
  *                          psiBegProlog
@@ -909,43 +944,78 @@ void                CodeGen::psiBegProlog()
         psiScope * newScope      = psiNewPrologScope(varScope->vsdLVnum,
                                                      varScope->vsdVarNum);
 
-        if  (lclVarDsc1->lvIsRegArg)
+        if (lclVarDsc1->lvIsRegArg)
         {
-#ifdef DEBUG
-            var_types regType = compiler->mangleVarArgsType(lclVarDsc1->TypeGet());
-#ifdef _TARGET_ARM_
-            if (lclVarDsc1->lvIsHfaRegArg)
+            bool isStructHandled = false;
+#if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
+            SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR structDesc;
+            if (lclVarDsc1->TypeGet() == TYP_STRUCT)
             {
-                regType = lclVarDsc1->GetHfaType();
+                CORINFO_CLASS_HANDLE typeHnd = lclVarDsc1->lvVerTypeInfo.GetClassHandle();
+                assert(typeHnd != nullptr);
+                compiler->eeGetSystemVAmd64PassStructInRegisterDescriptor(typeHnd, &structDesc);
+                if (structDesc.passedInRegisters)
+                {
+                    regNumber regNum = REG_NA;
+                    regNumber otherRegNum = REG_NA;
+                    for (unsigned nCnt = 0; nCnt < structDesc.eightByteCount; nCnt++)
+                    {
+                        unsigned len = structDesc.eightByteSizes[nCnt];
+                        var_types regType = TYP_UNDEF;
+
+                        if (nCnt == 0)
+                        {
+                            regNum = lclVarDsc1->lvArgReg;
+                        }
+                        else if (nCnt == 1)
+                        {
+                            otherRegNum = lclVarDsc1->lvOtherArgReg;
+                        }
+                        else
+                        {
+                            assert(false && "Invalid eightbyte number.");
+                        }
+
+                        regType = compiler->getEightByteType(structDesc, nCnt);
+#ifdef DEBUG
+                        regType = compiler->mangleVarArgsType(regType);
+                        assert(genMapRegNumToRegArgNum((nCnt == 0 ? regNum : otherRegNum), regType) != (unsigned)-1);
+#endif // DEBUG
+                    }
+
+                    newScope->scRegister = true;
+                    newScope->u1.scRegNum = (regNumberSmall)regNum;
+                    newScope->u1.scOtherReg = (regNumberSmall)otherRegNum;
+                }
+                else
+                {
+                    // Stack passed argument. Get the offset from the  caller's frame.
+                    psSetScopeOffset(newScope, lclVarDsc1);
+                }
+
+                isStructHandled = true;
             }
+#endif // !defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
+            if (!isStructHandled)
+            {
+#ifdef DEBUG
+                var_types regType = compiler->mangleVarArgsType(lclVarDsc1->TypeGet());
+#ifdef _TARGET_ARM_
+                if (lclVarDsc1->lvIsHfaRegArg)
+                {
+                    regType = lclVarDsc1->GetHfaType();
+                }
 #endif // _TARGET_ARM_
-            assert(genMapRegNumToRegArgNum(lclVarDsc1->lvArgReg, regType) != (unsigned)-1);
+                assert(genMapRegNumToRegArgNum(lclVarDsc1->lvArgReg, regType) != (unsigned)-1);
 #endif // DEBUG
 
-            newScope->scRegister     = true;
-            newScope->u1.scRegNum    = (regNumberSmall) lclVarDsc1->lvArgReg;
+                newScope->scRegister = true;
+                newScope->u1.scRegNum = (regNumberSmall)lclVarDsc1->lvArgReg;
+            }
         }
         else
         {
-            newScope->scRegister     = false;
-            newScope->u2.scBaseReg   = REG_SPBASE;
-
-#ifdef _TARGET_AMD64_                
-            // scOffset = offset from caller SP - REGSIZE_BYTES
-            // TODO-Cleanup - scOffset needs to be understood.  For now just matching with the existing definition.
-            newScope->u2.scOffset   =   compiler->lvaToCallerSPRelativeOffset(lclVarDsc1->lvStkOffs, lclVarDsc1->lvFramePointerBased) + REGSIZE_BYTES;
-#else
-            if (doubleAlignOrFramePointerUsed())
-            {
-                // REGSIZE_BYTES - for the pushed value of EBP
-                newScope->u2.scOffset   =   lclVarDsc1->lvStkOffs - REGSIZE_BYTES;
-            }
-            else
-            {
-                newScope->u2.scOffset  =   lclVarDsc1->lvStkOffs - genTotalFrameSize();
-            }
-#endif //_TARGET_AMD64_
-
+            psSetScopeOffset(newScope, lclVarDsc1);
         }
     }
 }

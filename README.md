@@ -3,13 +3,15 @@
 
 The CoreCLR repo contains the complete runtime implementation for [.NET Core](http://github.com/dotnet/core). It includes RyuJIT, the .NET GC, native interop and many other components. It is cross-platform, with multiple OS and CPU ports in progress.
 
+Note that the library implementation CoreFX (System.Collections, System.IO, System.Xml and so on) lives in another repo [dotnet/corefx](https://github.com/dotnet/corefx).
+
 Build Status
 ------------
 
-|         |Linux   |Windows |Mac OS X |FreeBSD  |
-|---------|:------:|:------:|:-------:|:-------:|
-|**Debug**|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_linux_debug/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_linux_debug/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_windows_debug/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_windows_debug/)|[![Build Status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_mac_debug/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_mac_debug/) |[![Build Status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_freebsd_debug/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_freebsd_debug/) |
-|**Release**|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_linux_release/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_linux_release/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_windows_release/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_windows_release/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_mac_release/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_mac_release/) |[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_freebsd_release/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr_freebsd_release/) |
+|         |Ubuntu 14.04 |Centos 7.1 |OpenSuSE 13.2 |Windows |Mac OS X |FreeBSD |
+|---------|:------:|:------:|:------:|:------:|:-------:|:-------:|
+|**Debug**|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_ubuntu/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_ubuntu/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_centos7.1/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_centos7.1/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_opensuse13.2/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_opensuse13.2/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_windows_nt/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_windows_nt/)|[![Build Status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_osx/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_osx/) |[![Build Status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_freebsd/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/debug_freebsd/) |
+|**Release**|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_ubuntu/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_ubuntu/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_centos7.1/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_centos7.1/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_opensuse13.2/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_opensuse13.2/)|[![Build status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_windows_nt/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_windows_nt/)|[![Build Status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_osx/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_osx/) |[![Build Status](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_freebsd/badge/icon)](http://dotnet-ci.cloudapp.net/job/dotnet_coreclr/job/release_freebsd/) |
 
 Get .NET Core
 -------------
@@ -31,6 +33,7 @@ Learn about CoreCLR and .NET Core
 
 The best ways to learn about CoreCLR are to try out the product instructions and to read the "Book of the Runtime" architecture documents that describe the inner workings of the product. New devs to the CLR team are encouraged to read these documents before making substative changes to the product. They are equally useful for open source contributors.
 
+- [.NET Core Roadmap](https://github.com/dotnet/core/blob/master/roadmap.md)
 - [Product instructions](Documentation/README.md)
 - [Introduction to the Common Language Runtime](Documentation/botr/intro-to-clr.md)
 - [Book of the Runtime](Documentation/README.md#book-of-the-runtime)
@@ -43,7 +46,7 @@ The [.NET Core Libraries][corefx] repo contains the base class libraries, which 
 Engage, Contribute and Provide Feedback
 ---------------------------------------
 
-Some of the best ways to contribute are to try things out, file bugs, and join in design conversations. You are encouraged to start a discussion by filing an issue, or starting a thread in the [.NET Foundation forums].
+Some of the best ways to contribute are to try things out, file bugs, and join in design conversations. You are encouraged to start a discussion by filing an issue, or starting a thread in the [.NET Foundation forums](http://forums.dotnetfoundation.org/). If you are having issues with the Full .NET Framework or .NET Runtime the best ways to file a bug are at [Connect](http://connect.microsoft.com/VisualStudio) or through [Product Support](https://support.microsoft.com/en-us/contactus?ws=support) if you have a contract.
 
 Looking for something to work on? The list of [up-for-grabs issues](https://github.com/dotnet/coreclr/issues?q=is%3Aopen+is%3Aissue+label%3Aup-for-grabs) is a great place to start.
 

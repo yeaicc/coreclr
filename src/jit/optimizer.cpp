@@ -3316,6 +3316,17 @@ void                Compiler::fgOptWhileLoop(BasicBlock * block)
     // Since test is a BBJ_COND it will have a bbNext
     noway_assert(bTest->bbNext);
 
+	// 'block' must be in the same try region as the condition, since we're going to insert
+	// a duplicated condition in 'block', and the condition might include exception throwing code.
+	if (!BasicBlock::sameTryRegion(block, bTest))
+		return;
+
+    // We're going to change 'block' to branch to bTest->bbNext, so that also better be in the
+	// same try region (or no try region) to avoid generating illegal flow.
+    BasicBlock* bTestNext = bTest->bbNext;
+    if (bTestNext->hasTryIndex() && !BasicBlock::sameTryRegion(block, bTestNext))
+        return;
+
     GenTreePtr condStmt = optFindLoopTermTest(bTest);
 
     // bTest must only contain only a jtrue with no other stmts, we will only clone
@@ -5867,7 +5878,6 @@ bool Compiler::optHoistLoopExprsForTree(GenTreePtr tree,
     }
 
     bool treeIsInvariant = true;
-    bool curIsAddr = tree->OperGet() == GT_ADDR;
     for (unsigned childNum = 0; childNum < nChildren; childNum++)
     {
         if (!optHoistLoopExprsForTree(tree->GetChild(childNum), lnum, hoistCtxt, pFirstBlockAndBeforeSideEffect, &childrenHoistable[childNum]))

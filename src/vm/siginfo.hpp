@@ -50,6 +50,7 @@ unsigned GetSizeForCorElementType(CorElementType etyp);
 const ElementTypeInfo* GetElementTypeInfo(CorElementType etyp);
 
 class SigBuilder;
+class ArgDestination;
 
 typedef const struct HardCodedMetaSig *LPHARDCODEDMETASIG;
 
@@ -69,13 +70,13 @@ enum VarKind
 //---------------------------------------------------------------------------------------
 
 struct ScanContext;
-typedef void promote_func(PTR_PTR_Object, ScanContext*, DWORD);
-typedef void promote_carefully_func(promote_func*, PTR_PTR_Object, ScanContext*, DWORD);
+typedef void promote_func(PTR_PTR_Object, ScanContext*, uint32_t);
+typedef void promote_carefully_func(promote_func*, PTR_PTR_Object, ScanContext*, uint32_t);
 
 void PromoteCarefully(promote_func   fn,
                       PTR_PTR_Object obj, 
                       ScanContext*   sc, 
-                      DWORD          flags = GC_CALL_INTERIOR);
+                      uint32_t       flags = GC_CALL_INTERIOR);
 
 class LoaderAllocator;
 void GcReportLoaderAllocator(promote_func* fn, ScanContext* sc, LoaderAllocator *pLoaderAllocator);
@@ -841,7 +842,7 @@ class MetaSig
         // Perform type-specific GC promotion on the value (based upon the
         // last type retrieved by NextArg()).
         //------------------------------------------------------------------
-        VOID GcScanRoots(PTR_VOID pValue, promote_func *fn,
+        VOID GcScanRoots(ArgDestination *pValue, promote_func *fn,
                          ScanContext* sc, promote_carefully_func *fnc = NULL);
 
         //------------------------------------------------------------------
@@ -888,7 +889,7 @@ class MetaSig
         BOOL IsReturnTypeVoid() const;
 
 
-        enum RETURNTYPE {RETOBJ, RETBYREF, RETNONOBJ};
+        enum RETURNTYPE {RETOBJ, RETBYREF, RETNONOBJ, RETVALUETYPE};
 
         CorElementType GetReturnTypeNormalized(TypeHandle * pthValueType = NULL) const;
 

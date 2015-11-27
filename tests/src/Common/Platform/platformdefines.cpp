@@ -325,14 +325,3 @@ void TP_JoinThread(THREAD_ID tThread)
 	pthread_join(tThread, NULL);
 #endif
 }
-
-#ifndef WINDOWS
-void TP_DebugBreak()
-{
-#ifdef _PPC_
-	__asm__ __volatile__("trap");
-#else
-	__asm__ __volatile__("int $3");
-#endif	
-}
-#endif
