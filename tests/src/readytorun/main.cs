@@ -1,5 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 
 using System;
@@ -100,7 +101,15 @@ class Program
     static void TestInterop()
     {
         // Verify both intra-module and inter-module PInvoke interop
-        MyClass.GetTickCount();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            MyClass.GetTickCount();
+        }
+        else
+        {
+            MyClass.GetCurrentThreadId();
+        }
+
         MyClass.TestInterop();
     }
 
@@ -234,6 +243,12 @@ class Program
         MyChangingHFAStruct.Check(s);
     }
 
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static void TestGetType()
+    {
+        new MyClass().GetType().ToString();
+    }
+
 #if CORECLR
     class MyLoadContext : AssemblyLoadContext
     {
@@ -243,7 +258,7 @@ class Program
 
         public void TestMultipleLoads()
         {
-            Assembly a = LoadFromAssemblyPath(Path.Combine(Directory.GetCurrentDirectory(), "NI", "test.ni.dll"));
+            Assembly a = LoadFromAssemblyPath(Path.Combine(Directory.GetCurrentDirectory(), "test.ni.dll"));
             Assert.AreEqual(AssemblyLoadContext.GetLoadContext(a), this);
         }
 
@@ -308,6 +323,8 @@ class Program
         TestGrowingStruct();
         TestChangingStruct();
         TestChangingHFAStruct();
+
+        TestGetType();
 
 #if CORECLR
         TestMultipleLoads();

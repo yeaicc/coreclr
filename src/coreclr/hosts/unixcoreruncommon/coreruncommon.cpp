@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // Code that is used by both the Unix corerun and coreconsole.
@@ -16,15 +15,19 @@
 #include <string>
 #include <string.h>
 #include <sys/stat.h>
-
-#if defined(__APPLE__)
-#include <mach-o/dyld.h>
-static const char * const coreClrDll = "libcoreclr.dylib";
-#else
-static const char * const coreClrDll = "libcoreclr.so";
-#endif
+#include "coreruncommon.h"
+#include <unistd.h>
 
 #define SUCCEEDED(Status) ((Status) >= 0)
+
+// Name of the environment variable controlling server GC.
+// If set to 1, server GC is enabled on startup. If 0, server GC is
+// disabled. Server GC is off by default.
+static const char* serverGcVar = "CORECLR_SERVER_GC";
+
+// Name of the environment variable controlling concurrent GC,
+// used in the same way as serverGcVar. Concurrent GC is on by default.
+static const char* concurrentGcVar = "CORECLR_CONCURRENT_GC";
 
 // Prototype of the coreclr_initialize function from the libcoreclr.so
 typedef int (*InitializeCoreCLRFunction)(
@@ -64,12 +67,20 @@ bool GetEntrypointExecutableAbsolutePath(std::string& entrypointExecutable)
 
     // Get path to the executable for the current process using
     // platform specific means.
-#if defined(__LINUX__) || !defined(__APPLE__)
-    
-    // On non-Mac OS, return the symlink that will be resolved by GetAbsolutePath
-    // to fetch the entrypoint EXE absolute path, inclusive of filename.
-    entrypointExecutable.assign(symlinkEntrypointExecutable);
-    result = true;
+#if defined(__LINUX__)
+    // On Linux, fetch the entry point EXE absolute path, inclusive of filename.
+    char exe[PATH_MAX];
+    ssize_t res = readlink(symlinkEntrypointExecutable, exe, PATH_MAX - 1);
+    if (res != -1)
+    {
+        exe[res] = '\0';
+        entrypointExecutable.assign(exe);
+        result = true;
+    }
+    else
+    {
+        result = false;
+    }
 #elif defined(__APPLE__)
     
     // On Mac, we ask the OS for the absolute path to the entrypoint executable
@@ -86,7 +97,12 @@ bool GetEntrypointExecutableAbsolutePath(std::string& entrypointExecutable)
             result = true;
         }
     }
- #endif 
+#else
+    // On non-Mac OS, return the symlink that will be resolved by GetAbsolutePath
+    // to fetch the entrypoint EXE absolute path, inclusive of filename.
+    entrypointExecutable.assign(symlinkEntrypointExecutable);
+    result = true;
+#endif 
 
     return result;
 }
@@ -294,6 +310,21 @@ int ExecuteManagedAssembly(
         }
         else
         {
+            // check if we are enabling server GC or concurrent GC.
+            // Server GC is off by default, while concurrent GC is on by default.
+            // Actual checking of these string values is done in coreclr_initialize.
+            const char* useServerGc = std::getenv(serverGcVar);
+            if (useServerGc == nullptr)
+            {
+                useServerGc = "0";
+            }
+            
+            const char* useConcurrentGc = std::getenv(concurrentGcVar);
+            if (useConcurrentGc == nullptr)
+            {
+                useConcurrentGc = "1";
+            }
+            
             // Allowed property names:
             // APPBASE
             // - The base path of the application from which the exe and other assemblies will be loaded
@@ -315,7 +346,9 @@ int ExecuteManagedAssembly(
                 "APP_PATHS",
                 "APP_NI_PATHS",
                 "NATIVE_DLL_SEARCH_DIRECTORIES",
-                "AppDomainCompatSwitch"
+                "AppDomainCompatSwitch",
+                "SERVER_GC",
+                "CONCURRENT_GC"
             };
             const char *propertyValues[] = {
                 // TRUSTED_PLATFORM_ASSEMBLIES
@@ -327,7 +360,11 @@ int ExecuteManagedAssembly(
                 // NATIVE_DLL_SEARCH_DIRECTORIES
                 nativeDllSearchDirs.c_str(),
                 // AppDomainCompatSwitch
-                "UseLatestBehaviorWhenTFMNotSpecified"
+                "UseLatestBehaviorWhenTFMNotSpecified",
+                // SERVER_GC
+                useServerGc,
+                // CONCURRENT_GC
+                useConcurrentGc
             };
 
             void* hostHandle;

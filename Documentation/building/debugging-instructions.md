@@ -7,14 +7,15 @@ Debugging CoreCLR on Windows
 ============================
 
 1. Perform a build of the repo.
-2. Open <repo_root>\binaries\Cmake\CoreCLR.sln in VS.
+2. Open \<repo_root\>\bin\obj\Windows_NT.\<platform\>.\<configuration\>\CoreCLR.sln in VS. \<platform\> and \<configurtion\> are based
+    on type of build you did. By default they are 'x64' and 'Debug'.
 3. Right click the INSTALL project and choose ‘Set as StartUp Project’
 4. Bring up the properties page for the INSTALL project
 5. Select Configuration Properties->Debugging from the left side tree control
-6. Set Command=`$(SolutionDir)..\product\$(Platform)\$(Configuration)\corerun.exe`
+6. Set Command=`$(SolutionDir)..\..\product\Windows_NT.$(Platform).$(Configuration)\corerun.exe`
 	1. This points to the folder where the built runtime binaries are present.
 7. Set Command Arguments=`<managed app you wish to run>` (e.g. HelloWorld.exe)
-8. Set Working Directory=`$(SolutionDir)..\product\$(Platform)\$(Configuration)`
+8. Set Working Directory=`$(SolutionDir)..\..\product\Windows_NT.$(Platform).$(Configuration)`
 	1. This points to the folder containing CoreCLR binaries.
 9. Press F11 to start debugging at wmain in corerun (or set a breakpoint in source and press F5 to run to it)
 	1. As an example, set a breakpoint for the EEStartup function in ceemain.cpp to break into CoreCLR startup.
@@ -62,6 +63,7 @@ SOS commands supported by the lldb plugin:
     FindAppDomain
     GCRoot
     GCInfo
+    Help
     IP2MD
     Name2EE
     PrintException
@@ -76,12 +78,30 @@ There are some aliases for the most common commands:
     clrstack        -> sos ClrStack
     clrthreads      -> sos Threads
     dumpheap        -> sos DumpHeap
+    dumplog         -> sos DumpLog
+    dumpmd          -> sos DumpMD
+    dumpmt          -> sos DumpMT
     dumpobj         -> sos DumpObj
     dso             -> sos DumpStackObjects
     eeheap          -> sos EEHeap
     gcroot          -> sos GCRoot
     ip2md           -> sos IP2MD
-    printexception  -> sos PrintException
+    name2ee         -> sos Name2EE
+    pe              -> sos PrintException
+    soshelp         -> sos Help
+
+Problems and limitations of lldb and sos:
+
+Many of the sos commands like clrstack or dso don't work on core dumps because lldb doesn't 
+return the actual OS thread id for a native thread. The "setsostid" command can be used to work
+around this lldb bug. Use the "clrthreads" to find the os tid and the lldb command "thread list"
+to find the thread index (#1 for example) for the current thread (* in first column). The first
+setsostid argument is the os tid and the second is the thread index: "setsosid ecd5 1".
+
+The "gcroot" command either crashes lldb 3.6 or returns invalid results. Works fine with lldb 3.7.
+
+Loading Linux core dumps with lldb 3.7 doesn't work. lldb 3.7 loads OSX and FreeBSD core dumps 
+just fine.
 
 For more information on SOS commands see: https://msdn.microsoft.com/en-us/library/bb190764(v=vs.110).aspx
 

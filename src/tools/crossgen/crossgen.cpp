@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // TO DO: we currently use raw printf() for output. Maybe we need to pick up something like ngen's Output() handling
@@ -283,11 +282,12 @@ bool StringEndsWith(LPCWSTR pwzString, LPCWSTR pwzCandidate)
 // When using the Phone binding model (TrustedPlatformAssemblies), automatically
 // detect which path mscorlib.[ni.]dll lies in.
 //
-bool ComputeMscorlibPathFromTrustedPlatformAssemblies(LPWSTR pwzMscorlibPath, DWORD cbMscorlibPath, LPCWSTR pwzTrustedPlatformAssemblies)
+bool ComputeMscorlibPathFromTrustedPlatformAssemblies(SString& pwzMscorlibPath, LPCWSTR pwzTrustedPlatformAssemblies)
 {
     LPWSTR wszTrustedPathCopy = new WCHAR[wcslen(pwzTrustedPlatformAssemblies) + 1];
     wcscpy_s(wszTrustedPathCopy, wcslen(pwzTrustedPlatformAssemblies) + 1, pwzTrustedPlatformAssemblies);
-    LPWSTR wszSingleTrustedPath = wcstok(wszTrustedPathCopy, PATH_SEPARATOR_STR_W);
+    wchar_t *context;
+    LPWSTR wszSingleTrustedPath = wcstok_s(wszTrustedPathCopy, PATH_SEPARATOR_STR_W, &context);
     
     while (wszSingleTrustedPath != NULL)
     {
@@ -302,21 +302,20 @@ bool ComputeMscorlibPathFromTrustedPlatformAssemblies(LPWSTR pwzMscorlibPath, DW
         if (StringEndsWith(wszSingleTrustedPath, DIRECTORY_SEPARATOR_STR_W W("mscorlib.dll")) ||
             StringEndsWith(wszSingleTrustedPath, DIRECTORY_SEPARATOR_STR_W W("mscorlib.ni.dll")))
         {
-            wcscpy_s(pwzMscorlibPath, cbMscorlibPath, wszSingleTrustedPath);
+            pwzMscorlibPath.Set(wszSingleTrustedPath);
+            SString::Iterator pwzSeparator = pwzMscorlibPath.End();
+            bool retval = true;
             
-            LPWSTR pwzSeparator = wcsrchr(pwzMscorlibPath, DIRECTORY_SEPARATOR_CHAR_W);
-            if (pwzSeparator == NULL)
+            if (!SUCCEEDED(CopySystemDirectory(pwzMscorlibPath, pwzMscorlibPath)))
             {
-                delete [] wszTrustedPathCopy;
-                return false;
+                retval = false;
             }
-            pwzSeparator[1] = W('\0'); // after '\'
 
             delete [] wszTrustedPathCopy;
-            return true;
+            return retval;
         }
         
-        wszSingleTrustedPath = wcstok(NULL, PATH_SEPARATOR_STR_W);
+        wszSingleTrustedPath = wcstok_s(NULL, PATH_SEPARATOR_STR_W, &context);
     }
     delete [] wszTrustedPathCopy;
 
@@ -506,9 +505,14 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
     argv = argv2;
 
     bool fCopySourceToOut = false;
-    
+
     // By default, Crossgen will assume code-generation for fulltrust domains unless /PartialTrust switch is specified
     dwFlags |= NGENWORKER_FLAGS_FULLTRUSTDOMAIN;
+
+#ifdef FEATURE_CORECLR
+    // By default, Crossgen will generate readytorun images unless /FragileNonVersionable switch is specified
+    dwFlags |= NGENWORKER_FLAGS_READYTORUN;
+#endif
 
     while (argc > 0)
     {
@@ -590,6 +594,10 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
         else if (MatchParameter(*argv, W("ReadyToRun")))
         {
             dwFlags |= NGENWORKER_FLAGS_READYTORUN;
+        }
+        else if (MatchParameter(*argv, W("FragileNonVersionable")))
+        {
+            dwFlags &= ~NGENWORKER_FLAGS_READYTORUN;
         }
 #endif
 #ifdef FEATURE_CORECLR
@@ -685,7 +693,7 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
             argc--;
 
             // Clear the /fulltrust flag - /CreatePDB does not work with any other flags.
-            dwFlags = dwFlags & ~NGENWORKER_FLAGS_FULLTRUSTDOMAIN;
+            dwFlags = dwFlags & ~(NGENWORKER_FLAGS_FULLTRUSTDOMAIN | NGENWORKER_FLAGS_READYTORUN);
 
             // Parse: <directory to store PDB>
             if (wcscpy_s(
@@ -758,8 +766,11 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
             argv++;
             argc--;
 
-            // Clear the /fulltrust flag - /CreatePDB does not work with any other flags.
+            // Clear the /fulltrust flag - /CreatePerfMap does not work with any other flags.
             dwFlags = dwFlags & ~NGENWORKER_FLAGS_FULLTRUSTDOMAIN;
+
+            // Clear the /ready to run flag - /CreatePerfmap does not work with any other flags.
+            dwFlags = dwFlags & ~NGENWORKER_FLAGS_READYTORUN;
 
             // Parse: <directory to store PDB>
             if (wcscpy_s(
@@ -952,14 +963,17 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
         PrintLogoHelper();
     }
 
-    WCHAR wzTrustedPathRoot[MAX_LONGPATH];
+    PathString wzTrustedPathRoot;
 
 #ifdef FEATURE_CORECLR
     SString ssTPAList;  
     
     // Are we compiling mscorlib.dll? 
     bool fCompilingMscorlib = StringEndsWith((LPWSTR)pwzFilename, W("mscorlib.dll"));
-    
+
+    if (fCompilingMscorlib)
+        dwFlags &= ~NGENWORKER_FLAGS_READYTORUN;
+
     if(pwzPlatformAssembliesPaths != nullptr)
     {
         // Platform_Assemblies_Paths command line switch has been specified.
@@ -973,9 +987,9 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
 
     if (pwzTrustedPlatformAssemblies != nullptr)
     {
-        if (ComputeMscorlibPathFromTrustedPlatformAssemblies(wzTrustedPathRoot, MAX_LONGPATH, pwzTrustedPlatformAssemblies))
+        if (ComputeMscorlibPathFromTrustedPlatformAssemblies(wzTrustedPathRoot, pwzTrustedPlatformAssemblies))
         {
-            pwzPlatformAssembliesPaths = wzTrustedPathRoot;
+            pwzPlatformAssembliesPaths = wzTrustedPathRoot.GetUnicode();
             SetMscorlibPath(pwzPlatformAssembliesPaths);
         }
     }
@@ -983,21 +997,23 @@ int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
 
     if (pwzPlatformAssembliesPaths == NULL)
     {
-        if (!WszGetModuleFileName(NULL, wzTrustedPathRoot, MAX_LONGPATH))
+        if (!WszGetModuleFileName(NULL, wzTrustedPathRoot))
         {
             ERROR_WIN32(W("Error: GetModuleFileName failed (%d)\n"), GetLastError());
             exit(CLR_INIT_ERROR);
         }
-
-        wchar_t* pszSep = wcsrchr(wzTrustedPathRoot, DIRECTORY_SEPARATOR_CHAR_W);
-        if (pszSep == NULL)
+        
+        if (SUCCEEDED(CopySystemDirectory(wzTrustedPathRoot, wzTrustedPathRoot)))
+        {
+            pwzPlatformAssembliesPaths = wzTrustedPathRoot.GetUnicode();
+        }
+        else
         {
             ERROR_HR(W("Error: wcsrchr returned NULL; GetModuleFileName must have given us something bad\n"), E_UNEXPECTED);
             exit(CLR_INIT_ERROR);
         }
-        *pszSep = '\0';
-
-        pwzPlatformAssembliesPaths = wzTrustedPathRoot;
+        
+        
     }
 
     // Initialize the logger

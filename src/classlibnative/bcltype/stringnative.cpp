@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // File: StringNative.cpp
 //
@@ -402,7 +401,7 @@ FCIMPL4(INT32, COMString::IndexOfCharArray, StringObject* thisRef, CHARArray* va
     if (thisRef == NULL)
         FCThrow(kNullReferenceException);
     if (valueRef == NULL)
-        FCThrow(kArgumentNullException);
+        FCThrowArgumentNull(W("anyOf"));
 
     WCHAR *thisChars;
     WCHAR *valueChars;
@@ -412,7 +411,7 @@ FCIMPL4(INT32, COMString::IndexOfCharArray, StringObject* thisRef, CHARArray* va
     thisRef->RefInterpretGetStringValuesDangerousForGC(&thisChars, &thisLength);
 
     if (startIndex < 0 || startIndex > thisLength) {
-        FCThrow(kArgumentOutOfRangeException);
+        FCThrowArgumentOutOfRange(W("startIndex"), W("ArgumentOutOfRange_Index"));
     }
 
     if (count < 0 || count > thisLength - startIndex) {
@@ -514,7 +513,7 @@ FCIMPL4(INT32, COMString::LastIndexOfCharArray, StringObject* thisRef, CHARArray
     }
 
     if (valueRef == NULL)
-        FCThrow(kArgumentNullException);
+        FCThrowArgumentNull(W("anyOf"));
 
     thisRef->RefInterpretGetStringValuesDangerousForGC(&thisChars, &thisLength);
 
@@ -687,6 +686,15 @@ FCIMPL3(LPVOID, COMString::Replace, StringObject* thisRefUNSAFE, CLR_CHAR oldCha
     }
 
     //Perf: If no replacements required, return initial reference
+    
+    // Do it if the chars are the same...
+    
+    if ((WCHAR)oldChar == (WCHAR)newChar)
+    {
+        return thisRefUNSAFE;
+    }
+    
+    // Or if the old char isn't found.
     oldBuffer = thisRef->GetBuffer();
     length = thisRef->GetStringLength();
 

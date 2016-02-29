@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 // UtilCode.h
 //
@@ -513,7 +512,7 @@ inline void *__cdecl operator new(size_t, void *_P)
 void * __cdecl
 operator new(size_t n);
 
-_Ret_bytecap_(_Size) void * __cdecl
+_Ret_bytecap_(n) void * __cdecl
 operator new[](size_t n);
 
 void __cdecl
@@ -844,7 +843,8 @@ private:
     HRESULT GetLibrary(LocaleID langId, HRESOURCEDLL* phInst);
 #ifndef DACCESS_COMPILE
     HRESULT LoadLibraryHelper(HRESOURCEDLL *pHInst,
-                              __out_ecount(rcPathSize) WCHAR *rcPath, const DWORD rcPathSize);
+                              SString& rcPath);
+    HRESULT LoadLibraryThrows(HRESOURCEDLL * pHInst);
     HRESULT LoadLibrary(HRESOURCEDLL * pHInst);
     HRESULT LoadResourceFile(HRESOURCEDLL * pHInst, LPCWSTR lpFileName);
 #endif
@@ -4102,6 +4102,8 @@ public:
 // Class to parse a list of method names and then find a match
 //*****************************************************************************
 
+struct CORINFO_SIG_INFO;
+
 class MethodNamesListBase
 {
     struct MethodName
@@ -4113,6 +4115,8 @@ class MethodNamesListBase
     };
 
     MethodName     *pNames;         // List of names
+
+    bool IsInList(LPCUTF8 methodName, LPCUTF8 className, int numArgs);
 
 public:
     void Init()
@@ -4132,7 +4136,8 @@ public:
 
     void Insert(__in __in_z LPWSTR list);
 
-    bool IsInList(LPCUTF8 methodName, LPCUTF8 className, PCCOR_SIGNATURE sig);
+    bool IsInList(LPCUTF8 methodName, LPCUTF8 className, PCCOR_SIGNATURE sig = NULL);
+    bool IsInList(LPCUTF8 methodName, LPCUTF8 className, CORINFO_SIG_INFO* pSigInfo);
     bool IsEmpty()
     {
         LIMITED_METHOD_CONTRACT;
@@ -4247,7 +4252,8 @@ public:
         return m_list.IsEmpty();
     }
 
-    bool contains(LPCUTF8 methodName, LPCUTF8 className, PCCOR_SIGNATURE sig);
+    bool contains(LPCUTF8 methodName, LPCUTF8 className, PCCOR_SIGNATURE sig = NULL);
+    bool contains(LPCUTF8 methodName, LPCUTF8 className, CORINFO_SIG_INFO* pSigInfo);
 
     inline void ensureInit(const CLRConfig::ConfigStringInfo & info)
     {
@@ -4462,7 +4468,7 @@ BOOL GetRegistryLongValue(HKEY    hKeyParent,              // Parent key.
                           long    *pValue,                 // Put value here, if found.
                           BOOL    fReadNonVirtualizedKey); // Whether to read 64-bit hive on WOW64
 
-HRESULT GetCurrentModuleFileName(__out_ecount(*pcchBuffer) LPWSTR pBuffer, __inout DWORD *pcchBuffer);
+HRESULT GetCurrentModuleFileName(SString& pBuffer);
 
 //*****************************************************************************
 // Retrieve information regarding what registered default debugger
@@ -5304,7 +5310,7 @@ BOOL IsIPInModule(HMODULE_TGT hModule, PCODE ip);
 struct CoreClrCallbacks
 {
     typedef IExecutionEngine* (__stdcall * pfnIEE_t)();
-    typedef HRESULT (__stdcall * pfnGetCORSystemDirectory_t)(LPWSTR pbuffer, DWORD cchBuffer, DWORD* pdwlength);
+    typedef HRESULT (__stdcall * pfnGetCORSystemDirectory_t)(SString& pbuffer);
     typedef void* (__stdcall * pfnGetCLRFunction_t)(LPCSTR functionName);
 
     HINSTANCE                   m_hmodCoreCLR;
@@ -5538,8 +5544,8 @@ inline T* InterlockedCompareExchangeT(
 
 // Returns the directory for HMODULE. So, if HMODULE was for "C:\Dir1\Dir2\Filename.DLL",
 // then this would return "C:\Dir1\Dir2\" (note the trailing backslash).
-HRESULT GetHModuleDirectory(HMODULE hMod, __out_z __out_ecount(cchPath) LPWSTR wszPath, size_t cchPath);
-SString & GetHModuleDirectory(HMODULE hMod, SString &ssDir);
+HRESULT GetHModuleDirectory(HMODULE hMod, SString& wszPath);
+HRESULT CopySystemDirectory(const SString& pPathString, SString& pbuffer);
 
 HMODULE LoadLocalizedResourceDLLForSDK(_In_z_ LPCWSTR wzResourceDllName, _In_opt_z_ LPCWSTR modulePath=NULL, bool trySelf=true);
 // This is a slight variation that can be used for anything else

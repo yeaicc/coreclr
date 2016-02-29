@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 // Defines the class "ValueNumStore", which maintains value numbers for a compilation.
@@ -397,7 +396,13 @@ public:
     // (liberal/conservative) to read from the SSA def referenced in the phi argument.
     ValueNum VNForMapSelect(ValueNumKind vnk, var_types typ, ValueNum op1VN, ValueNum op2VN);
 
-    ValueNum VNForMapSelectWork(ValueNumKind vnk, var_types typ, ValueNum op1VN, ValueNum op2VN, unsigned* pBudget);
+    // A method that does the work for VNForMapSelect and may call itself recursively.
+    ValueNum VNForMapSelectWork(ValueNumKind vnk,
+                                var_types typ,
+                                ValueNum op1VN,
+                                ValueNum op2VN,
+                                unsigned* pBudget,
+                                bool* pUsedRecursiveVN);
 
     // A specialized version of VNForFunc that is used for VNF_MapStore and provides some logging when verbose is set
     ValueNum VNForMapStore(var_types typ, ValueNum arg0VN, ValueNum arg1VN, ValueNum arg2VN);
@@ -515,6 +520,9 @@ public:
     // Returns true iff the VN represents a (non-handle) constant.
     bool IsVNConstant(ValueNum vn);
 
+    // Returns true iff the VN represents an integeral constant.
+    bool IsVNInt32Constant(ValueNum vn);
+
     struct ArrLenArithBoundInfo
     {
         // (vnArr.len - 1) > vnOp
@@ -549,6 +557,32 @@ public:
 #endif
     };
 
+    struct ConstantBoundInfo
+    {
+        // 100 > vnOp
+        int      constVal;
+        unsigned cmpOper;
+        ValueNum cmpOpVN;
+
+        ConstantBoundInfo()
+            : constVal(0)
+            , cmpOper(GT_NONE)
+            , cmpOpVN(NoVN)
+        {
+        }
+
+#ifdef DEBUG
+        void dump(ValueNumStore* vnStore)
+        {
+            vnStore->vnDump(vnStore->m_pComp, cmpOpVN);
+            printf(" ");
+            printf(vnStore->VNFuncName((VNFunc)cmpOper));
+            printf(" ");
+            printf("%d", constVal);
+        }
+#endif
+    };
+
     // Check if "vn" is "new [] (type handle, size)"
     bool IsVNNewArr(ValueNum vn);
 
@@ -560,6 +594,12 @@ public:
 
     // If "vn" is VN(a.len) then return VN(a); NoVN if VN(a) can't be determined.
     ValueNum GetArrForLenVn(ValueNum vn);
+
+    // Return true with any Relop except for == and !=  and one operand has to be a 32-bit integer constant. 
+    bool IsVNConstantBound(ValueNum vn);
+
+    // If "vn" is constant bound, then populate the "info" fields for constVal, cmpOp, cmpOper.
+    void GetConstantBoundInfo(ValueNum vn, ConstantBoundInfo* info);
 
     // If "vn" is of the form "var < a.len" or "a.len <= var" return true.
     bool IsVNArrLenBound(ValueNum vn);
@@ -685,12 +725,24 @@ public:
     bool IsHandle(ValueNum vn);
 
     // Requires "mthFunc" to be an intrinsic math function (one of the allowable values for the "gtMath" field
-    // of a GenTreeMath node).  Return the value number for the application of this function to "arg0VN".
-    ValueNum EvalMathFunc(var_types typ, CorInfoIntrinsics mthFunc, ValueNum arg0VN);
-    ValueNumPair EvalMathFunc(var_types typ, CorInfoIntrinsics mthFunc, ValueNumPair arg0VNP)
+    // of a GenTreeMath node).  For unary ops, return the value number for the application of this function to 
+    // "arg0VN". For binary ops, return the value number for the application of this function to "arg0VN" and 
+    // "arg1VN". 
+    
+    ValueNum EvalMathFuncUnary(var_types typ, CorInfoIntrinsics mthFunc, ValueNum arg0VN);
+    
+    ValueNum EvalMathFuncBinary(var_types typ, CorInfoIntrinsics mthFunc, ValueNum arg0VN, ValueNum arg1VN);
+  
+    ValueNumPair EvalMathFuncUnary(var_types typ, CorInfoIntrinsics mthFunc, ValueNumPair arg0VNP)
     {
-        return ValueNumPair(EvalMathFunc(typ, mthFunc, arg0VNP.GetLiberal()),
-                            EvalMathFunc(typ, mthFunc, arg0VNP.GetConservative()));
+        return ValueNumPair(EvalMathFuncUnary(typ, mthFunc, arg0VNP.GetLiberal()),
+                            EvalMathFuncUnary(typ, mthFunc, arg0VNP.GetConservative()));
+    }
+    
+    ValueNumPair EvalMathFuncBinary(var_types typ, CorInfoIntrinsics mthFunc, ValueNumPair arg0VNP, ValueNumPair arg1VNP)
+    {
+        return ValueNumPair(EvalMathFuncBinary(typ, mthFunc, arg0VNP.GetLiberal(), arg1VNP.GetLiberal()),
+                            EvalMathFuncBinary(typ, mthFunc, arg0VNP.GetConservative(), arg1VNP.GetConservative()));
     }
 
     // Returns "true" iff "vn" represents a function application.
@@ -1163,15 +1215,15 @@ FORCEINLINE T ValueNumStore::SafeGetConstantValue(Chunk* c, unsigned offset)
     case TYP_REF:
         return CoerceTypRefToT<T>(c, offset);
     case TYP_BYREF:
-        return (T) reinterpret_cast<VarTypConv<TYP_BYREF>::Type*>(c->m_defs)[offset];
+        return static_cast<T>(reinterpret_cast<VarTypConv<TYP_BYREF>::Type*>(c->m_defs)[offset]);
     case TYP_INT:
-        return (T) reinterpret_cast<VarTypConv<TYP_INT>::Type*>(c->m_defs)[offset];
+        return static_cast<T>(reinterpret_cast<VarTypConv<TYP_INT>::Type*>(c->m_defs)[offset]);
     case TYP_LONG:
-        return (T) reinterpret_cast<VarTypConv<TYP_LONG>::Type*>(c->m_defs)[offset];
+        return static_cast<T>(reinterpret_cast<VarTypConv<TYP_LONG>::Type*>(c->m_defs)[offset]);
     case TYP_FLOAT:
-        return (T) reinterpret_cast<VarTypConv<TYP_FLOAT>::Lang*>(c->m_defs)[offset];
+        return static_cast<T>(reinterpret_cast<VarTypConv<TYP_FLOAT>::Lang*>(c->m_defs)[offset]);
     case TYP_DOUBLE:
-        return (T) reinterpret_cast<VarTypConv<TYP_DOUBLE>::Lang*>(c->m_defs)[offset];
+        return static_cast<T>(reinterpret_cast<VarTypConv<TYP_DOUBLE>::Lang*>(c->m_defs)[offset]);
     default:
         assert(false);
         return (T)0;
@@ -1199,22 +1251,16 @@ inline bool ValueNumStore::VNFuncIsComparison(VNFunc vnf)
     return GenTree::OperIsCompare(gtOp) != 0;
 }
 
+template <>
+inline size_t ValueNumStore::CoerceTypRefToT(Chunk* c, unsigned offset)
+{
+    return reinterpret_cast<size_t>(reinterpret_cast<VarTypConv<TYP_REF>::Type*>(c->m_defs)[offset]);
+}
+
 template <typename T>
 inline T ValueNumStore::CoerceTypRefToT(Chunk* c, unsigned offset)
 {
     noway_assert(sizeof(T) >= sizeof(VarTypConv<TYP_REF>::Type));
-    return (T) reinterpret_cast<VarTypConv<TYP_REF>::Type*>(c->m_defs)[offset];
-}
-
-template <>
-inline float ValueNumStore::CoerceTypRefToT<float>(Chunk* c, unsigned offset)
-{
-    unreached();
-}
-
-template <>
-inline double ValueNumStore::CoerceTypRefToT<double>(Chunk* c, unsigned offset)
-{
     unreached();
 }
 

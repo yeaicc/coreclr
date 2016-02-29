@@ -11,12 +11,13 @@ set(PALRT_SOURCES
     memorystream.cpp
     path.cpp
     urlpars.cpp
+    unicode.cpp
     variant.cpp
 )
 
 add_compile_options(-fPIC)
 
-add_library(palrt
+add_library_clr(palrt
     STATIC
     ${PALRT_SOURCES}
 )

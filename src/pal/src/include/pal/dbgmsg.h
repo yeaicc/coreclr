@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -54,6 +53,7 @@ Available channels :
     LOADER  : Loading API (LoadLibrary, etc); loader application
     HANDLE  : Handle manager (CloseHandle, etc.)
     SHMEM   : Shared Memory functions (for IPC)
+    PROCESS : Process related APIs
     THREAD  : Threading mechanism
     EXCEPT  : Structured Exception Handling functions
     CRT     : PAL implementation of the C Runtime Library functions
@@ -172,6 +172,7 @@ typedef enum
     DCI_LOADER,
     DCI_HANDLE,
     DCI_SHMEM,
+    DCI_PROCESS,
     DCI_THREAD,
     DCI_EXCEPT,
     DCI_CRT,

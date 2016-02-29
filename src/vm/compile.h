@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // ===========================================================================
 // File: compile.h
 //
@@ -423,6 +422,8 @@ class CEECompileInfo : public ICorCompileInfo
 
     BOOL AreAllClassesFullyLoaded(CORINFO_MODULE_HANDLE moduleHandle);
 #endif
+
+    BOOL HasCustomAttribute(CORINFO_METHOD_HANDLE method, LPCSTR customAttributeName);
 
     //--------------------------------------------------------------------
     // ZapperLoaderModules and the ZapperLoaderModuleTable

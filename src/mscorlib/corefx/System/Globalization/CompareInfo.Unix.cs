@@ -1,5 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 using System.Diagnostics.Contracts;
 using System.Runtime.CompilerServices;
@@ -10,15 +11,21 @@ namespace System.Globalization
 {
     public partial class CompareInfo
     {
+        [SecurityCritical]
         private readonly Interop.GlobalizationInterop.SafeSortHandle m_sortHandle;
 
+        private readonly bool m_isAsciiEqualityOrdinal;
+
+        [SecuritySafeCritical]
         internal CompareInfo(CultureInfo culture)
         {
             m_name = culture.m_name;
             m_sortName = culture.SortName;
             m_sortHandle = Interop.GlobalizationInterop.GetSortHandle(System.Text.Encoding.UTF8.GetBytes(m_sortName));
+            m_isAsciiEqualityOrdinal = (m_sortName == "en-US" || m_sortName == "");
         }
 
+        [SecurityCritical]
         internal static unsafe int IndexOfOrdinal(string source, string value, int startIndex, int count, bool ignoreCase)
         {
             Contract.Assert(source != null);
@@ -63,6 +70,7 @@ namespace System.Globalization
             return -1;
         }
 
+        [SecurityCritical]
         internal static unsafe int LastIndexOfOrdinal(string source, string value, int startIndex, int count, bool ignoreCase)
         {
             Contract.Assert(source != null);
@@ -110,7 +118,7 @@ namespace System.Globalization
             return -1;
         }
 
-        private unsafe int GetHashCodeOfStringCore(string source, CompareOptions options)
+        private int GetHashCodeOfStringCore(string source, CompareOptions options)
         {
             Contract.Assert(source != null);
             Contract.Assert((options & (CompareOptions.Ordinal | CompareOptions.OrdinalIgnoreCase)) == 0);
@@ -118,13 +126,13 @@ namespace System.Globalization
             return GetHashCodeOfStringCore(source, options, forceRandomizedHashing: false, additionalEntropy: 0);
         }
 
-        [System.Security.SecuritySafeCritical]
+        [SecurityCritical]
         private static unsafe int CompareStringOrdinalIgnoreCase(char* string1, int count1, char* string2, int count2)
         {
             return Interop.GlobalizationInterop.CompareStringOrdinalIgnoreCase(string1, count1, string2, count2);
         }
 
-        [System.Security.SecuritySafeCritical]
+        [SecurityCritical]
         private unsafe int CompareString(string string1, int offset1, int length1, string string2, int offset2, int length2, CompareOptions options)
         {
             Contract.Assert(string1 != null);
@@ -140,7 +148,7 @@ namespace System.Globalization
             }
         }
 
-        [System.Security.SecuritySafeCritical]
+        [SecurityCritical]
         private unsafe int IndexOfCore(string source, string target, int startIndex, int count, CompareOptions options)
         {
             Contract.Assert(!string.IsNullOrEmpty(source));
@@ -157,6 +165,11 @@ namespace System.Globalization
                 return IndexOfOrdinal(source, target, startIndex, count, ignoreCase: false);
             }
 
+            if (m_isAsciiEqualityOrdinal && CanUseAsciiOrdinalForOptions(options) && source.IsAscii() && target.IsAscii())
+            {
+                return IndexOf(source, target, startIndex, count, GetOrdinalCompareOptions(options));
+            }
+
             fixed (char* pSource = source)
             {
                 int index = Interop.GlobalizationInterop.IndexOf(m_sortHandle, target, target.Length, pSource + startIndex, count, options);
@@ -165,6 +178,7 @@ namespace System.Globalization
             }
         }
 
+        [SecurityCritical]
         private unsafe int LastIndexOfCore(string source, string target, int startIndex, int count, CompareOptions options)
         {
             Contract.Assert(!string.IsNullOrEmpty(source));
@@ -175,10 +189,15 @@ namespace System.Globalization
             {
                 return startIndex;
             }
-            
+
             if (options == CompareOptions.Ordinal)
             {
                 return LastIndexOfOrdinal(source, target, startIndex, count, ignoreCase: false);
+            }
+
+            if (m_isAsciiEqualityOrdinal && CanUseAsciiOrdinalForOptions(options) && source.IsAscii() && target.IsAscii())
+            {
+                return LastIndexOf(source, target, startIndex, count, GetOrdinalCompareOptions(options));
             }
 
             // startIndex is the index into source where we start search backwards from. leftStartIndex is the index into source
@@ -193,20 +212,32 @@ namespace System.Globalization
             }
         }
 
+        [SecuritySafeCritical]
         private bool StartsWith(string source, string prefix, CompareOptions options)
         {
             Contract.Assert(!string.IsNullOrEmpty(source));
             Contract.Assert(!string.IsNullOrEmpty(prefix));
             Contract.Assert((options & (CompareOptions.Ordinal | CompareOptions.OrdinalIgnoreCase)) == 0);
 
+            if (m_isAsciiEqualityOrdinal && CanUseAsciiOrdinalForOptions(options) && source.IsAscii() && prefix.IsAscii())
+            {
+                return IsPrefix(source, prefix, GetOrdinalCompareOptions(options));
+            }
+
             return Interop.GlobalizationInterop.StartsWith(m_sortHandle, prefix, prefix.Length, source, source.Length, options);
         }
 
+        [SecuritySafeCritical]
         private bool EndsWith(string source, string suffix, CompareOptions options)
         {
             Contract.Assert(!string.IsNullOrEmpty(source));
             Contract.Assert(!string.IsNullOrEmpty(suffix));
             Contract.Assert((options & (CompareOptions.Ordinal | CompareOptions.OrdinalIgnoreCase)) == 0);
+
+            if (m_isAsciiEqualityOrdinal && CanUseAsciiOrdinalForOptions(options) && source.IsAscii() && suffix.IsAscii())
+            {
+                return IsSuffix(source, suffix, GetOrdinalCompareOptions(options));
+            }
 
             return Interop.GlobalizationInterop.EndsWith(m_sortHandle, suffix, suffix.Length, source, source.Length, options);
         }
@@ -215,6 +246,7 @@ namespace System.Globalization
         // ---- PAL layer ends here ----
         // -----------------------------
 
+        [SecuritySafeCritical]
         internal unsafe int GetHashCodeOfStringCore(string source, CompareOptions options, bool forceRandomizedHashing, long additionalEntropy)
         {
             Contract.Assert(source != null);
@@ -239,9 +271,27 @@ namespace System.Globalization
             }
         }
 
-        [System.Security.SecurityCritical]
+        [SecurityCritical]
         [DllImport(JitHelpers.QCall)]
         [SuppressUnmanagedCodeSecurity]
         private static unsafe extern int InternalHashSortKey(byte* sortKey, int sortKeyLength, [MarshalAs(UnmanagedType.Bool)] bool forceRandomizedHashing, long additionalEntropy);
+
+        private static CompareOptions GetOrdinalCompareOptions(CompareOptions options)
+        {
+            if ((options & CompareOptions.IgnoreCase) == CompareOptions.IgnoreCase)
+            {
+                return CompareOptions.OrdinalIgnoreCase;
+            }
+            else
+            {
+                return CompareOptions.Ordinal;
+            }
+        }
+
+        private static bool CanUseAsciiOrdinalForOptions(CompareOptions options)
+        {
+            // Unlike the other Ignore options, IgnoreSymbols impacts ASCII characters (e.g. ').
+            return (options & CompareOptions.IgnoreSymbols) == 0;
+        }
     }
 }

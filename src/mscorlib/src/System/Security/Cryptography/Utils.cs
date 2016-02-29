@@ -1,5 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 namespace System.Security.Cryptography
@@ -961,6 +962,29 @@ namespace System.Security.Cryptography
             }
             return true;
         }
+
+#if !FEATURE_CORECLR
+        internal static HashAlgorithmName OidToHashAlgorithmName(string oid)
+        {
+            switch (oid)
+            {
+                case Constants.OID_OIWSEC_SHA1:
+                    return HashAlgorithmName.SHA1;
+
+                case Constants.OID_OIWSEC_SHA256:
+                    return HashAlgorithmName.SHA256;
+
+                case Constants.OID_OIWSEC_SHA384:
+                    return HashAlgorithmName.SHA384;
+
+                case Constants.OID_OIWSEC_SHA512:
+                    return HashAlgorithmName.SHA512;
+
+                default:
+                    throw new NotSupportedException();
+            }
+        }
+#endif // FEATURE_CORECLR
 
         [System.Security.SecurityCritical]  // auto-generated
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode), SuppressUnmanagedCodeSecurity]

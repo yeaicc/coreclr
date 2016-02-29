@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -1859,7 +1858,10 @@ size_t              GCInfo::gcMakeRegPtrTable(BYTE*          dest,
                 }
             }
 
-            if  (varDsc->lvType == TYP_STRUCT && varDsc->lvOnFrame)
+            // A struct will have gcSlots only if it is at least TARGET_POINTER_SIZE.
+            if  (varDsc->lvType == TYP_STRUCT &&
+                 varDsc->lvOnFrame            &&
+                 (varDsc->lvExactSize >= TARGET_POINTER_SIZE))
             {
                 unsigned slots  = compiler->lvaLclSize(varNum) / sizeof(void*);
                 BYTE *   gcPtrs = compiler->lvaGetGcLayout(varNum);
@@ -3236,7 +3238,7 @@ unsigned            GCInfo::gcInfoBlockHdrDump(const BYTE*  table,
 {
     GCDump gcDump;
 
-    gcDump.gcPrintf = logf;             // use my printf (which logs to VM)
+    gcDump.gcPrintf = gcDump_logf;             // use my printf (which logs to VM)
     printf("Method info block:\n");
 
     return gcDump.DumpInfoHdr(table, header, methodSize, verifyGCTables);
@@ -3251,7 +3253,7 @@ unsigned            GCInfo::gcDumpPtrTable(const BYTE*    table,
     printf("Pointer table:\n");
 
     GCDump gcDump;
-    gcDump.gcPrintf = logf;             // use my printf (which logs to VM)
+    gcDump.gcPrintf = gcDump_logf;             // use my printf (which logs to VM)
 
     return gcDump.DumpGCTable(table, header, methodSize, verifyGCTables);
 }
@@ -3267,7 +3269,7 @@ void                GCInfo::gcFindPtrsInFrame(const void* infoBlock,
                                               unsigned    offs)
 {
     GCDump gcDump;
-    gcDump.gcPrintf = logf;             // use my printf (which logs to VM)
+    gcDump.gcPrintf = gcDump_logf;             // use my printf (which logs to VM)
 
     gcDump.DumpPtrsInFrame((const BYTE*)infoBlock, (const BYTE*)codeBlock, offs, verifyGCTables);
 }
@@ -3807,7 +3809,9 @@ void                GCInfo::gcMakeRegPtrTable(GcInfoEncoder* gcInfoEncoder,
             }
         }
 
-        if  (varDsc->lvType == TYP_STRUCT && varDsc->lvOnFrame)
+        // If this is a TYP_STRUCT, handle its GC pointers.
+        // Note that the enregisterable struct types cannot have GC pointers in them.
+        if  ((varDsc->lvType == TYP_STRUCT) && varDsc->lvOnFrame && (varDsc->lvExactSize >= TARGET_POINTER_SIZE))
         {
             unsigned slots  = compiler->lvaLclSize(varNum) / sizeof(void*);
             BYTE *   gcPtrs = compiler->lvaGetGcLayout(varNum);

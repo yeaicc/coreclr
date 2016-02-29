@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // This class contains all the data & functionality for code generation
@@ -91,9 +90,9 @@ private:
                                                         else
                                                             return REG_SPBASE; }
 
-    static emitJumpKind genJumpKindForOper(genTreeOps cmp, bool isUnsigned);
+    enum CompareKind { CK_SIGNED, CK_UNSIGNED, CK_LOGICAL };
+    static emitJumpKind genJumpKindForOper(genTreeOps cmp, CompareKind compareKind);
 
-#ifdef _TARGET_XARCH_
     // For a given compare oper tree, returns the conditions to use with jmp/set in 'jmpKind' array. 
     // The corresponding elements of jmpToTrueLabel indicate whether the target of the jump is to the
     // 'true' label or a 'false' label.  
@@ -102,7 +101,11 @@ private:
     // branch to on compare condition being true.  'false' label corresponds to the target to
     // branch to on condition being false.
     static void genJumpKindsForTree(GenTreePtr cmpTree, emitJumpKind jmpKind[2], bool jmpToTrueLabel[2]);
-#endif // _TARGET_XARCH_
+
+#if !defined(_TARGET_64BIT_)
+    static void genJumpKindsForTreeLongHi(GenTreePtr cmpTree, emitJumpKind jmpKind[2], bool jmpToTrueLabel[2]);
+    static void genJumpKindsForTreeLongLo(GenTreePtr cmpTree, emitJumpKind jmpKind[2], bool jmpToTrueLabel[2]);
+#endif //!defined(_TARGET_64BIT_)
 
     static bool         genShouldRoundFP();
 
@@ -301,6 +304,14 @@ protected:
     void                genCheckUseBlockInit();
 
 #if defined(_TARGET_ARM64_)
+    bool                genInstrWithConstant(instruction ins,  
+                                             emitAttr    attr, 
+                                             regNumber   reg1, 
+                                             regNumber   reg2,
+                                             ssize_t     imm, 
+                                             regNumber   tmpReg,
+                                             bool        inUnwindRegion = false);
+
     void                genStackPointerAdjustment(ssize_t   spAdjustment,
                                                   regNumber tmpReg,
                                                   bool*     pTmpRegIsZero);
@@ -398,13 +409,8 @@ protected:
 
     FuncletFrameInfoDsc genFuncletInfo;
 
-#elif defined(_TARGET_XARCH_) && !FEATURE_STACK_FP_X87
+#elif defined(_TARGET_AMD64_)
 
-    // Save/Restore callee saved float regs to stack
-    void                genPreserveCalleeSavedFltRegs(unsigned lclFrameSize);
-    void                genRestoreCalleeSavedFltRegs(unsigned lclFrameSize);
-
-#ifdef _TARGET_AMD64_
     // A set of information that is used by funclet prolog and epilog generation. It is collected once, before
     // funclet prologs and epilogs are generated, and used by all funclet prologs and epilogs, which must all be the same.
     struct FuncletFrameInfoDsc
@@ -415,7 +421,14 @@ protected:
     };
 
     FuncletFrameInfoDsc genFuncletInfo;
+
 #endif // _TARGET_AMD64_
+
+#if defined(_TARGET_XARCH_) && !FEATURE_STACK_FP_X87
+
+    // Save/Restore callee saved float regs to stack
+    void                genPreserveCalleeSavedFltRegs(unsigned lclFrameSize);
+    void                genRestoreCalleeSavedFltRegs(unsigned lclFrameSize);
 
 #endif // _TARGET_XARCH_ && FEATURE_STACK_FP_X87
 

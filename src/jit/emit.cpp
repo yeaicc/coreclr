@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -1414,14 +1413,19 @@ void        *       emitter::emitAllocInstr(size_t sz, emitAttr opsz)
 
 
 #if RELOC_SUPPORT
-    if       (EA_IS_DSP_RELOC(opsz) && emitComp->opts.compReloc)
+    // Amd64: ip-relative addressing is supported even when not generating relocatable ngen code
+    if (EA_IS_DSP_RELOC(opsz) 
+#ifndef _TARGET_AMD64_
+              && emitComp->opts.compReloc
+#endif //_TARGET_AMD64_
+       )
     {
         /* Mark idInfo()->idDspReloc to remember that the            */
         /* address mode has a displacement that is relocatable       */
         id->idSetIsDspReloc();
     }
 
-    if       (EA_IS_CNS_RELOC(opsz) && emitComp->opts.compReloc)
+    if (EA_IS_CNS_RELOC(opsz) && emitComp->opts.compReloc)
     {
         /* Mark idInfo()->idCnsReloc to remember that the            */
         /* instruction has an immediate constant that is relocatable */
@@ -5654,6 +5658,7 @@ void                emitter::emitRecordGCcall(BYTE * codePos,
 
     call->cdGCrefRegs     = (regMaskSmall)emitThisGCrefRegs;
     call->cdByrefRegs     = (regMaskSmall)emitThisByrefRegs;
+
 #if EMIT_TRACK_STACK_DEPTH
 #ifndef FEATURE_UNIX_AMD64_STRUCT_PASSING
     noway_assert(FitsIn<USHORT>(emitCurStackLvl / ((unsigned)sizeof(unsigned))));
@@ -6883,7 +6888,7 @@ void        emitter::emitRecordCallSite(ULONG                 instrOffset,  /* I
                                         CORINFO_SIG_INFO*     callSig,      /* IN */
                                         CORINFO_METHOD_HANDLE methodHandle) /* IN */
 {
-#if defined(DEBUG) && !defined(RYUJIT_CTPBUILD)
+#if defined(DEBUG)
     // Since CORINFO_SIG_INFO is a heavyweight structure, in most cases we can
     // lazily obtain it here using the given method handle (we only save the sig
     // info when we explicitly need it, i.e. for CALLI calls, vararg calls, and
@@ -6905,7 +6910,7 @@ void        emitter::emitRecordCallSite(ULONG                 instrOffset,  /* I
     }
 
     emitCmpHandle->recordCallSite(instrOffset, callSig, methodHandle);
-#endif // defined(DEBUG) && !defined(RYUJIT_CTPBUILD)
+#endif // defined(DEBUG)
 }
 
 /*****************************************************************************/

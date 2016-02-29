@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 //  util.cpp
 //
@@ -18,6 +17,7 @@
 #include "loaderheap.h"
 #include "sigparser.h"
 #include "cor.h"
+#include "corinfo.h"
 
 #ifndef FEATURE_CORECLR
 #include "metahost.h"
@@ -525,6 +525,13 @@ BYTE * ClrVirtualAllocExecutable(SIZE_T dwSize,
 
     // Fall through to 
 #endif // USE_UPPER_ADDRESS
+
+#ifdef FEATURE_PAL
+    // Tell PAL to use the executable memory allocator to satisfy this request for virtual memory.
+    // This will allow us to place JIT'ed code close to the coreclr library
+    // and thus improve performance by avoiding jump stubs in managed code.
+    flAllocationType |= MEM_RESERVE_EXECUTABLE;
+#endif // FEATURE_PAL
 
     return (BYTE *) ClrVirtualAlloc (NULL, dwSize, flAllocationType, flProtect);
 
@@ -1295,12 +1302,28 @@ bool ConfigMethodSet::contains(LPCUTF8 methodName, LPCUTF8 className, PCCOR_SIGN
         NOTHROW;
     }
     CONTRACTL_END;
-    
+
     _ASSERTE(m_inited == 1);
 
     if (m_list.IsEmpty())
         return false;
     return(m_list.IsInList(methodName, className, sig));
+}
+
+/**************************************************************************/
+bool ConfigMethodSet::contains(LPCUTF8 methodName, LPCUTF8 className, CORINFO_SIG_INFO* pSigInfo)
+{
+    CONTRACTL
+    {
+        NOTHROW;
+    }
+    CONTRACTL_END;
+
+    _ASSERTE(m_inited == 1);
+
+    if (m_list.IsEmpty())
+        return false;
+    return(m_list.IsInList(methodName, className, pSigInfo));
 }
 
 /**************************************************************************/
@@ -1641,20 +1664,50 @@ bool MethodNamesListBase::IsInList(LPCUTF8 methName, LPCUTF8 clsName, PCCOR_SIGN
         NOTHROW;
     }
     CONTRACTL_END;
-    
-    ULONG numArgs = -1;
+
+    int numArgs = -1;
     if (sig != NULL)
     {
         sig++;      // Skip calling convention
         numArgs = CorSigUncompressData(sig);  
     }
 
+    return IsInList(methName, clsName, numArgs);
+}
+
+/**************************************************************/
+bool MethodNamesListBase::IsInList(LPCUTF8 methName, LPCUTF8 clsName, CORINFO_SIG_INFO* pSigInfo)
+{
+    CONTRACTL
+    {
+        NOTHROW;
+    }
+    CONTRACTL_END;
+
+    int numArgs = -1;
+    if (pSigInfo != NULL)
+    {
+        numArgs = pSigInfo->numArgs;
+    }
+
+    return IsInList(methName, clsName, numArgs);
+}
+
+/**************************************************************/
+bool MethodNamesListBase::IsInList(LPCUTF8 methName, LPCUTF8 clsName, int numArgs) 
+{
+    CONTRACTL
+    {
+        NOTHROW;
+    }
+    CONTRACTL_END;
+
     // Try to match all the entries in the list
 
     for(MethodName * pName = pNames; pName; pName = pName->next)
     {
         // If numArgs is valid, check for mismatch
-        if (pName->numArgs != -1 && (ULONG)pName->numArgs != numArgs)
+        if (pName->numArgs != -1 && pName->numArgs != numArgs)
             continue;
 
         // If methodName is valid, check for mismatch
@@ -3185,6 +3238,8 @@ FileLockHolder::~FileLockHolder()
 
 void FileLockHolder::Acquire(LPCWSTR lockName, HANDLE hInterrupt, BOOL* pInterrupted)
 {
+    WRAPPER_NO_CONTRACT;
+
     DWORD dwErr = 0;
     DWORD dwAccessDeniedRetry = 0;
     const DWORD MAX_ACCESS_DENIED_RETRIES = 10;
@@ -3504,53 +3559,7 @@ BOOL IsClrHostedLegacyComObject(REFCLSID rclsid)
 }
 #endif // FEATURE_COMINTEROP
 
-// Returns the directory for HMODULE. So, if HMODULE was for "C:\Dir1\Dir2\Filename.DLL",
-// then this would return "C:\Dir1\Dir2\" (note the trailing backslash).
-HRESULT GetHModuleDirectory(
-    __in                          HMODULE   hMod,
-    __out_z __out_ecount(cchPath) LPWSTR    wszPath,
-                                  size_t    cchPath)
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        CANNOT_TAKE_LOCK;
-    }
-    CONTRACTL_END;
 
-    DWORD dwRet = WszGetModuleFileName(hMod, wszPath, static_cast<DWORD>(cchPath));
-
-    if (dwRet == cchPath)
-    {   // If there are cchPath characters in the string, it means that the string
-        // itself is longer than cchPath and GetModuleFileName had to truncate at cchPath.
-        return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
-    }
-    else if (dwRet == 0)
-    {   // Some other error.
-        return HRESULT_FROM_GetLastError();
-    }
-
-    LPWSTR wszEnd = wcsrchr(wszPath, W('\\'));
-    if (wszEnd == NULL)
-    {   // There was no backslash? Not sure what's going on.
-        return E_UNEXPECTED;
-    }
-
-    // Include the backslash in the resulting string.
-    *(++wszEnd) = W('\0');
-
-    return S_OK;
-}
-
-SString & GetHModuleDirectory(HMODULE hMod, SString &ssDir)
-{
-    LPWSTR wzDir = ssDir.OpenUnicodeBuffer(_MAX_PATH);
-    HRESULT hr = GetHModuleDirectory(hMod, wzDir, _MAX_PATH);
-    ssDir.CloseBuffer(FAILED(hr) ? 0 : static_cast<COUNT_T>(wcslen(wzDir)));
-    IfFailThrow(hr);
-    return ssDir;
-}
 
 #if !defined(FEATURE_CORECLR) && !defined(SELF_NO_HOST) && !defined(FEATURE_UTILCODE_NO_DEPENDENCIES)
 
@@ -3883,39 +3892,14 @@ namespace Win32
 
         // Try to use what the SString already has allocated. If it does not have anything allocated
         // or it has < 20 characters allocated, then bump the size requested to _MAX_PATH.
-        DWORD dwSize = (DWORD)(ssFileName.GetUnicodeAllocation()) + 1;
-        dwSize = (dwSize < 20) ? (_MAX_PATH) : (dwSize);
-        DWORD dwResult = WszGetModuleFileName(hModule, ssFileName.OpenUnicodeBuffer(dwSize - 1), dwSize);
+        
+        DWORD dwResult = WszGetModuleFileName(hModule, ssFileName);
 
-        // if there was a failure, dwResult == 0;
-        // if there was insufficient buffer, dwResult == dwSize;
-        // if there was sufficient buffer and a successful write, dwResult < dwSize
-        ssFileName.CloseBuffer(dwResult < dwSize ? dwResult : 0);
 
         if (dwResult == 0)
             ThrowHR(HRESULT_FROM_GetLastError());
 
-        // Ok, we didn't have enough buffer. Let's loop, doubling the buffer each time, until we succeed.
-        while (dwResult == dwSize)
-        {
-            dwSize = dwSize * 2;
-            dwResult = WszGetModuleFileName(hModule, ssFileName.OpenUnicodeBuffer(dwSize - 1), dwSize);
-            ssFileName.CloseBuffer(dwResult < dwSize ? dwResult : 0);
-
-            if (dwResult == 0)
-                ThrowHR(HRESULT_FROM_GetLastError());
-        }
-
-        // Most of the runtime is not able to handle long filenames. fAllowLongFileNames
-        // has a default value of false, so that callers will not accidentally get long
-        // file names returned.
-        if (!fAllowLongFileNames && ssFileName.BeginsWith(SL(LONG_FILENAME_PREFIX_W)))
-        {
-            ssFileName.Clear();
-            ThrowHR(E_UNEXPECTED);
-        }
-
-        _ASSERTE(dwResult != 0 && dwResult < dwSize);
+        _ASSERTE(dwResult != 0 );
     }
 
     // Returns heap-allocated string in *pwszFileName
@@ -3977,16 +3961,6 @@ namespace Win32
         if (!(dwLengthWritten < dwLengthRequired))
             ThrowHR(E_UNEXPECTED);
 
-        // Most of the runtime is not able to handle long filenames. fAllowLongFileNames
-        // has a default value of false, so that callers will not accidentally get long
-        // file names returned.
-        if (!fAllowLongFileNames && ssFileName.BeginsWith(SL(LONG_FILENAME_PREFIX_W)))
-        {
-            ssPathName.Clear();
-            if (pdwFilePartIdx != NULL)
-                *pdwFilePartIdx = 0;
-            ThrowHR(E_UNEXPECTED);
-        }
     }
 } // namespace Win32
 

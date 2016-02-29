@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // THREADS.H -
 //
 
@@ -198,6 +197,7 @@ class Thread
 
 public:
     BOOL IsAddressInStack (PTR_VOID addr) const { return TRUE; }
+    static BOOL IsAddressInCurrentStack (PTR_VOID addr) { return TRUE; }
 
     Frame *IsRunningIn(AppDomain* pDomain, int *count) { return NULL; }
 
@@ -3853,6 +3853,21 @@ public:
         return m_CacheStackLimit < addr && addr <= m_CacheStackBase;
     }
 
+    static BOOL IsAddressInCurrentStack (PTR_VOID addr)
+    {
+        LIMITED_METHOD_DAC_CONTRACT;
+        Thread* currentThread = GetThread();
+        if (currentThread == NULL)
+        {
+            return FALSE;
+        }
+
+        PTR_VOID sp = dac_cast<PTR_VOID>(GetCurrentSP());
+        _ASSERTE(currentThread->m_CacheStackBase != NULL);
+        _ASSERTE(sp < currentThread->m_CacheStackBase);
+        return sp < addr && addr <= currentThread->m_CacheStackBase;
+    }
+
     // DetermineIfGuardPagePresent returns TRUE if the thread's stack contains a proper guard page. This function
     // makes a physical check of the stack, rather than relying on whether or not the CLR is currently processing a
     // stack overflow exception.
@@ -3862,10 +3877,11 @@ public:
     // CanResetStackTo will return TRUE if the given stack pointer is far enough away from the guard page to proper
     // restore the guard page with RestoreGuardPage.
     BOOL CanResetStackTo(LPCVOID stackPointer);
-#endif
 
     // IsStackSpaceAvailable will return true if there are the given number of stack pages available on the stack.
     BOOL IsStackSpaceAvailable(float numPages);
+
+#endif
     
     // Returns the amount of stack available after an SO but before the OS rips the process.
     static UINT_PTR GetStackGuarantee();

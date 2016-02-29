@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -319,8 +318,7 @@ typedef signed __int64 LONG64;
 
 #ifdef BIT64
 
-// UNIXTODO: Implement proper _atoi64, the atol returns 32 bit result
-#define _atoi64 (__int64)atol
+#define _atoi64 (__int64)atoll
 
 typedef __int64 INT_PTR, *PINT_PTR;
 typedef unsigned __int64 UINT_PTR, *PUINT_PTR;

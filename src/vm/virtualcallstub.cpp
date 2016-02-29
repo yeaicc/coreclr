@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // File: VirtualCallStub.CPP
 //
@@ -83,7 +82,11 @@ UINT32 g_bucket_space_dead = 0;         //# of bytes of abandoned buckets not ye
 // This is the number of times a successful chain lookup will occur before the
 // entry is promoted to the front of the chain. This is declared as extern because
 // the default value (CALL_STUB_CACHE_INITIAL_SUCCESS_COUNT) is defined in the header.
+#ifdef _TARGET_ARM64_
+extern "C" size_t g_dispatch_cache_chain_success_counter;
+#else
 extern size_t g_dispatch_cache_chain_success_counter;
+#endif
 
 #define DECLARE_DATA
 #include "virtualcallstub.h"

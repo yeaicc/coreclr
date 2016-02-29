@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -35,6 +34,7 @@ Abstract:
 #include "pal/module.h"
 #include "pal/virtual.h"
 #include "pal/misc.h"
+#include "pal/environ.h"
 #include "pal/utils.h"
 #include "pal/debug.h"
 #include "pal/locale.h"
@@ -241,17 +241,17 @@ Initialize(
         }
 
         // Initialize the environment.
-        if (FALSE == MiscInitialize())
+        if (FALSE == EnvironInitialize())
         {
-            goto done;
+            goto CLEANUP0;
         }
 
         // Initialize debug channel settings before anything else.
         // This depends on the environment, so it must come after
-        // MiscInitialize.
+        // EnvironInitialize.
         if (FALSE == DBG_init_channels())
         {
-            goto done;
+            goto CLEANUP0;
         }
 
 #if _DEBUG
@@ -271,6 +271,7 @@ Initialize(
             // We can continue if this fails; we'll just have problems if
             // we use large numbers of threads or have many open files.
         }
+
 
         /* initialize the shared memory infrastructure */
         if (!SHMInitialize())
@@ -499,17 +500,21 @@ Initialize(
         }
 
         /* Initialize the Virtual* functions. */
-        if (FALSE == VIRTUALInitialize())
+        bool initializeExecutableMemoryAllocator = (flags & PAL_INITIALIZE_EXEC_ALLOCATOR) != 0;
+        if (FALSE == VIRTUALInitialize(initializeExecutableMemoryAllocator))
         {
             ERROR("Unable to initialize virtual memory support\n");
             goto CLEANUP10;
         }
 
-        /* create file objects for standard handles */
-        if(!FILEInitStdHandles())
+        if (flags & PAL_INITIALIZE_STD_HANDLES)
         {
-            ERROR("Unable to initialize standard file handles\n");
-            goto CLEANUP13;
+            /* create file objects for standard handles */
+            if (!FILEInitStdHandles())
+            {
+                ERROR("Unable to initialize standard file handles\n");
+                goto CLEANUP13;
+            }
         }
 
         if (FALSE == CRTInitStdStreams())
@@ -549,7 +554,6 @@ CLEANUP15:
 CLEANUP13:
     VIRTUALCleanup();
 CLEANUP10:
-    LOADFreeModules(TRUE);
     MAPCleanup();
 CLEANUP6:
     SEHCleanup();
@@ -570,6 +574,7 @@ CLEANUP1a:
 CLEANUP1:
     SHMCleanup();
 CLEANUP0:
+    TLSCleanup();
     ERROR("PAL_Initialize failed\n");
     SetLastError(palError);
 done:
@@ -623,8 +628,8 @@ PAL_ERROR
 PALAPI
 PAL_InitializeCoreCLR(const char *szExePath)
 {    
-    // Fake up a command line to call PAL_Initialize with.
-    int result = PAL_Initialize(1, &szExePath);
+    // Fake up a command line to call PAL initialization with.
+    int result = Initialize(1, &szExePath, PAL_INITIALIZE_CORECLR);
     if (result != 0)
     {
         return GetLastError();
@@ -741,32 +746,17 @@ done:
 
 /*++
 Function:
-  PALCommonCleanup
+  PAL_Shutdown
 
-Utility function to prepare for shutdown.
-
+Abstract:
+  This function shuts down the PAL WITHOUT exiting the current process.
 --*/
-void 
-PALCommonCleanup()
+void
+PALAPI
+PAL_Shutdown(
+    void)
 {
-    static bool cleanupDone = false;
-
-    if (!cleanupDone)
-    {
-        cleanupDone = true;
-
-        PALSetShutdownIntent();
-
-        //
-        // Let the synchronization manager know we're about to shutdown
-        //
-
-        CPalSynchMgrController::PrepareForShutdown();
-
-#ifdef _DEBUG
-        PROCDumpThreadList();
-#endif
-    }
+    TerminateCurrentProcessNoExit(FALSE /* bTerminateUnconditionally */);
 }
 
 /*++
@@ -780,7 +770,7 @@ Abstract:
 void
 PALAPI
 PAL_Terminate(
-          void)
+    void)
 {
     PAL_TerminateEx(0);
 }
@@ -796,7 +786,8 @@ the specified exit code.
 --*/
 void
 PALAPI
-PAL_TerminateEx(int exitCode)
+PAL_TerminateEx(
+    int exitCode)
 {
     ENTRY_EXTERNAL("PAL_TerminateEx()\n");
 
@@ -808,6 +799,7 @@ PAL_TerminateEx(int exitCode)
         LOGEXIT("PAL_Terminate returns.\n");
     }
 
+    // Declare the beginning of shutdown 
     PALSetShutdownIntent();
 
     LOGEXIT("PAL_TerminateEx is exiting the current process.\n");
@@ -824,7 +816,7 @@ Abstract:
 void
 PALAPI
 PAL_InitializeDebug(
-          void)
+    void)
 {
     PERF_ENTRY(PAL_InitializeDebug);
     ENTRY("PAL_InitializeDebug()\n");
@@ -841,31 +833,45 @@ Function:
 
 Returns TRUE if startup has reached a point where thread data is available
 --*/
-BOOL
-PALIsThreadDataInitialized()
+BOOL PALIsThreadDataInitialized()
 {
     return g_fThreadDataAvailable;
 }
 
 /*++
 Function:
-  PALShutdown
+  PALCommonCleanup
 
-  sets the PAL's initialization count to zero, so that PALIsInitialized will 
-  return FALSE. called by PROCCleanupProcess to tell some functions that the
-  PAL isn't fully functional, and that they should use an alternate code path
-  
-(no parameters, no retun vale)
+  Utility function to prepare for shutdown.
+
 --*/
-void
-PALShutdown(
-          void)
+void 
+PALCommonCleanup()
 {
+    static bool cleanupDone = false;
+
+    // Declare the beginning of shutdown
+    PALSetShutdownIntent();
+
+    if (!cleanupDone)
+    {
+        cleanupDone = true;
+
+        //
+        // Let the synchronization manager know we're about to shutdown
+        //
+        CPalSynchMgrController::PrepareForShutdown();
+
+#ifdef _DEBUG
+        PROCDumpThreadList();
+#endif
+    }
+
+    // Mark that the PAL is uninitialized
     init_count = 0;
 }
 
-BOOL
-PALIsShuttingDown()
+BOOL PALIsShuttingDown()
 {
     /* ROTORTODO: This function may be used to provide a reader/writer-like
        mechanism (or a ref counting one) to prevent PAL APIs that need to access 
@@ -877,8 +883,7 @@ PALIsShuttingDown()
     return shutdown_intent;
 }
 
-void
-PALSetShutdownIntent()
+void PALSetShutdownIntent()
 {
     /* ROTORTODO: See comment in PALIsShuttingDown */
     shutdown_intent = TRUE;
@@ -1129,7 +1134,7 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
     struct stat theStats;
 
     /* if a path is specified, only search there */
-    if(strchr(exe_name, '/'))
+    if (strchr(exe_name, '/'))
     {
         if ( -1 == stat( exe_name, &theStats ) )
         {
@@ -1160,7 +1165,7 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
             }
             else
             {
-                if(!MultiByteToWideChar(CP_ACP, 0, real_path, -1, 
+                if (!MultiByteToWideChar(CP_ACP, 0, real_path, -1, 
                                         return_value, return_size))
                 {
                     ASSERT("MultiByteToWideChar failure\n");
@@ -1178,43 +1183,40 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
 
     /* no path was specified : search $PATH */
 
-    env_path=MiscGetenv("PATH");
-    if(!env_path || *env_path=='\0')
+    env_path = EnvironGetenv("PATH");
+    if (!env_path || *env_path=='\0')
     {
         WARN("$PATH isn't set.\n");
-        goto last_resort;
-    }
+        if (env_path != NULL)
+        {
+            InternalFree(env_path);
+        }
 
-    /* get our own copy of env_path so we can modify it */
-    env_path=InternalStrdup(env_path);
-    if(!env_path)
-    {
-        ERROR("Not enough memory to copy $PATH!\n");
-        return NULL;
+        goto last_resort;
     }
 
     exe_name_length=strlen(exe_name);
 
     cur_dir=env_path;
 
-    while(cur_dir)
+    while (cur_dir)
     {
         LPSTR full_path;
         struct stat theStats;
 
         /* skip all leading ':' */
-        while(*cur_dir==':')
+        while (*cur_dir==':')
         {
             cur_dir++;
         }
-        if(*cur_dir=='\0')
+        if (*cur_dir=='\0')
         {
             break;
         }
 
         /* cut string at next ':' */
-        path_ptr=strchr(cur_dir, ':');
-        if(path_ptr)
+        path_ptr = strchr(cur_dir, ':');
+        if (path_ptr)
         {
             /* check if we need to add a '/' between the path and filename */
             need_slash=(*(path_ptr-1))!='/';
@@ -1233,7 +1235,7 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
         /* build tentative full file name */
         int iLength = (strlen(cur_dir)+exe_name_length+2);
         full_path = reinterpret_cast<LPSTR>(InternalMalloc(iLength));
-        if(!full_path)
+        if (!full_path)
         {
             ERROR("Not enough memory!\n");
             break;
@@ -1247,7 +1249,7 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
             return NULL;
         }
 
-        if(need_slash)
+        if (need_slash)
         {
             if (strcat_s(full_path, iLength, "/") != SAFECRT_SUCCESS)
             {
@@ -1272,7 +1274,7 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
             if( UTIL_IsExecuteBitsSet( &theStats ) )
             {
                 /* generate canonical path */
-                if(!realpath(full_path, real_path))
+                if (!realpath(full_path, real_path))
                 {
                     ERROR("realpath() failed!\n");
                     InternalFree(full_path);
@@ -1297,7 +1299,7 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
                     return NULL;
                 }
 
-                if(!MultiByteToWideChar(CP_ACP, 0, real_path, -1, return_value,
+                if (!MultiByteToWideChar(CP_ACP, 0, real_path, -1, return_value,
                                     return_size))
                 {
                     ASSERT("MultiByteToWideChar failure\n");
@@ -1309,27 +1311,30 @@ static LPWSTR INIT_FindEXEPath(LPCSTR exe_name)
                     TRACE("found %s in %s; real path is %s\n", exe_name,
                           cur_dir,real_path);
                 }
+
                 InternalFree(env_path);
                 return return_value;
             }
         }
+
         /* file doesn't exist : keep searching */
         InternalFree(full_path);
 
         /* path_ptr is NULL if there's no ':' after this directory */
         cur_dir=path_ptr;
     }
+
     InternalFree(env_path);
-    TRACE("No %s found in $PATH (%s)\n", exe_name, MiscGetenv("PATH"));
+    TRACE("No %s found in $PATH (%s)\n", exe_name, EnvironGetenv("PATH", FALSE));
 
 last_resort:
     /* last resort : see if the executable is in the current directory. This is
        possible if it comes from a exec*() call. */
-    if(0 == stat(exe_name,&theStats))
+    if (0 == stat(exe_name,&theStats))
     {
         if ( UTIL_IsExecuteBitsSet( &theStats ) )
         {
-            if(!realpath(exe_name, real_path))
+            if (!realpath(exe_name, real_path))
             {
                 ERROR("realpath() failed!\n");
                 return NULL;
@@ -1350,7 +1355,7 @@ last_resort:
             }
             else
             {
-                if(!MultiByteToWideChar(CP_ACP, 0, real_path, -1, 
+                if (!MultiByteToWideChar(CP_ACP, 0, real_path, -1, 
                                         return_value, return_size))
                 {
                     ASSERT("MultiByteToWideChar failure\n");
@@ -1362,6 +1367,7 @@ last_resort:
                     TRACE("full path to executable is %s\n", real_path);
                 }
             }
+
             return return_value;
         }
         else
@@ -1375,6 +1381,7 @@ last_resort:
         TRACE("last resort failed : executable %s is not in the current "
               "directory\n",exe_name);
     }
+
     ERROR("executable %s not found anywhere!\n", exe_name);
     return NULL;
 #else // !__APPLE__
@@ -1406,7 +1413,7 @@ last_resort:
     }
     else
     {
-        if(!MultiByteToWideChar(CP_ACP, 0, exec_path, -1, 
+        if (!MultiByteToWideChar(CP_ACP, 0, exec_path, -1, 
                                 return_value, return_size))
         {
             ASSERT("MultiByteToWideChar failure\n");

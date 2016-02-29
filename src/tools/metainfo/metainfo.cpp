@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 #include <stdio.h>
 #include <ctype.h>
@@ -76,14 +75,6 @@ extern "C" int _cdecl wmain(int argc, __in_ecount(argc) WCHAR **argv)
     ULONG DumpFilter = MDInfo::dumpDefault;
     HRESULT hr = 0;
     BOOL    fWantHelp=FALSE;
-    
-#if FEATURE_PAL
-    if (!PAL_RegisterLibrary(L"rotor_palrt") ||
-        !PAL_RegisterLibrary(L"sscoree"))
-    {
-        MDInfo::Error("Unable to register libraries", 1);
-    }
-#endif  // FEATURE_PAL
     
     // Validate incoming arguments
     for (int i=1;  i<argc;  i++)

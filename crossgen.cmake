@@ -19,8 +19,11 @@ remove_definitions(
 
 if(WIN32)
     add_definitions(-MT)
-    add_definitions(-DFEATURE_READYTORUN_COMPILER)
 endif(WIN32)
+
+if(FEATURE_READYTORUN)
+    add_definitions(-DFEATURE_READYTORUN_COMPILER)
+endif(FEATURE_READYTORUN)
 
 if(CLR_CMAKE_PLATFORM_LINUX)
     add_definitions(-DFEATURE_PERFMAP)

@@ -22,7 +22,6 @@ set(VM_CROSSGEN_SOURCES
     ../baseassemblyspec.cpp
     ../corebindresult.cpp
     ../coreassemblyspec.cpp
-    ../crossdomaincalls.cpp
     ../dataimage.cpp
     ../decodemd.cpp
     ../debuginfostore.cpp
@@ -34,8 +33,6 @@ set(VM_CROSSGEN_SOURCES
     ../field.cpp
     ../fieldmarshaler.cpp
     ../formattype.cpp
-    ../typeequivalencehash.cpp
-    ../gcdecode.cpp
     ../genericdict.cpp
     ../generics.cpp
     ../genmeth.cpp
@@ -68,7 +65,6 @@ set(VM_CROSSGEN_SOURCES
     ../pendingload.cpp
     ../precode.cpp
     ../olevariant.cpp
-    ../readytoruninfo.cpp
     ../security.cpp
     ../securitypolicy.cpp
     ../securityattributes.cpp
@@ -101,28 +97,32 @@ set(VM_CROSSGEN_SOURCES
     ../crossgencompile.cpp
 )
 
+if(FEATURE_READYTORUN)
+    list(APPEND VM_CROSSGEN_SOURCES
+      ../readytoruninfo.cpp
+    )
+endif(FEATURE_READYTORUN)
+
 include_directories(BEFORE ..)
 include_directories(${CLR_DIR}/src/gc)
+include_directories(../${ARCH_SOURCES_DIR})
 
 if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
-  include_directories(../amd64)
   list(APPEND VM_CROSSGEN_SOURCES 
-    ../amd64/stublinkeramd64.cpp
+    ../${ARCH_SOURCES_DIR}/stublinkeramd64.cpp
   )
 elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
-  include_directories(../i386)
   list(APPEND VM_CROSSGEN_SOURCES 
-    ../i386/stublinkerx86.cpp
+    ../${ARCH_SOURCES_DIR}/stublinkerx86.cpp
+    ../gcdecode.cpp
   )
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
-  include_directories(../arm)
   list(APPEND VM_CROSSGEN_SOURCES 
-    ../arm/stubs.cpp
+    ../${ARCH_SOURCES_DIR}/stubs.cpp
   )
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
-  include_directories(../arm64)
   list(APPEND VM_CROSSGEN_SOURCES 
-    ../arm64/stubs.cpp
+    ../${ARCH_SOURCES_DIR}/stubs.cpp
   )
 else()
   clr_unknown_arch()
@@ -153,4 +153,4 @@ if (CLR_CMAKE_PLATFORM_LINUX)
   )
 endif (CLR_CMAKE_PLATFORM_LINUX)
 
-add_library(cee_crossgen ${VM_CROSSGEN_SOURCES})
+add_library_clr(cee_crossgen ${VM_CROSSGEN_SOURCES})

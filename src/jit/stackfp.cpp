@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #include "jitpch.h"
@@ -2350,8 +2349,10 @@ void CodeGen::genCodeForTreeStackFP_SmpOp(GenTreePtr     tree)
             genCodeForTreeStackFP_DONE(tree, op1->gtRegNum);
             return;
         }
-        case GT_MATH:
+        case GT_INTRINSIC:
         {
+            assert(Compiler::IsMathIntrinsic(tree));
+
             GenTreePtr op1 = tree->gtOp.gtOp1;
 
             // get tree into a register
@@ -2375,8 +2376,8 @@ void CodeGen::genCodeForTreeStackFP_SmpOp(GenTreePtr     tree)
             assert(mathIns[CORINFO_INTRINSIC_Sqrt]  == INS_fsqrt);
             assert(mathIns[CORINFO_INTRINSIC_Abs ]  == INS_fabs );
             assert(mathIns[CORINFO_INTRINSIC_Round] == INS_frndint);
-            assert((unsigned)(tree->gtMath.gtMathFN) < sizeof(mathIns)/sizeof(mathIns[0]));
-            instGen(mathIns[tree->gtMath.gtMathFN]);
+            assert((unsigned)(tree->gtIntrinsic.gtIntrinsicId) < sizeof(mathIns)/sizeof(mathIns[0]));
+            instGen(mathIns[tree->gtIntrinsic.gtIntrinsicId]);
 
             // mark register that holds tree
             genCodeForTreeStackFP_DONE(tree, op1->gtRegNum);

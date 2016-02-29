@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 #ifndef __GCENV_BASE_INCLUDED__
 #define __GCENV_BASE_INCLUDED__
 //
@@ -16,11 +15,17 @@
 #define REDHAWK_PALIMPORT extern "C"
 #define REDHAWK_PALAPI __stdcall
 
-
 #ifndef _MSC_VER
 #define __stdcall
+#ifdef __clang__
+#define __forceinline __attribute__((always_inline)) inline
+#else // __clang__
 #define __forceinline inline
-#endif
+#endif // __clang__
+#endif // !_MSC_VER
+
+#define SIZE_T_MAX ((size_t)-1)
+#define SSIZE_T_MAX ((ptrdiff_t)(SIZE_T_MAX / 2))
 
 #ifndef _INC_WINDOWS
 // -----------------------------------------------------------------------------------------------------------
@@ -30,43 +35,15 @@
 
 typedef uint32_t BOOL;
 typedef uint32_t DWORD;
-typedef void* LPVOID;
-typedef uint32_t UINT;
-typedef uintptr_t ULONG_PTR;
-typedef void VOID;
-typedef void* PVOID;
-typedef void * LPSECURITY_ATTRIBUTES;
-typedef void const * LPCVOID;
-typedef wchar_t * PWSTR, *LPWSTR;
-typedef const wchar_t *LPCWSTR, *PCWSTR;
-typedef size_t SIZE_T;
-
-typedef void * HANDLE;
-
-typedef union _LARGE_INTEGER {
-    struct {
-#if BIGENDIAN
-        int32_t HighPart;
-        uint32_t LowPart;
-#else
-        uint32_t LowPart;
-        int32_t HighPart;
-#endif
-    } u;
-    int64_t QuadPart;
-} LARGE_INTEGER, *PLARGE_INTEGER;
-
-#define SIZE_T_MAX ((size_t)-1)
-#define SSIZE_T_MAX ((ptrdiff_t)(SIZE_T_MAX / 2))
 
 // -----------------------------------------------------------------------------------------------------------
 // HRESULT subset.
 
-#ifdef WIN32
+#ifdef PLATFORM_UNIX
+typedef int32_t HRESULT;
+#else
 // this must exactly match the typedef used by windows.h
 typedef long HRESULT;
-#else
-typedef int32_t HRESULT;
 #endif
 
 #define SUCCEEDED(_hr)          ((HRESULT)(_hr) >= 0)
@@ -91,7 +68,7 @@ inline HRESULT HRESULT_FROM_WIN32(unsigned long x)
 #define TRUE true
 #define FALSE false
 
-#define CALLBACK
+#define CALLBACK __stdcall
 #define FORCEINLINE inline
 
 #define INFINITE 0xFFFFFFFF
@@ -114,183 +91,72 @@ inline HRESULT HRESULT_FROM_WIN32(unsigned long x)
 
 #define UNREFERENCED_PARAMETER(P)          (void)(P)
 
-#define INVALID_HANDLE_VALUE    ((HANDLE)-1)
-
-#ifndef WIN32
+#ifdef PLATFORM_UNIX
 #define  _vsnprintf vsnprintf
 #define sprintf_s snprintf
+#define swprintf_s swprintf
 #endif
 
-#ifdef WIN32
-
-#pragma pack(push, 8)
-
-typedef struct _RTL_CRITICAL_SECTION {
-    void* DebugInfo;
-
-    //
-    //  The following three fields control entering and exiting the critical
-    //  section for the resource
-    //
-
-    int32_t LockCount;
-    int32_t RecursionCount;
-    HANDLE OwningThread;        // from the thread's ClientId->UniqueThread
-    HANDLE LockSemaphore;
-    uintptr_t SpinCount;        // force size on 64-bit systems when packed
-} CRITICAL_SECTION, RTL_CRITICAL_SECTION, *PRTL_CRITICAL_SECTION;
-
-#pragma pack(pop)
-
+#ifdef UNICODE
+#define _tcslen wcslen
+#define _tcscpy wcscpy
+#define _stprintf_s swprintf_s
+#define _tfopen _wfopen
 #else
-
-typedef struct _RTL_CRITICAL_SECTION {
-    pthread_mutex_t mutex;
-} CRITICAL_SECTION, RTL_CRITICAL_SECTION, *PRTL_CRITICAL_SECTION;
-
+#define _tcslen strlen
+#define _tcscpy strcpy
+#define _stprintf_s sprintf_s
+#define _tfopen fopen
 #endif
 
-#define WINBASEAPI extern "C"
 #define WINAPI __stdcall
 
 typedef DWORD (WINAPI *PTHREAD_START_ROUTINE)(void* lpThreadParameter);
-
-WINBASEAPI
-void
-WINAPI
-DebugBreak();
-
-WINBASEAPI
-BOOL
-WINAPI
-VirtualUnlock(
-    LPVOID lpAddress,
-    SIZE_T dwSize
-    );
-
-WINBASEAPI
-DWORD
-WINAPI
-GetLastError();
-
-WINBASEAPI
-UINT 
-WINAPI
-GetWriteWatch(
-  DWORD dwFlags,
-  PVOID lpBaseAddress,
-  SIZE_T dwRegionSize,
-  PVOID *lpAddresses,
-  ULONG_PTR * lpdwCount,
-  DWORD * lpdwGranularity
-);
-
-WINBASEAPI
-UINT 
-WINAPI
-ResetWriteWatch(
-  LPVOID lpBaseAddress,
-  SIZE_T dwRegionSize
-);
-
-WINBASEAPI
-VOID 
-WINAPI
-FlushProcessWriteBuffers();
-
-WINBASEAPI
-DWORD
-WINAPI
-GetTickCount();
-
-WINBASEAPI
-BOOL
-WINAPI
-QueryPerformanceCounter(LARGE_INTEGER *lpPerformanceCount);
-
-WINBASEAPI
-BOOL
-WINAPI
-QueryPerformanceFrequency(LARGE_INTEGER *lpFrequency);
-
-WINBASEAPI
-DWORD
-WINAPI
-GetCurrentThreadId(
-           VOID);
-
-WINBASEAPI
-BOOL
-WINAPI
-CloseHandle(
-        HANDLE hObject);
 
 #define WAIT_OBJECT_0           0
 #define WAIT_TIMEOUT            258
 #define WAIT_FAILED             0xFFFFFFFF
 
-#define GENERIC_WRITE           0x40000000
-#define FILE_SHARE_READ         0x00000001
-#define CREATE_ALWAYS           2
-#define FILE_ATTRIBUTE_NORMAL               0x00000080
-
-WINBASEAPI
-BOOL
-WINAPI
-WriteFile(
-      HANDLE hFile,
-      LPCVOID lpBuffer,
-      DWORD nNumberOfBytesToWrite,
-      DWORD * lpNumberOfBytesWritten,
-      PVOID lpOverlapped);
-
-#define FILE_BEGIN              0
-
-WINBASEAPI
-DWORD
-WINAPI
-SetFilePointer(
-           HANDLE hFile,
-           int32_t lDistanceToMove,
-           int32_t * lpDistanceToMoveHigh,
-           DWORD dwMoveMethod);
-
-WINBASEAPI
-BOOL
-WINAPI
-FlushFileBuffers(
-         HANDLE hFile);
-
 #if defined(_MSC_VER) 
  #if defined(_ARM_)
-  
+
   __forceinline void YieldProcessor() { }
   extern "C" void __emit(const unsigned __int32 opcode);
   #pragma intrinsic(__emit)
   #define MemoryBarrier() { __emit(0xF3BF); __emit(0x8F5F); }
-  
+
+ #elif defined(_ARM64_)
+
+  extern "C" void __yield(void);
+  #pragma intrinsic(__yield)
+  __forceinline void YieldProcessor() { __yield();}
+
+  extern "C" void __dmb(const unsigned __int32 _Type);
+  #pragma intrinsic(__dmb)
+  #define MemoryBarrier() { __dmb(_ARM64_BARRIER_SY); }
+
  #elif defined(_AMD64_)
   
-  extern "C" VOID
+  extern "C" void
   _mm_pause (
-      VOID
+      void
       );
   
-  extern "C" VOID
+  extern "C" void
   _mm_mfence (
-      VOID
+      void
       );
-  
+
   #pragma intrinsic(_mm_pause)
   #pragma intrinsic(_mm_mfence)
   
   #define YieldProcessor _mm_pause
   #define MemoryBarrier _mm_mfence
-  
+
  #elif defined(_X86_)
   
   #define YieldProcessor() __asm { rep nop }
-  
+
   __forceinline void MemoryBarrier()
   {
       int32_t Barrier;
@@ -298,30 +164,14 @@ FlushFileBuffers(
           xchg Barrier, eax
       }
   }
-  
+
  #else // !_ARM_ && !_AMD64_ && !_X86_
   #error Unsupported architecture
  #endif
 #else // _MSC_VER
 
-WINBASEAPI 
-VOID
-WINAPI
-YieldProcessor();
-
-WINBASEAPI
-VOID
-WINAPI
-MemoryBarrier();
-
 #endif // _MSC_VER
 
-typedef struct _GUID {
-    unsigned long  Data1;
-    unsigned short Data2;
-    unsigned short Data3;
-    unsigned char  Data4[8];
-} GUID;
 #endif // _INC_WINDOWS
 
 // -----------------------------------------------------------------------------------------------------------
@@ -451,56 +301,6 @@ typedef DPTR(uint8_t)   PTR_uint8_t;
 
 #define UI64(_literal) _literal##ULL
 
-int32_t FastInterlockIncrement(int32_t volatile *lpAddend);
-int32_t FastInterlockDecrement(int32_t volatile *lpAddend);
-int32_t FastInterlockExchange(int32_t volatile *Target, int32_t Value);
-int32_t FastInterlockCompareExchange(int32_t volatile *Destination, int32_t Exchange, int32_t Comperand);
-int32_t FastInterlockExchangeAdd(int32_t volatile *Addend, int32_t Value);
-
-void * _FastInterlockExchangePointer(void * volatile *Target, void * Value);
-void * _FastInterlockCompareExchangePointer(void * volatile *Destination, void * Exchange, void * Comperand);
-
-template <typename T>
-inline T FastInterlockExchangePointer(
-    T volatile * target,
-    T            value)
-{
-    return (T)((TADDR)_FastInterlockExchangePointer((void **)target, value));
-}
-
-template <typename T>
-inline T FastInterlockExchangePointer(
-    T volatile * target,
-    nullptr_t    value)
-{
-    return (T)((TADDR)_FastInterlockExchangePointer((void **)target, value));
-}
-
-template <typename T>
-inline T FastInterlockCompareExchangePointer(
-    T volatile * destination,
-    T            exchange,
-    T            comparand)
-{
-    return (T)((TADDR)_FastInterlockCompareExchangePointer((void **)destination, exchange, comparand));
-}
-
-template <typename T>
-inline T FastInterlockCompareExchangePointer(
-    T volatile * destination,
-    T            exchange,
-    nullptr_t    comparand)
-{
-    return (T)((TADDR)_FastInterlockCompareExchangePointer((void **)destination, exchange, comparand));
-}
-
-
-void FastInterlockOr(uint32_t volatile *p, uint32_t msk);
-void FastInterlockAnd(uint32_t volatile *p, uint32_t msk);
-
-#define CALLER_LIMITS_SPINNING 0
-bool __SwitchToThread (uint32_t dwSleepMSec, uint32_t dwSwitchCount);
-
 class ObjHeader;
 class MethodTable;
 class Object;
@@ -534,7 +334,51 @@ typedef TADDR OBJECTHANDLE;
 
 #define VOLATILE(T) T volatile
 
+//
+// This code is extremely compiler- and CPU-specific, and will need to be altered to 
+// support new compilers and/or CPUs.  Here we enforce that we can only compile using
+// VC++, or Clang on x86, AMD64, ARM and ARM64.
+// 
+#if !defined(_MSC_VER) && !defined(__clang__)
+#error The Volatile type is currently only defined for Visual C++ and Clang
+#endif
+
+#if defined(__clang__) && !defined(_X86_) && !defined(_AMD64_) && !defined(_ARM_) && !defined(_ARM64_)
+#error The Volatile type is currently only defined for Clang when targeting x86, AMD64, ARM or ARM64 CPUs
+#endif
+
+#if defined(__clang__)
+#if defined(_ARM_) || defined(_ARM64_)
+// This is functionally equivalent to the MemoryBarrier() macro used on ARM on Windows.
+#define VOLATILE_MEMORY_BARRIER() asm volatile ("dmb sy" : : : "memory")
+#else
+//
+// For Clang, we prevent reordering by the compiler by inserting the following after a volatile
+// load (to prevent subsequent operations from moving before the read), and before a volatile 
+// write (to prevent prior operations from moving past the write).  We don't need to do anything
+// special to prevent CPU reorderings, because the x86 and AMD64 architectures are already
+// sufficiently constrained for our purposes.  If we ever need to run on weaker CPU architectures
+// (such as PowerPC), then we will need to do more work.
+// 
+// Please do not use this macro outside of this file.  It is subject to change or removal without
+// notice.
+//
+#define VOLATILE_MEMORY_BARRIER() asm volatile ("" : : : "memory")
+#endif // !_ARM_
+#elif defined(_ARM_) && _ISO_VOLATILE
+// ARM has a very weak memory model and very few tools to control that model. We're forced to perform a full
+// memory barrier to preserve the volatile semantics. Technically this is only necessary on MP systems but we
+// currently don't have a cheap way to determine the number of CPUs from this header file. Revisit this if it
+// turns out to be a performance issue for the uni-proc case.
+#define VOLATILE_MEMORY_BARRIER() MemoryBarrier()
+#else
+//
+// On VC++, reorderings at the compiler and machine level are prevented by the use of the 
+// "volatile" keyword in VolatileLoad and VolatileStore.  This should work on any CPU architecture
+// targeted by VC++ with /iso_volatile-.
+//
 #define VOLATILE_MEMORY_BARRIER()
+#endif
 
 //
 // VolatileLoad loads a T from a pointer to T.  It is guaranteed that this load will not be optimized
@@ -549,6 +393,18 @@ T VolatileLoad(T const * pt)
 {
     T val = *(T volatile const *)pt;
     VOLATILE_MEMORY_BARRIER();
+    return val;
+}
+
+template<typename T>
+inline
+T VolatileLoadWithoutBarrier(T const * pt)
+{
+#ifndef DACCESS_COMPILE
+    T val = *(T volatile const *)pt;
+#else
+    T val = *pt;
+#endif
     return val;
 }
 
@@ -567,76 +423,13 @@ void VolatileStore(T* pt, T val)
     *(T volatile *)pt = val;
 }
 
-struct GCSystemInfo
-{
-    DWORD dwNumberOfProcessors;
-    DWORD dwPageSize;
-    DWORD dwAllocationGranularity;
-};
-
 extern GCSystemInfo g_SystemInfo;
-void InitializeSystemInfo();
-
-// An 'abstract' definition of Windows MEMORYSTATUSEX.  In practice, the only difference is the missing struct size 
-// field and one field that Windows documents to always be 0.  If additional information is available on other OSes, 
-// this information should be surfaced through this structure as additional fields that the GC may optionally depend on.
-struct GCMemoryStatus
-{
-    uint32_t dwMemoryLoad;
-    uint64_t ullTotalPhys;
-    uint64_t ullAvailPhys; 
-    uint64_t ullTotalPageFile;
-    uint64_t ullAvailPageFile;
-    uint64_t ullTotalVirtual;
-    uint64_t ullAvailVirtual;
-};
-
-void
-GetProcessMemoryLoad(
-    GCMemoryStatus* lpBuffer);
 
 extern MethodTable * g_pFreeObjectMethodTable;
 
 extern int32_t g_TrapReturningThreads;
 
 extern bool g_fFinalizerRunOnShutDown;
-
-//
-// Memory allocation
-//
-#define MEM_COMMIT              0x1000
-#define MEM_RESERVE             0x2000
-#define MEM_DECOMMIT            0x4000
-#define MEM_RELEASE             0x8000
-#define MEM_RESET               0x80000
-
-#define PAGE_NOACCESS           0x01
-#define PAGE_READWRITE          0x04
-
-void * ClrVirtualAlloc(
-    void * lpAddress,
-    size_t dwSize,
-    uint32_t flAllocationType,
-    uint32_t flProtect);
-
-void * ClrVirtualAllocAligned(
-    void * lpAddress,
-    size_t dwSize,
-    uint32_t flAllocationType,
-    uint32_t flProtect,
-    size_t dwAlignment);
-
-bool ClrVirtualFree(
-        void * lpAddress,
-        size_t dwSize,
-        uint32_t dwFreeType);
-
-bool
-ClrVirtualProtect(
-           void * lpAddress,
-           size_t dwSize,
-           uint32_t flNewProtect,
-           uint32_t * lpflOldProtect);
 
 //
 // Locks
@@ -647,71 +440,7 @@ class Thread;
 
 Thread * GetThread();
 
-struct ScanContext;
-typedef void promote_func(PTR_PTR_Object, ScanContext*, uint32_t);
-
 typedef void (CALLBACK *HANDLESCANPROC)(PTR_UNCHECKED_OBJECTREF pref, uintptr_t *pExtraInfo, uintptr_t param1, uintptr_t param2);
-
-class GCToEEInterface
-{
-public:
-    //
-    // Suspend/Resume callbacks
-    //
-    typedef enum
-    {
-        SUSPEND_FOR_GC,
-        SUSPEND_FOR_GC_PREP
-    } SUSPEND_REASON;
-
-    static void SuspendEE(SUSPEND_REASON reason);
-    static void RestartEE(bool bFinishedGC); //resume threads.
-
-    // 
-    // The stack roots enumeration callback
-    //
-    static void ScanStackRoots(Thread * pThread, promote_func* fn, ScanContext* sc);
-
-    // Optional static GC refs scanning for better parallelization of server GC marking
-    static void ScanStaticGCRefsOpportunistically(promote_func* fn, ScanContext* sc);
-
-    // 
-    // Callbacks issues during GC that the execution engine can do its own bookeeping
-    //
-
-    // start of GC call back - single threaded
-    static void GcStartWork(int condemned, int max_gen); 
-
-    //EE can perform post stack scanning action, while the 
-    // user threads are still suspended 
-    static void AfterGcScanRoots(int condemned, int max_gen, ScanContext* sc);
-
-    // Called before BGC starts sweeping, the heap is walkable
-    static void GcBeforeBGCSweepWork();
-
-    // post-gc callback.
-    static void GcDone(int condemned);
-
-    // Promote refcounted handle callback
-    static bool RefCountedHandleCallbacks(Object * pObject);
-
-    // Sync block cache management
-    static void SyncBlockCacheWeakPtrScan(HANDLESCANPROC scanProc, uintptr_t lp1, uintptr_t lp2);
-    static void SyncBlockCacheDemote(int max_gen);
-    static void SyncBlockCachePromotionsGranted(int max_gen);
-
-    // Thread functions
-    static bool IsPreemptiveGCDisabled(Thread * pThread);
-    static void EnablePreemptiveGC(Thread * pThread);
-    static void DisablePreemptiveGC(Thread * pThread);
-    static void SetGCSpecial(Thread * pThread);
-    static alloc_context * GetAllocContext(Thread * pThread);
-    static bool CatchAtSafePoint(Thread * pThread);
-
-    // ThreadStore functions
-    static void AttachCurrentThread(); // does not acquire thread store lock
-    static Thread * GetThreadList(Thread * pThread);
-};
 
 class FinalizerThread
 {
@@ -729,8 +458,10 @@ public:
     static HANDLE GetFinalizerEvent();
 };
 
+#ifdef FEATURE_REDHAWK
 typedef uint32_t (__stdcall *BackgroundCallback)(void* pCallbackContext);
 REDHAWK_PALIMPORT bool REDHAWK_PALAPI PalStartBackgroundGCThread(BackgroundCallback callback, void* pCallbackContext);
+#endif // FEATURE_REDHAWK
 
 void DestroyThread(Thread * pThread);
 
@@ -742,12 +473,6 @@ inline bool dbgOnly_IsSpecialEEThread()
 }
 
 #define ClrFlsSetThreadType(type)
-
-void UnsafeInitializeCriticalSection(CRITICAL_SECTION * lpCriticalSection);
-void UnsafeEEEnterCriticalSection(CRITICAL_SECTION *lpCriticalSection);
-void UnsafeEELeaveCriticalSection(CRITICAL_SECTION * lpCriticalSection);
-void UnsafeDeleteCriticalSection(CRITICAL_SECTION *lpCriticalSection);
-
 
 //
 // Performance logging
@@ -792,7 +517,7 @@ namespace ETW
 
 #define LOG(x)
 
-VOID LogSpewAlways(const char *fmt, ...);
+void LogSpewAlways(const char *fmt, ...);
 
 #define LL_INFO10 4
 
@@ -814,28 +539,9 @@ VOID LogSpewAlways(const char *fmt, ...);
 #define STRESS_LOG_RESERVE_MEM(numChunks) do {} while (0)
 #define STRESS_LOG_GC_STACK
 
-typedef void* CLR_MUTEX_ATTRIBUTES;
-typedef void* CLR_MUTEX_COOKIE;
-
-CLR_MUTEX_COOKIE ClrCreateMutex(CLR_MUTEX_ATTRIBUTES lpMutexAttributes, bool bInitialOwner, LPCWSTR lpName);
-void ClrCloseMutex(CLR_MUTEX_COOKIE mutex);
-bool ClrReleaseMutex(CLR_MUTEX_COOKIE mutex);
-uint32_t ClrWaitForMutex(CLR_MUTEX_COOKIE mutex, uint32_t dwMilliseconds, bool bAlertable);
-
-REDHAWK_PALIMPORT HANDLE REDHAWK_PALAPI PalCreateFileW(_In_z_ LPCWSTR pFileName, uint32_t desiredAccess, uint32_t shareMode, _In_opt_ void* pSecurityAttributes, uint32_t creationDisposition, uint32_t flagsAndAttributes, HANDLE hTemplateFile);
-
 #define DEFAULT_GC_PRN_LVL 3
 
 // -----------------------------------------------------------------------------------------------------------
-
-enum PalCapability
-{
-    WriteWatchCapability                = 0x00000001,   // GetWriteWatch() and friends
-    LowMemoryNotificationCapability     = 0x00000002,   // CreateMemoryResourceNotification() and friends
-    GetCurrentProcessorNumberCapability = 0x00000004,   // GetCurrentProcessorNumber()
-};
-
-REDHAWK_PALIMPORT bool REDHAWK_PALAPI PalHasCapability(PalCapability capability);
 
 void StompWriteBarrierEphemeral();
 void StompWriteBarrierResize(bool bReqUpperBoundsCheck);
@@ -862,7 +568,7 @@ public:
     typedef CLRConfigTypes ConfigStringInfo;
 
     static uint32_t GetConfigValue(ConfigDWORDInfo eType);
-    static HRESULT GetConfigValue(ConfigStringInfo /*eType*/, wchar_t * * outVal);
+    static HRESULT GetConfigValue(ConfigStringInfo /*eType*/, TCHAR * * outVal);
 };
 
 inline bool FitsInU1(uint64_t val)
@@ -913,8 +619,8 @@ namespace GCStressPolicy
     static volatile int32_t s_cGcStressDisables;
 
     inline bool IsEnabled() { return s_cGcStressDisables == 0; }
-    inline void GlobalDisable() { FastInterlockIncrement(&s_cGcStressDisables); }
-    inline void GlobalEnable() { FastInterlockDecrement(&s_cGcStressDisables); }
+    inline void GlobalDisable() { Interlocked::Increment(&s_cGcStressDisables); }
+    inline void GlobalEnable() { Interlocked::Decrement(&s_cGcStressDisables); }
 }
 
 enum gcs_trigger_points

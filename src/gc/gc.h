@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 /*++
@@ -37,7 +36,7 @@ typedef gc_heap_segment_stub *segment_handle;
 
 struct segment_info
 {
-    LPVOID pvMem; // base of the allocation, not the first object (must add ibFirstObject)
+    void * pvMem; // base of the allocation, not the first object (must add ibFirstObject)
     size_t ibFirstObject;   // offset to the base of the first object in the segment
     size_t ibAllocated; // limit of allocated memory in the segment (>= firstobject)
     size_t ibCommit; // limit of committed memory in the segment (>= alllocated)
@@ -204,6 +203,7 @@ struct ScanContext
 {
     Thread* thread_under_crawl;
     int thread_number;
+    uintptr_t stack_limit; // Lowest point on the thread stack that the scanning logic is permitted to read
     BOOL promotion; //TRUE: Promotion, FALSE: Relocation.
     BOOL concurrent; //TRUE: concurrent scanning 
 #if CHECK_APP_DOMAIN_LEAKS || defined (FEATURE_APPDOMAIN_RESOURCE_MONITORING) || defined (DACCESS_COMPILE)
@@ -225,6 +225,7 @@ struct ScanContext
 
         thread_under_crawl = 0;
         thread_number = -1;
+        stack_limit = 0;
         promotion = FALSE;
         concurrent = FALSE;
 #ifdef GC_PROFILING
@@ -243,7 +244,7 @@ typedef void (* gen_walk_fn)(void *context, int generation, uint8_t *range_start
 struct ProfilingScanContext : ScanContext
 {
     BOOL fProfilerPinned;
-    LPVOID pvEtwContext;
+    void * pvEtwContext;
     void *pHeapId;
     
     ProfilingScanContext(BOOL fProfilerPinnedParam) : ScanContext()
@@ -254,7 +255,7 @@ struct ProfilingScanContext : ScanContext
         fProfilerPinned = fProfilerPinnedParam;
         pvEtwContext = NULL;
 #ifdef FEATURE_CONSERVATIVE_GC
-        // To not confuse CNameSpace::GcScanRoots
+        // To not confuse GCScan::GcScanRoots
         promotion = g_pConfig->GetGCConservative();
 #endif
     }
@@ -615,6 +616,12 @@ public:
     // static if since restricting for all heaps is fine
     virtual size_t GetValidSegmentSize(BOOL large_seg = FALSE) = 0;
 
+    static BOOL IsLargeObject(MethodTable *mt) {
+        WRAPPER_NO_CONTRACT;
+
+        return mt->GetBaseSize() >= LARGE_OBJECT_SIZE;
+    }
+
     static unsigned GetMaxGeneration() {
         LIMITED_METHOD_DAC_CONTRACT;  
         return max_generation;
@@ -667,7 +674,7 @@ public:
 extern VOLATILE(int32_t) m_GCLock;
 
 // Go through and touch (read) each page straddled by a memory block.
-void TouchPages(LPVOID pStart, uint32_t cb);
+void TouchPages(void * pStart, size_t cb);
 
 // For low memory notification from host
 extern int32_t g_bLowMemoryFromHost;

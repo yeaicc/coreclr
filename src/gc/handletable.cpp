@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*
  * Generational GC handle manager.  Main Entrypoint Layer.
@@ -391,11 +390,11 @@ void ValidateFetchObjrefForHandle(OBJECTREF objref, ADIndex appDomainIndex)
     _ASSERTE(!pDomain->NoAccessToHandleTable());
 
 #if CHECK_APP_DOMAIN_LEAKS
-    if (g_pConfig->AppDomainLeaks())
+    if (g_pConfig->AppDomainLeaks() && objref != NULL)
     {
         if (appDomainIndex.m_dwIndex)
             objref->TryAssignAppDomain(pDomain);
-        else if (objref != 0)
+        else
             objref->TrySetAppDomainAgile();
     }
 #endif
@@ -421,11 +420,11 @@ void ValidateAssignObjrefForHandle(OBJECTREF objref, ADIndex appDomainIndex)
     _ASSERTE(!pDomain->NoAccessToHandleTable());
 
 #if CHECK_APP_DOMAIN_LEAKS
-    if (g_pConfig->AppDomainLeaks())
+    if (g_pConfig->AppDomainLeaks() && objref != NULL)
     {
         if (appDomainIndex.m_dwIndex)
             objref->TryAssignAppDomain(pDomain);
-        else if (objref != 0)
+        else
             objref->TrySetAppDomainAgile();
     }
 #endif
@@ -688,7 +687,7 @@ uintptr_t HndCompareExchangeHandleExtraInfo(OBJECTHANDLE handle, uint32_t uType,
     if (pUserData)
     {
         // yes - attempt to store the info
-        return (uintptr_t)FastInterlockCompareExchangePointer((void**)pUserData, (void*)lNewExtraInfo, (void*)lOldExtraInfo);
+        return (uintptr_t)Interlocked::CompareExchangePointer((void**)pUserData, (void*)lNewExtraInfo, (void*)lOldExtraInfo);
     }
 
     _ASSERTE(!"Shouldn't be trying to call HndCompareExchangeHandleExtraInfo on handle types without extra info");
@@ -876,7 +875,7 @@ void HndWriteBarrier(OBJECTHANDLE handle, OBJECTREF objref)
  *
  */
 void HndEnumHandles(HHANDLETABLE hTable, const uint32_t *puType, uint32_t uTypeCount,
-                    HANDLESCANPROC pfnEnum, uintptr_t lParam1, uintptr_t lParam2, BOOL fAsync)
+                    HANDLESCANPROC pfnEnum, uintptr_t lParam1, uintptr_t lParam2, bool fAsync)
 {
     WRAPPER_NO_CONTRACT;
 

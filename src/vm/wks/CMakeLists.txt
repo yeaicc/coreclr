@@ -4,9 +4,21 @@ if (WIN32)
   set_source_files_properties(../mscorlib.cpp PROPERTIES COMPILE_FLAGS "/Y-") 
   # .c file cannot use cpp precompiled header 
   set_source_files_properties(../microsoft.comservices_i.c PROPERTIES COMPILE_FLAGS "/Y-") 
+
+  # asm files require preprocessing using cl.exe on arm64
+  if(CLR_CMAKE_PLATFORM_ARCH_ARM64)
+      foreach(ASM_FILE ${VM_SOURCES_WKS_ARCH_ASM})
+          get_filename_component(name ${ASM_FILE} NAME_WE)
+          set(ASM_PREPROCESSED_FILE ${CMAKE_CURRENT_BINARY_DIR}/${name}.asm)
+          preprocess_def_file(${ASM_FILE} ${ASM_PREPROCESSED_FILE})
+          set(VM_SOURCES_WKS_ARM64_PREPROCESSED_ASM ${VM_SOURCES_WKS_ARM64_PREPROCESSED_ASM} ${ASM_PREPROCESSED_FILE})
+      endforeach()
+
+      set(VM_SOURCES_WKS_ARCH_ASM ${VM_SOURCES_WKS_ARM64_PREPROCESSED_ASM})
+  endif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
 endif (WIN32)
 
-add_library(cee_wks ${VM_SOURCES_WKS} ${VM_SOURCES_WKS_ARCH_ASM})
+add_library_clr(cee_wks ${VM_SOURCES_WKS} ${VM_SOURCES_WKS_ARCH_ASM})
 
 if (WIN32)
 # Get the current list of definitions
@@ -36,7 +48,7 @@ foreach(CONFIG IN LISTS CMAKE_CONFIGURATION_TYPES)
 endforeach()
 
 if (CLR_CMAKE_PLATFORM_ARCH_I386)
-    set_source_files_properties(${VM_SOURCES_WKS_ARCH_ASM} PROPERTIES COMPILE_FLAGS "/Zm")
+    set_source_files_properties(${VM_SOURCES_WKS_ARCH_ASM} PROPERTIES COMPILE_FLAGS "/Zm /safeseh")
 endif (CLR_CMAKE_PLATFORM_ARCH_I386)
 
 # Convert AsmConstants.h into AsmConstants.inc

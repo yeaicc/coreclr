@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #ifndef _SIMD_H_
@@ -26,7 +25,7 @@ struct SIMDIntrinsicInfo
     const char *methodName;
     bool isInstMethod;
     var_types retType;
-    byte argCount;    
+    unsigned char argCount;    
     var_types argType[SIMD_INTRINSIC_MAX_MODELED_PARAM_COUNT];
     var_types supportedBaseTypes[SIMD_INTRINSIC_MAX_BASETYPE_COUNT];
 };

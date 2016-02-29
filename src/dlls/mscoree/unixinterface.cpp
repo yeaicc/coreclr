@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 //*****************************************************************************
@@ -107,7 +106,8 @@ static void ExtractStartupFlagsAndConvertToUnicode(
     STARTUP_FLAGS startupFlags =
         static_cast<STARTUP_FLAGS>(
             STARTUP_FLAGS::STARTUP_LOADER_OPTIMIZATION_SINGLE_DOMAIN |
-            STARTUP_FLAGS::STARTUP_SINGLE_APPDOMAIN);
+            STARTUP_FLAGS::STARTUP_SINGLE_APPDOMAIN |
+            STARTUP_FLAGS::STARTUP_CONCURRENT_GC);
     int propertyCountW = 0;
     for (int propertyIndex = 0; propertyIndex < propertyCount; ++propertyIndex)
     {
@@ -279,13 +279,15 @@ int coreclr_shutdown(
             unsigned int domainId)
 {
     ReleaseHolder<ICLRRuntimeHost2> host(reinterpret_cast<ICLRRuntimeHost2*>(hostHandle));
-    HRESULT hr = host->UnloadAppDomain(domainId,
-                                       true); // Wait until done
+
+    HRESULT hr = host->UnloadAppDomain(domainId, true); // Wait until done
     IfFailRet(hr);
 
     hr = host->Stop();
 
-    // The PAL_Terminate is not called here since it would terminate the current process.
+#ifdef FEATURE_PAL
+    PAL_Shutdown();
+#endif
 
     return hr;
 }

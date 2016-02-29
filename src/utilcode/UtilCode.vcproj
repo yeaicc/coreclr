@@ -600,6 +600,14 @@
 			RelativePath=".\winfix.cpp"
 			>
 		</File>
+		<File
+			RelativePath=".\longfilepathwrappers.cpp"
+			>
+		</File>
+		<File
+			RelativePath=".\jithost.cpp"
+			>
+		</File>
 	</Files>
 	<Globals>
 	</Globals>

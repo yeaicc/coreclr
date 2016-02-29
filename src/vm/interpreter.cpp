@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 #include "common.h"
@@ -2239,7 +2238,7 @@ EvalLoop:
             break;
 
         case CEE_JMP:
-            *pJmpCallToken = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+            *pJmpCallToken = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
             *pDoJmpCall = true;
             goto ExitEvalLoop;
 
@@ -7287,7 +7286,7 @@ void Interpreter::LdFld(FieldDesc* fldIn)
         }
         if (fld == NULL)
         {
-            unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+            unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
             fld = FindField(tok  InterpTracingArg(RTK_LdFld));
             assert(fld != NULL);
 
@@ -7508,7 +7507,7 @@ void Interpreter::LdFldA()
         MODE_COOPERATIVE;
     } CONTRACTL_END;
 
-    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
 
 #if INTERP_TRACING
     InterlockedIncrement(&s_tokenResolutionOpportunities[RTK_LdFldA]);
@@ -7572,7 +7571,7 @@ void Interpreter::StFld()
         if (s_InterpreterUseCaching) fld = GetCachedInstanceField(ilOffset);
         if (fld == NULL)
         {
-            unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+            unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
             GCX_PREEMP();
             fld = FindField(tok  InterpTracingArg(RTK_StFld));
             assert(fld != NULL);
@@ -7724,7 +7723,7 @@ bool Interpreter::StaticFldAddrWork(CORINFO_ACCESS_FLAGS accessFlgs, /*out (byre
     bool isCacheable = true;
     *pManagedMem = true;  // Default result.
 
-    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
     m_ILCodePtr += 5;  // Above is last use of m_ILCodePtr in this method, so update now.
 
     FieldDesc* fld;
@@ -9019,7 +9018,7 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
 #if INTERP_TRACING
     InterlockedIncrement(&s_totalInterpCalls);
 #endif // INTERP_TRACING
-    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
 
     // It's possible for an IL method to push a capital-F Frame.  If so, we pop it and save it;
     // we'll push it back on after our GCPROTECT frame is popped.
@@ -9597,7 +9596,7 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
     // (I could probably optimize this pop all the arguments first, then allocate space for the return value
     // on the large structure operand stack, and pass a pointer directly to that space, avoiding the extra
     // copy we have below.  But this seemed more expedient, and this should be a pretty rare case.)
-    byte* pLargeStructRetVal = NULL;
+    BYTE* pLargeStructRetVal = NULL;
 
     // If there's a "GetFlag<Flag_hasRetBuffArg>()" struct return value, it will be stored in this variable if it fits,
     // otherwise, we'll dynamically allocate memory for it.
@@ -9648,7 +9647,7 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
 #ifdef ENREGISTERED_RETURNTYPE_MAXSIZE
                 retBuffSize = max(retTypeSz, ENREGISTERED_RETURNTYPE_MAXSIZE);
 #endif // ENREGISTERED_RETURNTYPE_MAXSIZE
-                pLargeStructRetVal = (byte*)_alloca(retBuffSize);
+                pLargeStructRetVal = (BYTE*)_alloca(retBuffSize);
                 // Clear this in case a GC happens.
                 for (unsigned i = 0; i < retTypeSz; i++) pLargeStructRetVal[i] = 0;
                 // Register this as location needing GC.
@@ -10075,7 +10074,7 @@ void Interpreter::CallI()
     InterlockedIncrement(&s_totalInterpCalls);
 #endif // INTERP_TRACING
 
-    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(byte));
+    unsigned tok = getU4LittleEndian(m_ILCodePtr + sizeof(BYTE));
 
     CORINFO_SIG_INFO sigInfo;
 
@@ -10171,7 +10170,7 @@ void Interpreter::CallI()
     // (I could probably optimize this pop all the arguments first, then allocate space for the return value
     // on the large structure operand stack, and pass a pointer directly to that space, avoiding the extra
     // copy we have below.  But this seemed more expedient, and this should be a pretty rare case.)
-    byte* pLargeStructRetVal = NULL;
+    BYTE* pLargeStructRetVal = NULL;
 
     // If there's a "GetFlag<Flag_hasRetBuffArg>()" struct return value, it will be stored in this variable if it fits,
     // otherwise, we'll dynamically allocate memory for it.
@@ -10207,7 +10206,7 @@ void Interpreter::CallI()
 #ifdef ENREGISTERED_RETURNTYPE_MAXSIZE
                 retBuffSize = max(retTypeSz, ENREGISTERED_RETURNTYPE_MAXSIZE);
 #endif // ENREGISTERED_RETURNTYPE_MAXSIZE
-                pLargeStructRetVal = (byte*)_alloca(retBuffSize);
+                pLargeStructRetVal = (BYTE*)_alloca(retBuffSize);
 
                 // Clear this in case a GC happens.
                 for (unsigned i = 0; i < retTypeSz; i++)
@@ -11817,7 +11816,7 @@ void Interpreter::PrintValue(InterpreterType it, BYTE* valAddr)
                 {
                     fprintf(GetLogFile(), " ");
                 }
-                fprintf(GetLogFile(), "0x%p", valAddr[i]);
+                fprintf(GetLogFile(), "0x%02x", valAddr[i]);
             }
             fprintf(GetLogFile(), "]");
         }

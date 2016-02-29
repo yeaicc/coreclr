@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #if defined(_TARGET_ARM64_)
@@ -100,15 +99,18 @@ private:
     bool                    emitInsIsLoad   (instruction ins);
     bool                    emitInsIsStore  (instruction ins);
     bool                    emitInsIsLoadOrStore(instruction ins);
+    emitAttr                emitInsAdjustLoadStoreAttr(instruction ins, emitAttr attr);
     emitAttr                emitInsTargetRegSize(instrDesc *id);
     emitAttr                emitInsLoadStoreSize(instrDesc *id);
 
     emitter::insFormat      emitInsFormat(instruction ins);
-
     emitter::code_t         emitInsCode(instruction ins, insFormat fmt);
 
-    static unsigned         emitOutput_Instr(BYTE *dst, code_t code);
+    // Generate code for a load or store operation and handle the case of contained GT_LEA op1 with [base + index<<scale + offset]
+    void                    emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir);
 
+    //  Emit the 32-bit Arm64 instruction 'code' into the 'dst'  buffer
+    static unsigned         emitOutput_Instr(BYTE *dst, code_t code);
 
     // A helper method to return the natural scale for an EA 'size'
     static unsigned NaturalScale_helper(emitAttr size);
@@ -451,6 +453,9 @@ public:
     // true if this 'imm' can be encoded as a input operand to an alu instruction 
     static bool              emitIns_valid_imm_for_alu(INT64 imm, emitAttr size);
 
+    // true if this 'imm' can be encoded as the offset in a ldr/str instruction 
+    static bool              emitIns_valid_imm_for_ldst_offset(INT64 imm, emitAttr size);
+
     // true if 'imm' can use the left shifted by 12 bits encoding
     static bool              canEncodeWithShiftImmBy12(INT64 imm);
 
@@ -659,6 +664,13 @@ public:
                                     regNumber   reg2,
                                     ssize_t     imm,
                                     insOpts     opt   = INS_OPTS_NONE);
+
+    // Checks for a large immediate that needs a second instruction 
+    void            emitIns_R_R_Imm(instruction ins,
+                                    emitAttr    attr,
+                                    regNumber   reg1,
+                                    regNumber   reg2,
+                                    ssize_t     imm);
 
     void            emitIns_R_R_R  (instruction ins,
                                     emitAttr    attr,

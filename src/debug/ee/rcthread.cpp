@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 // File: RCThread.cpp
 // 
@@ -882,7 +881,7 @@ void AssertAllocationAllowed()
 
         // Can't call IsDbgHelperSpecialThread() here b/c that changes program state.
         // So we use our
-        if (DebuggerRCThread::s_DbgHelperThreadId.IsSameThread())
+        if (DebuggerRCThread::s_DbgHelperThreadId.IsCurrentThread())
         {
             // In case assert allocates, bump up the 'OK' counter to avoid an infinite recursion.
             SUPPRESS_ALLOCATION_ASSERTS_IN_THIS_SCOPE;
@@ -935,7 +934,7 @@ void DebuggerRCThread::ThreadProc(void)
 
 #ifdef _DEBUG
     // Track the helper thread.
-    s_DbgHelperThreadId.SetThreadId();
+    s_DbgHelperThreadId.SetToCurrentThread();
 #endif
     CantAllocHolder caHolder;
 

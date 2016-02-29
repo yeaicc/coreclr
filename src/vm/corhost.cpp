@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 // CorHost.cpp
 //
@@ -2472,10 +2471,9 @@ HRESULT CorHost2::ExecuteMain(
         AppDomain *pDomain = GetAppDomain();
         _ASSERTE(pDomain);
 
-        WCHAR wzExeFileName[_MAX_PATH];
-        DWORD cchExeFileName = _MAX_PATH;
-        cchExeFileName = WszGetModuleFileName(nullptr, wzExeFileName, cchExeFileName);
-        if (cchExeFileName == _MAX_PATH)
+        PathString wzExeFileName;
+         
+        if (WszGetModuleFileName(nullptr, wzExeFileName) == 0)
             IfFailThrow(E_UNEXPECTED);
 
         LPWSTR wzExeSimpleFileName = nullptr;
@@ -2555,7 +2553,7 @@ VOID CorHost2::ExecuteMainInner(Assembly* pRootAssembly)
 		// since this is the thread 0 entry point for AppX apps we use
 		// the EntryPointFilter so that an unhandled exception here will
 		// trigger the same behavior as in classic apps.
-        pParam->pRootAssembly->ExecuteMainMethod(NULL, FALSE /* waitForOtherThreads */);
+        pParam->pRootAssembly->ExecuteMainMethod(NULL, TRUE /* waitForOtherThreads */);
     }
     PAL_EXCEPT_FILTER(EntryPointFilter)
     {
@@ -3110,7 +3108,7 @@ STDMETHODIMP CorHost2::UnloadAppDomain(DWORD dwDomainId, BOOL fWaitUntilDone)
             else
             {
                 _ASSERTE(!"Not reachable");
-                hr = FALSE;
+                hr = S_FALSE;
             }
         }
         END_ENTRYPOINT_NOTHROW;
@@ -6724,7 +6722,7 @@ HRESULT CCLRErrorReportingManager::EndCustomDump()
 }
 
 #ifdef FEATURE_WINDOWSPHONE
-HRESULT CopyStringWorker(WCHAR** pTarget, WCHAR const* pSource)
+HRESULT CopyStringWorker(_Out_ WCHAR** pTarget, WCHAR const* pSource)
 {
     LIMITED_METHOD_CONTRACT;
 
@@ -6813,7 +6811,7 @@ HRESULT CCLRErrorReportingManager::BucketParamsCache::SetAt(BucketParameterIndex
     return CopyStringWorker(&m_pParams[index], val);
 }
 
-HRESULT CCLRErrorReportingManager::CopyToDataCache(WCHAR** pTarget, WCHAR const* pSource)
+HRESULT CCLRErrorReportingManager::CopyToDataCache(_Out_ WCHAR** pTarget, WCHAR const* pSource)
 {
     LIMITED_METHOD_CONTRACT;
 

@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*============================================================
 **
@@ -730,7 +729,7 @@ FCIMPLEND
 #if defined(FEATURE_HOST_ASSEMBLY_RESOLVER)
 
 /* static */
-Assembly* AssemblyNative::LoadFromPEImage(CLRPrivBinderAssemblyLoadContext* pBinderContext, PEImage *pILImage, PEImage *pNIImage)
+Assembly* AssemblyNative::LoadFromPEImage(ICLRPrivBinder* pBinderContext, PEImage *pILImage, PEImage *pNIImage)
 {
     CONTRACT(Assembly*)
     {
@@ -779,7 +778,21 @@ Assembly* AssemblyNative::LoadFromPEImage(CLRPrivBinderAssemblyLoadContext* pBin
     spec.InitializeSpec(TokenFromRid(1, mdtAssembly), pImage->GetMDImport(), pCallersAssembly);
     spec.SetBindingContext(pBinderContext);
     
-    HRESULT hr = pBinderContext->BindUsingPEImage(pImage, fIsNativeImage, &pAssembly);
+    HRESULT hr = S_OK;
+    PTR_AppDomain pCurDomain = GetAppDomain();
+    CLRPrivBinderCoreCLR *pTPABinder = pCurDomain->GetTPABinderContext();
+    if (!AreSameBinderInstance(pTPABinder, pBinderContext))
+    {
+        // We are working with custom Assembly Load Context so bind the assembly using it.
+        CLRPrivBinderAssemblyLoadContext *pBinder = reinterpret_cast<CLRPrivBinderAssemblyLoadContext *>(pBinderContext);
+        hr = pBinder->BindUsingPEImage(pImage, fIsNativeImage, &pAssembly);
+    }
+    else
+    {
+        // Bind the assembly using TPA binder
+        hr = pTPABinder->BindUsingPEImage(pImage, fIsNativeImage, &pAssembly);
+    }
+
     if (hr != S_OK)
     {
         // Give a more specific message for the case when we found the assembly with the same name already loaded.
@@ -797,7 +810,6 @@ Assembly* AssemblyNative::LoadFromPEImage(CLRPrivBinderAssemblyLoadContext* pBin
     
     GCX_COOP();
     
-    PTR_AppDomain pCurDomain = GetAppDomain();
     IApplicationSecurityDescriptor *pDomainSecDesc = pCurDomain->GetSecurityDescriptor();
     
     OBJECTREF refGrantedPermissionSet = NULL;
@@ -830,7 +842,7 @@ void QCALLTYPE AssemblyNative::LoadFromPath(INT_PTR ptrNativeAssemblyLoadContext
     PTR_AppDomain pCurDomain = GetAppDomain();
 
     // Get the binder context in which the assembly will be loaded.
-    CLRPrivBinderAssemblyLoadContext *pBinderContext = reinterpret_cast<CLRPrivBinderAssemblyLoadContext*>(ptrNativeAssemblyLoadContext);
+    ICLRPrivBinder *pBinderContext = reinterpret_cast<ICLRPrivBinder*>(ptrNativeAssemblyLoadContext);
     _ASSERTE(pBinderContext != NULL);
         
     // Form the PEImage for the ILAssembly. Incase of an exception, the holders will ensure
@@ -922,7 +934,7 @@ void QCALLTYPE AssemblyNative::LoadFromStream(INT_PTR ptrNativeAssemblyLoadConte
         ThrowHR(COR_E_BADIMAGEFORMAT, BFA_BAD_IL);
     
     // Get the binder context in which the assembly will be loaded
-    CLRPrivBinderAssemblyLoadContext *pBinderContext = reinterpret_cast<CLRPrivBinderAssemblyLoadContext*>(ptrNativeAssemblyLoadContext);
+    ICLRPrivBinder *pBinderContext = reinterpret_cast<ICLRPrivBinder*>(ptrNativeAssemblyLoadContext);
     
     // Pass the stream based assembly as IL and NI in an attempt to bind and load it
     Assembly* pLoadedAssembly = AssemblyNative::LoadFromPEImage(pBinderContext, pILImage, NULL); 
@@ -2352,8 +2364,8 @@ void QCALLTYPE AssemblyNative::CreateVersionInfoResource(LPCWSTR    pwzFilename,
     const void  *pvData=0;              // Pointer to the resource.
     ULONG       cbData;                 // Size of the resource data.
     ULONG       cbWritten;
-    WCHAR       szFile[MAX_PATH_FNAME+1];     // File name for resource file.
-    WCHAR       szPath[MAX_LONGPATH+1];     // Path name for resource file.
+    PathString       szFile;     // File name for resource file.
+    PathString       szPath;     // Path name for resource file.
     HandleHolder hFile;
 
     res.SetInfo(pwzFilename, 
@@ -2375,9 +2387,9 @@ void QCALLTYPE AssemblyNative::CreateVersionInfoResource(LPCWSTR    pwzFilename,
     // messages including the path/file name</TODO>
 
     // Persist to a file.
-    if (!WszGetTempPath(MAX_LONGPATH, szPath))
+    if (!WszGetTempPath(szPath))
         COMPlusThrowWin32();
-    if (!WszGetTempFileName(szPath, W("RES"), 0, szFile))
+    if (!WszGetTempFileName(szPath.GetUnicode(), W("RES"), 0, szFile))
         COMPlusThrowWin32();
 
     hFile = WszCreateFile(szFile, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
@@ -2494,7 +2506,7 @@ BOOL QCALLTYPE AssemblyNative::IsDesignerBindingContext(QCall::AssemblyHandle pA
 
 #if defined(FEATURE_HOST_ASSEMBLY_RESOLVER)
 /*static*/
-INT_PTR QCALLTYPE AssemblyNative::InitializeAssemblyLoadContext(INT_PTR ptrManagedAssemblyLoadContext)
+INT_PTR QCALLTYPE AssemblyNative::InitializeAssemblyLoadContext(INT_PTR ptrManagedAssemblyLoadContext, BOOL fRepresentsTPALoadContext)
 {
     QCALL_CONTRACT;
 
@@ -2505,17 +2517,32 @@ INT_PTR QCALLTYPE AssemblyNative::InitializeAssemblyLoadContext(INT_PTR ptrManag
     // We do not need to take a lock since this method is invoked from the ctor of AssemblyLoadContext managed type and
     // only one thread is ever executing a ctor for a given instance.
     //
-    // Initialize a binder
-    CLRPrivBinderAssemblyLoadContext *pBindContext = NULL;
-
+    
     // Initialize the assembly binder instance in the VM
     PTR_AppDomain pCurDomain = AppDomain::GetCurrentDomain();
     CLRPrivBinderCoreCLR *pTPABinderContext = pCurDomain->GetTPABinderContext();
-    IfFailThrow(CLRPrivBinderAssemblyLoadContext::SetupContext(pCurDomain->GetId().m_dwId, pTPABinderContext, ptrManagedAssemblyLoadContext, &pBindContext));
-    _ASSERTE(pBindContext != NULL);
-    
-    ptrNativeAssemblyLoadContext = reinterpret_cast<INT_PTR>(pBindContext);
-    
+    if (!fRepresentsTPALoadContext)
+    {
+        // Initialize a custom Assembly Load Context
+        CLRPrivBinderAssemblyLoadContext *pBindContext = NULL;
+        IfFailThrow(CLRPrivBinderAssemblyLoadContext::SetupContext(pCurDomain->GetId().m_dwId, pTPABinderContext, ptrManagedAssemblyLoadContext, &pBindContext));
+        ptrNativeAssemblyLoadContext = reinterpret_cast<INT_PTR>(pBindContext);
+    }
+    else
+    {
+        // We are initializing the managed instance of Assembly Load Context that would represent the TPA binder.
+        // First, confirm we do not have an existing managed ALC attached to the TPA binder.
+        INT_PTR ptrTPAAssemblyLoadContext = pTPABinderContext->GetManagedAssemblyLoadContext();
+        if ((ptrTPAAssemblyLoadContext != NULL) && (ptrTPAAssemblyLoadContext != ptrManagedAssemblyLoadContext))
+        {
+            COMPlusThrow(kInvalidOperationException, IDS_HOST_ASSEMBLY_RESOLVER_INCOMPATIBLE_TPA_BINDING_CONTEXT);
+        }
+
+        // Attach the managed TPA binding context with the native one.
+        pTPABinderContext->SetManagedAssemblyLoadContext(ptrManagedAssemblyLoadContext);
+        ptrNativeAssemblyLoadContext = reinterpret_cast<INT_PTR>(pTPABinderContext);
+    }
+   
     END_QCALL;
     
     return ptrNativeAssemblyLoadContext;

@@ -64,7 +64,9 @@
     <ProjectFile Include="resview\resview.csproj" />
     <ProjectFile Include="runsxs\runsxs.nativeproj" />
     <ProjectFile Include="soapsuds\dirs.proj" />
-    <ProjectFile Include="sos\dirs.proj" />
+    <ProjectFile Include="sos\dirs.proj" >
+        <ProductGroups>FX;PK</ProductGroups>
+    </ProjectFile>
     <ProjectFile Include="storeadm\storeadm.csproj" />
     <ProjectFile Include="tlbexp\tlbexp_msbuild.csproj" />
     <ProjectFile Include="tlbguid\tlbguid.csproj" />
@@ -77,6 +79,9 @@
     <ProjectFile Include="winmdexp\dirs.proj" />
     <ProjectFile Include="winverify\dirs.proj" />
     <ProjectFile Include="wpf\wpf.proj" Condition="'$(BuildArchitecture)' == 'i386' or '$(BuildArchitecture)' == 'amd64'" />
+    <ProjectFile Include="PdbTypeMatch\PdbTypeMatch.nativeproj" Condition="'$(BuildArchitecture)' == 'i386' and '$(_BuildType)' == 'ret'" >
+        <ProductGroups>PK</ProductGroups>
+    </ProjectFile>
   </ItemGroup>
   
   <!--The following projects will build during PHASE 1 of the CoreCLR build-->

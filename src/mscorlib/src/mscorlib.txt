@@ -1,16 +1,16 @@
-﻿;==++==
-;
-;   Copyright (c) Microsoft Corporation.  All rights reserved.
-;
-;==--==
-;
+﻿; Licensed to the .NET Foundation under one or more agreements.
+; The .NET Foundation licenses this file to you under the MIT license.
+; See the LICENSE file in the project root for more information.
+
 ; These are the managed resources for mscorlib.dll.
 ; See those first three bytes in the file?  This is in UTF-8.  Leave the
 ; Unicode byte order mark (U+FEFF) written in UTF-8 at the start of this file.
 
 ; For resource info, see the ResourceManager documentation and the ResGen tool,
 ; which is a managed app using ResourceWriter.
-; ResGen now supports C++ & C# style #ifdef's, like #ifndef FOO and #if BAR
+; ResGen now supports limited preprocessing of txt files, you can use
+; #if SYMBOL and #if !SYMBOL to control what sets of resources are included in
+; the resulting resources.
 
 ; The naming scheme is: [Namespace.] ExceptionName _ Reason
 ; We'll suppress "System." where possible.
@@ -121,6 +121,9 @@ Access_Void = Cannot create an instance of void.
 Arg_TypedReference_Null = The TypedReference must be initialized.
 Argument_AddingDuplicate__ = Item has already been added. Key in dictionary: '{0}'  Key being added: '{1}'
 Argument_AddingDuplicate = An item with the same key has already been added.
+#if FEATURE_CORECLR
+Argument_AddingDuplicateWithKey = An item with the same key has already been added. Key: {0}
+#endif // FEATURE_CORECLR
 Argument_MethodDeclaringTypeGenericLcg = Method '{0}' has a generic declaring type '{1}'. Explicitly provide the declaring type to GetTokenFor. 
 Argument_MethodDeclaringTypeGeneric = Cannot resolve method {0} because the declaring type of the method handle {1} is generic. Explicitly provide the declaring type to GetMethodFromHandle. 
 Argument_FieldDeclaringTypeGeneric = Cannot resolve field {0} because the declaring type of the field handle {1} is generic. Explicitly provide the declaring type to GetFieldFromHandle.
@@ -2085,7 +2088,10 @@ Parallel_ForEach_PartitionerNotDynamic=The Partitioner used here must support dy
 Parallel_ForEach_PartitionerReturnedNull=The Partitioner used here returned a null partitioner source.
 Parallel_ForEach_NullEnumerator=The Partitioner source returned a null enumerator.
 
-; SemaphyoreFullException
+; Semaphore
+Argument_SemaphoreInitialMaximum=The initial count for the semaphore must be greater than or equal to zero and less than the maximum count.
+
+; SemaphoreFullException
 Threading_SemaphoreFullException=Adding the specified count to the semaphore would cause it to exceed its maximum count.
 
 ; Lazy

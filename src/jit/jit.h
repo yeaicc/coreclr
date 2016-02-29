@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*****************************************************************************/
 #ifndef _JIT_H_
@@ -391,7 +390,7 @@ typedef ptrdiff_t   ssize_t;
 #define INLINE_NDIRECT      INLINE_PINVOKE // ndirect is an archaic name for pinvoke
 #define LONG_MATH_REGPARAM  0       // args to long mul/div passed in registers
 #define STACK_PROBES        0       // Support for stack probes
-#define XML_FLOWGRAPHS      DEBUG   // Support for creating Xml Flowgraph reports in *.fgx files
+#define DUMP_FLOWGRAPHS     DEBUG   // Support for creating Xml Flowgraph reports in *.fgx files
 
 #define HANDLER_ENTRY_MUST_BE_IN_HOT_SECTION     1       // if 1 we must have all handler entry points in the Hot code section
 
@@ -461,19 +460,21 @@ const   bool        dspGCtbls = true;
 
 #ifdef DEBUG
 void JitDump(const char* pcFormat, ...);
-#define DISPNODE(t) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(t, nullptr, nullptr, true);
-
-#define JITDUMP(...) JitDump(__VA_ARGS__)
+#define JITDUMP(...) { if (GetTlsCompiler()->verbose) JitDump(__VA_ARGS__); }
 #define JITLOG(x) { JitLogEE x; }
 #define JITLOG_THIS(t, x) { (t)->JitLogEE x; }
 #define DBEXEC(flg, expr) if (flg) {expr;}
+#define DISPNODE(t) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(t, nullptr, nullptr, true);
+#define DISPTREE(x) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(x)
+#define VERBOSE GetTlsCompiler()->verbose
 #else // !DEBUG
 #define JITDUMP(...)
 #define JITLOG(x)
 #define JITLOG_THIS(t, x)
+#define DBEXEC(flg, expr)
+#define DISPNODE(t)
 #define DISPTREE(x)
 #define VERBOSE 0
-#define DBEXEC(flg, expr)
 #endif // !DEBUG
 
 /*****************************************************************************
@@ -710,18 +711,6 @@ private:
 #define FEATURE_TAILCALL_OPT_SHARED_RETURN 0
 #endif // !FEATURE_TAILCALL_OPT
 
-/*****************************************************************************/
-
-#ifndef INLINE_MATH
-#if     CPU_HAS_FP_SUPPORT
-#define INLINE_MATH         1       //  enable inline math intrinsics
-#else
-#define INLINE_MATH         0       // disable inline math intrinsics
-#endif
-#endif
-
-/*****************************************************************************/
-
 #define CLFLG_CODESIZE        0x00001
 #define CLFLG_CODESPEED       0x00002
 #define CLFLG_CSE             0x00004
@@ -785,7 +774,7 @@ extern  int                     jitNativeCode(CORINFO_METHOD_HANDLE methodHnd,
                                               CORINFO_METHOD_INFO * methodInfo,
                                               void *          * methodCodePtr,
                                               ULONG           * methodCodeSize,
-                                              unsigned          compileFlags,
+                                              CORJIT_FLAGS    * compileFlags,
                                               void *            inlineInfoPtr
                                               );
 
@@ -817,7 +806,6 @@ void SetTlsCompiler(Compiler* c);
 
 #include "compiler.h"
 
-void JitDump(const char* pcFormat, ...);
 template<typename T>
 T dspPtr(T p)
 {
@@ -830,10 +818,8 @@ T dspOffset(T o)
     return (o == 0) ? 0 : (GetTlsCompiler()->opts.dspDiffable ? T(0xD1FFAB1E) : o);
 }
 
-#define DISPNODE(t) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(t, nullptr, nullptr, true);
-#define DISPTREE(x) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(x)
-#define VERBOSE GetTlsCompiler()->verbose
-#else // defined(DEBUG)
+#else // !defined(DEBUG)
+
 template<typename T>
 T dspPtr(T p)
 {
@@ -845,8 +831,8 @@ T dspOffset(T o)
 {
     return o;
 }
-#define DISPNODE(t)
-#endif // defined(DEBUG)
+
+#endif // !defined(DEBUG)
 
 /*****************************************************************************/
 #endif //_JIT_H_

@@ -1,20 +1,9 @@
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-
-if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
-    include_directories(BEFORE "../vm/amd64")
-elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
-  include_directories(BEFORE "../vm/i386")
-elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
-    include_directories(BEFORE "../vm/arm")
-elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
-    include_directories(BEFORE "../vm/arm64")
-else()
-    clr_unknown_arch()
-endif()
+include_directories(BEFORE "../vm/${ARCH_SOURCES_DIR}")
 include_directories(BEFORE "../vm")
 include_directories(BEFORE "inc")
       
-set(BINDER_SOURCES
+set(BINDER_COMMON_SOURCES
     variables.cpp
     utils.cpp
     assemblyname.cpp
@@ -32,13 +21,22 @@ set(BINDER_SOURCES
     compatibility.cpp
     textualidentityparser.cpp
     assemblyidentitycache.cpp
-    clrprivbinderassemblyloadcontext.cpp
     coreclrbindercommon.cpp
     fusionassemblyname.cpp
     fusionhelpers.cpp
 )
 
+set(BINDER_SOURCES
+    ${BINDER_COMMON_SOURCES}
+    clrprivbinderassemblyloadcontext.cpp
+)
+
+set(BINDER_CROSSGEN_SOURCES
+    ${BINDER_COMMON_SOURCES}
+)
+
 convert_to_absolute_path(BINDER_SOURCES ${BINDER_SOURCES})
+convert_to_absolute_path(BINDER_CROSSGEN_SOURCES ${BINDER_CROSSGEN_SOURCES})
 
 if(CLR_CMAKE_PLATFORM_UNIX)
     add_compile_options(-fPIC)
@@ -46,4 +44,3 @@ endif(CLR_CMAKE_PLATFORM_UNIX)
 
 add_subdirectory(v3binder)
 add_subdirectory(v3binder_crossgen)
-

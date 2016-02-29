@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // Disassembler
@@ -915,7 +914,7 @@ BOOL Disassemble(IMDInternalImport *pImport, BYTE *ILHeader, void *GUICookie, md
     LineCodeDescr* pLCD = NULL;
     ParamDescriptor* pszLVname = NULL;
     ULONG ulVars=0;
-    char szVarPrefix[64];
+    char szVarPrefix[MAX_PREFIX_SIZE];
     // scope handling:
     DynamicArray<LexScope>          daScope;
     ULONG                           ulScopes=0;
@@ -928,7 +927,7 @@ BOOL Disassemble(IMDInternalImport *pImport, BYTE *ILHeader, void *GUICookie, md
     ULONG32                         ulMethodCol[2];
     BOOL                            fHasRangeInfo = FALSE;
 
-    strcpy_s(szVarPrefix,64,"V0");
+    strcpy_s(szVarPrefix,MAX_PREFIX_SIZE,"V0");
     if(g_pSymReader)
     {
         g_pSymReader->GetMethod(FuncToken,&pSymMethod);
@@ -1048,11 +1047,7 @@ BOOL Disassemble(IMDInternalImport *pImport, BYTE *ILHeader, void *GUICookie, md
                 LoadScope(pRootScope,&daScope,&ulScopes);
                 qsort(&daScope[0],ulScopes,sizeof(LexScope),cmpLexScope);
                 OpenScope(pRootScope,pszLVname,ulVars);
-#ifdef _WIN64
-                sprintf_s(szVarPrefix,64,"@%I64d0",(size_t)pszLVname);
-#else
-                sprintf_s(szVarPrefix,64,"@%d0",(size_t)pszLVname);
-#endif //_WIN64
+                sprintf_s(szVarPrefix,MAX_PREFIX_SIZE,"@%Id0",(size_t)pszLVname);
 
 #ifndef SHOW_LEXICAL_SCOPES
                 for(unsigned jjj = 0; jjj < ulScopes; jjj++)
@@ -1600,7 +1595,7 @@ BOOL Disassemble(IMDInternalImport *pImport, BYTE *ILHeader, void *GUICookie, md
                 float fd = (float)atof(szf);
                 // Must compare as underlying bytes, not floating point otherwise optmizier will
                 // try to enregister and comapre 80-bit precision number with 32-bit precision number!!!!
-                if(((__int32&)fd == v)&&(strchr(szf,'#') == NULL))
+                if(((__int32&)fd == v)&&!IsSpecialNumber(szf))
                     szptr+=sprintf_s(szptr,SZSTRING_REMAINING_SIZE(szptr), "%-10s %s", pszInstrName, szf);
                 else
                     szptr+=sprintf_s(szptr,SZSTRING_REMAINING_SIZE(szptr), "%-10s (%2.2X %2.2X %2.2X %2.2X)",
@@ -1639,7 +1634,7 @@ BOOL Disassemble(IMDInternalImport *pImport, BYTE *ILHeader, void *GUICookie, md
                 double df = strtod(szf, &pch); //atof(szf);
                 // Must compare as underlying bytes, not floating point otherwise optmizier will
                 // try to enregister and comapre 80-bit precision number with 64-bit precision number!!!!
-                if(((__int64&)df == v)&&(strchr(szf,'#') == NULL))
+                if (((__int64&)df == v)&&!IsSpecialNumber(szf))
                     szptr+=sprintf_s(szptr,SZSTRING_REMAINING_SIZE(szptr), "%-10s %s", pszInstrName, szf);
                 else
                     szptr+=sprintf_s(szptr,SZSTRING_REMAINING_SIZE(szptr), "%-10s (%2.2X %2.2X %2.2X %2.2X %2.2X %2.2X %2.2X %2.2X)",
@@ -1760,7 +1755,7 @@ BOOL Disassemble(IMDInternalImport *pImport, BYTE *ILHeader, void *GUICookie, md
                 // Backwards compatible ldstr instruction.
                 if (instr == CEE_LDSTR && TypeFromToken(tk) != mdtString)
                 {
-                    WCHAR *v1 = L"";
+                    const WCHAR *v1 = W("");
 
                     if(g_fShowBytes)
                     {
@@ -2600,7 +2595,7 @@ static const char* keyword[] = {
 #undef KYWD
 };
 static bool KywdNotSorted = TRUE;
-static char* szAllowedSymbols = "#_@$.";
+static const char* szAllowedSymbols = "#_@$.";
 static char DisallowedStarting[256];
 static char DisallowedCont[256];
 
@@ -2789,3 +2784,9 @@ static BOOL ConvToLiteral(__inout __nullterminated char* retBuff, const WCHAR* s
     return ret;
 }
 
+bool IsSpecialNumber(const char* szf)
+{
+    return (strchr(szf, '#') != NULL)
+        || (strstr(szf, "nan") != NULL) || (strstr(szf, "NAN") != NULL)
+        || (strstr(szf, "inf") != NULL) || (strstr(szf, "INF") != NULL);
+}

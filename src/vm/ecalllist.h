@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // ECallList.H
 //
 // This file contains definitions of FCall entrypoints
@@ -498,10 +497,8 @@ FCFuncStart(gMetaDataImport)
     FCFuncElement("_GetName", MetaDataImport::GetName) 
     FCFuncElement("_GetUserString", MetaDataImport::GetUserString) 
     FCFuncElement("_GetScopeProps", MetaDataImport::GetScopeProps)  
-#ifndef FEATURE_CORECLR
     FCFuncElement("_GetClassLayout", MetaDataImport::GetClassLayout) 
     FCFuncElement("_GetSignatureFromToken", MetaDataImport::GetSignatureFromToken) 
-#endif // FEATURE_CORECLR
     FCFuncElement("_GetNamespace", MetaDataImport::GetNamespace) 
     FCFuncElement("_GetEventProps", MetaDataImport::GetEventProps)
     FCFuncElement("_GetFieldDefProps", MetaDataImport::GetFieldDefProps)
@@ -576,7 +573,9 @@ FCFuncStart(gRuntimeMethodHandle)
     QCFuncElement("GetCallerType", RuntimeMethodHandle::GetCallerType)
     FCFuncElement("GetLoaderAllocator", RuntimeMethodHandle::GetLoaderAllocator)
     FCFuncElement("GetSpecialSecurityFlags", ReflectionInvocation::GetSpecialSecurityFlags)
+#ifndef FEATURE_CORECLR
     FCFuncElement("PerformSecurityCheck", ReflectionInvocation::PerformSecurityCheck)
+#endif // FEATURE_CORECLR
 FCFuncEnd()
 
 FCFuncStart(gCOMDefaultBinderFuncs)
@@ -1115,8 +1114,8 @@ FCFuncStart(gAssemblyFuncs)
 #endif
     QCFuncElement("GetModules", AssemblyNative::GetModules)
     QCFuncElement("GetModule", AssemblyNative::GetModule)
-#ifndef FEATURE_CORECLR
     FCFuncElement("GetReferencedAssemblies", AssemblyNative::GetReferencedAssemblies)
+#ifndef FEATURE_CORECLR
     QCFuncElement("GetForwardedTypes", AssemblyNative::GetForwardedTypes)
 #endif  // FEATURE_CORECLR
     QCFuncElement("GetExportedTypes", AssemblyNative::GetExportedTypes)
@@ -1187,7 +1186,7 @@ FCFuncStart(gAssemblyNameFuncs)
     FCFuncElement("nGetPublicKeyToken", AssemblyNameNative::GetPublicKeyToken)
 #ifndef FEATURE_CORECLR
     FCFuncElement("EscapeCodeBase", AssemblyNameNative::EscapeCodeBase)
-#endif // !FEATURE_CORECLR
+#endif // !FEATURE_CORECLR 
     FCFuncElement("nInit", AssemblyNameNative::Init)
     FCFuncElement("ReferenceMatchesDefinitionInternal", AssemblyNameNative::ReferenceMatchesDefinition)
 FCFuncEnd()
@@ -1256,24 +1255,24 @@ FCFuncStart(gMathFuncs)
     FCIntrinsic("Round", COMDouble::Round, CORINFO_INTRINSIC_Round)
     FCIntrinsicSig("Abs", &gsig_SM_Flt_RetFlt, COMDouble::AbsFlt, CORINFO_INTRINSIC_Abs)
     FCIntrinsicSig("Abs", &gsig_SM_Dbl_RetDbl, COMDouble::AbsDbl, CORINFO_INTRINSIC_Abs)
-    FCFuncElement("Exp", COMDouble::Exp)
-    FCFuncElement("Pow", COMDouble::Pow)
+    FCIntrinsic("Exp", COMDouble::Exp, CORINFO_INTRINSIC_Exp)
+    FCIntrinsic("Pow", COMDouble::Pow, CORINFO_INTRINSIC_Pow)
 #if defined(_TARGET_X86_)
     FCUnreferenced FCFuncElement("PowHelperSimple", COMDouble::PowHelperSimple)
     FCUnreferenced FCFuncElement("PowHelper", COMDouble::PowHelper)
 #endif
-    FCFuncElement("Tan", COMDouble::Tan)
-    FCFuncElement("Floor", COMDouble::Floor)
+    FCIntrinsic("Tan", COMDouble::Tan, CORINFO_INTRINSIC_Tan)
+    FCIntrinsic("Floor", COMDouble::Floor, CORINFO_INTRINSIC_Floor)
     FCFuncElement("Log", COMDouble::Log)
-    FCFuncElement("Sinh", COMDouble::Sinh)
-    FCFuncElement("Cosh", COMDouble::Cosh)
-    FCFuncElement("Tanh", COMDouble::Tanh)
-    FCFuncElement("Acos", COMDouble::Acos)
-    FCFuncElement("Asin", COMDouble::Asin)
-    FCFuncElement("Atan", COMDouble::Atan)
-    FCFuncElement("Atan2", COMDouble::Atan2)
-    FCFuncElement("Log10", COMDouble::Log10)
-    FCFuncElement("Ceiling", COMDouble::Ceil)
+    FCIntrinsic("Sinh", COMDouble::Sinh, CORINFO_INTRINSIC_Sinh)
+    FCIntrinsic("Cosh", COMDouble::Cosh, CORINFO_INTRINSIC_Cosh)
+    FCIntrinsic("Tanh", COMDouble::Tanh, CORINFO_INTRINSIC_Tanh)
+    FCIntrinsic("Acos", COMDouble::Acos, CORINFO_INTRINSIC_Acos)
+    FCIntrinsic("Asin", COMDouble::Asin, CORINFO_INTRINSIC_Asin)
+    FCIntrinsic("Atan", COMDouble::Atan, CORINFO_INTRINSIC_Atan)
+    FCIntrinsic("Atan2", COMDouble::Atan2, CORINFO_INTRINSIC_Atan2)
+    FCIntrinsic("Log10", COMDouble::Log10, CORINFO_INTRINSIC_Log10)
+    FCIntrinsic("Ceiling", COMDouble::Ceil, CORINFO_INTRINSIC_Ceiling)
     FCFuncElement("SplitFractionDouble", COMDouble::ModFDouble)
 FCFuncEnd()
 
@@ -1323,7 +1322,9 @@ FCFuncStart(gThreadFuncs)
     FCFuncElement("BeginThreadAffinity", ThreadNative::BeginThreadAffinity)
     FCFuncElement("EndThreadAffinity", ThreadNative::EndThreadAffinity)
 #endif // FEATURE_CORECLR
+#ifdef FEATURE_LEGACYSURFACE
     FCFuncElement("AbortInternal", ThreadNative::Abort)
+#endif // FEATURE_LEGACYSURFACE
 #ifndef FEATURE_CORECLR
     FCFuncElement("ResetAbortNative", ThreadNative::ResetAbort)
 #endif // FEATURE_CORECLR
@@ -1871,9 +1872,9 @@ FCFuncStart(gCompilerFuncs)
     FCFuncElement("ExecuteCodeWithGuaranteedCleanup", ReflectionInvocation::ExecuteCodeWithGuaranteedCleanup)
     FCFuncElement("GetHashCode", ObjectNative::GetHashCode)
     FCFuncElement("Equals", ObjectNative::Equals)
-	FCFuncElement("EnsureSufficientExecutionStack", ReflectionInvocation::EnsureSufficientExecutionStack)
+    FCFuncElement("EnsureSufficientExecutionStack", ReflectionInvocation::EnsureSufficientExecutionStack)
 #ifdef FEATURE_CORECLR
-	FCFuncElement("TryEnsureSufficientExecutionStack", ReflectionInvocation::TryEnsureSufficientExecutionStack)
+    FCFuncElement("TryEnsureSufficientExecutionStack", ReflectionInvocation::TryEnsureSufficientExecutionStack)
 #endif // FEATURE_CORECLR
 FCFuncEnd()
 
@@ -2017,7 +2018,7 @@ FCFuncStart(gStubHelperFuncs)
     FCFuncElement("MarshalToManagedVaListInternal", StubHelpers::MarshalToManagedVaListInternal)
     FCFuncElement("CalcVaListSize", StubHelpers::CalcVaListSize)
     FCFuncElement("ValidateObject", StubHelpers::ValidateObject)
-	FCFuncElement("ValidateByref", StubHelpers::ValidateByref)
+    FCFuncElement("ValidateByref", StubHelpers::ValidateByref)
     FCFuncElement("LogPinnedArgument", StubHelpers::LogPinnedArgument)
     FCIntrinsic("GetStubContext", StubHelpers::GetStubContext, CORINFO_INTRINSIC_StubHelpers_GetStubContext)
 #ifdef _WIN64
@@ -2065,6 +2066,11 @@ FCFuncEnd()
 
 FCFuncStart(gVersioningHelperFuncs)
     FCFuncElement("GetRuntimeId", GetRuntimeId_Wrapper)
+FCFuncEnd()
+
+FCFuncStart(gStreamFuncs)
+    FCFuncElement("HasOverriddenBeginEndRead", StreamNative::HasOverriddenBeginEndRead)
+    FCFuncElement("HasOverriddenBeginEndWrite", StreamNative::HasOverriddenBeginEndWrite)
 FCFuncEnd()
 
 #ifndef FEATURE_CORECLR
@@ -2418,6 +2424,7 @@ FCClassElement("SizedReference", "System", gSizedRefHandleFuncs)
 FCClassElement("StackBuilderSink", "System.Runtime.Remoting.Messaging", gStackBuilderSinkFuncs)
 #endif    
 FCClassElement("StackTrace", "System.Diagnostics", gDiagnosticsStackTrace)
+FCClassElement("Stream", "System.IO", gStreamFuncs)
 FCClassElement("String", "System", gStringFuncs)
 FCClassElement("StringBuilder", "System.Text", gStringBufferFuncs)
 FCClassElement("StringExpressionSet", "System.Security.Util", gCOMStringExpressionSetFuncs)

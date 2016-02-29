@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -27,7 +26,7 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 #include "blockset.h"
 #include "jitstd.h"
-
+#include "bitvec.h"
 #include "simplerhash.h"
 
 /*****************************************************************************/
@@ -41,6 +40,11 @@ typedef   unsigned  int       EXPSET_TP;
 #endif
 
 #define   EXPSET_ALL          ((EXPSET_TP)0-1)
+
+typedef   BitVec              ASSERT_TP;
+typedef   BitVec_ValArg_T     ASSERT_VALARG_TP;
+typedef   BitVec_ValRet_T     ASSERT_VALRET_TP;
+
 
 /*****************************************************************************
  *
@@ -142,23 +146,6 @@ struct EntryState
     unsigned        esStackDepth    : 24;       // size of esStack
     StackEntry*     esStack;                    // ptr to  stack
 };
-
-
-//-----------------------------------------------------------------------------
-//
-//  The following keeps track of the currently expanded inline functions.
-//  Any method currently on the list should not be inlined since that
-//  implies that it's being called recursively.
-//  We track the IL code body so we don't get confused by generics.
-//
-
-struct inlExpLst
-{
-    inlExpLst*      ixlNext;
-    BYTE*           ixlCode;
-};
-
-typedef inlExpLst* inlExpPtr;
 
 // This encapsulates the "exception handling" successors of a block.  That is,
 // if a basic block BB1 occurs in a try block, we consider the first basic block
@@ -326,11 +313,10 @@ struct BasicBlock
                                         // call, or, in some cases, because the BB occurs in a loop, and
                                         // we've determined that all paths in the loop body leading to BB
                                         // include a call.
-
-#define BBF_UNUSED1         0x00100000  // unused
-#define BBF_HAS_INDX        0x00200000  // BB contains simple index  expressions. TODO: This appears to be set, but never used.
+#define BBF_HAS_VTABREF     0x00100000  // BB contains reference of vtable
+#define BBF_HAS_INDX        0x00200000  // BB contains simple index expressions on a array local var.
 #define BBF_HAS_NEWARRAY    0x00400000  // BB contains 'new' of an array
-#define BBF_HAS_NEWOBJ      0x00800000  // BB contains 'new' of an object type. TODO: This appears to be set, but never used.
+#define BBF_HAS_NEWOBJ      0x00800000  // BB contains 'new' of an object type. 
 
 #if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
 #define BBF_FINALLY_TARGET  0x01000000  // BB is the target of a finally return: where a finally will return during non-exceptional flow.
@@ -446,7 +432,10 @@ typedef unsigned weight_t;             // Type used to hold block and edge weigh
     void setBBProfileWeight(unsigned weight)
     {
         this->bbFlags |= BBF_PROF_WEIGHT;
-        this->bbWeight = min(weight * BB_UNITY_WEIGHT, BB_MAX_WEIGHT);
+        // Check if the multiplication by BB_UNITY_WEIGHT will overflow.
+        this->bbWeight = (weight <= BB_MAX_WEIGHT / BB_UNITY_WEIGHT)
+                         ? weight * BB_UNITY_WEIGHT
+                         : BB_MAX_WEIGHT;
     }
 
     // this block will inherit the same weight and relevant bbFlags as bSrc
@@ -814,16 +803,16 @@ typedef unsigned weight_t;             // Type used to hold block and edge weigh
 
     union
     {
-        EXPSET_TP       bbCseGen;        // CSEs computed by block
+        EXPSET_TP      bbCseGen;        // CSEs computed by block
 #if ASSERTION_PROP
-        EXPSET_TP       bbAssertionGen;  // value assignments computed by block
+        ASSERT_TP      bbAssertionGen;  // value assignments computed by block
 #endif
     };
 
     union
     {
 #if ASSERTION_PROP
-        EXPSET_TP       bbAssertionKill; // value assignments killed   by block
+        ASSERT_TP      bbAssertionKill; // value assignments killed   by block
 #endif
     };
 
@@ -831,7 +820,7 @@ typedef unsigned weight_t;             // Type used to hold block and edge weigh
     {
         EXPSET_TP       bbCseIn;         // CSEs available on entry
 #if ASSERTION_PROP
-        EXPSET_TP       bbAssertionIn;   // value assignments available on entry
+        ASSERT_TP       bbAssertionIn;   // value assignments available on entry
 #endif
     };
 
@@ -839,7 +828,7 @@ typedef unsigned weight_t;             // Type used to hold block and edge weigh
     {
         EXPSET_TP       bbCseOut;        // CSEs available on exit
 #if ASSERTION_PROP
-        EXPSET_TP       bbAssertionOut;  // value assignments available on exit
+        ASSERT_TP       bbAssertionOut;  // value assignments available on exit
 #endif
     };
 
@@ -936,8 +925,14 @@ typedef unsigned weight_t;             // Type used to hold block and edge weigh
 
     bool endsWithJmpMethod(Compiler *comp);
 
+#if FEATURE_FASTTAILCALL
+    bool endsWithTailCall(Compiler* comp, bool fastTailCallsOnly, bool tailCallsConvertibleToLoopOnly, GenTree** tailCall);
+
     bool endsWithTailCallOrJmp(Compiler *comp, 
                                bool fastTailCallsOnly = false);
+
+    bool endsWithTailCallConvertibleToLoop(Compiler *comp, GenTree** tailCall);
+#endif // FEATURE_FASTTAILCALL
 
 #if JIT_FEATURE_SSA_SKIP_DEFS
     // Returns the first statement in the statement list of "this" that is

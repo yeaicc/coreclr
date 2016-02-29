@@ -1,5 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 namespace System {
@@ -52,6 +53,12 @@ namespace System {
         internal static void ThrowWrongValueTypeArgumentException(object value, Type targetType) {
             throw new ArgumentException(Environment.GetResourceString("Arg_WrongType", value, targetType), "value");
         }
+
+#if FEATURE_CORECLR
+        internal static void ThrowAddingDuplicateWithKeyArgumentException(object key) {
+            throw new ArgumentException(Environment.GetResourceString("Argument_AddingDuplicateWithKey", key));
+        }
+#endif
 
         internal static void ThrowKeyNotFoundException() {
             throw new System.Collections.Generic.KeyNotFoundException();
@@ -122,6 +129,10 @@ namespace System {
             string argumentName = null;
 
             switch (argument) {
+                case ExceptionArgument.action:
+                    argumentName = "action";
+                    break;
+
                 case ExceptionArgument.array:
                     argumentName = "array";
                     break;
@@ -136,6 +147,10 @@ namespace System {
 
                 case ExceptionArgument.collection:
                     argumentName = "collection";
+                    break;
+
+                case ExceptionArgument.comparison:
+                    argumentName = "comparison";
                     break;
 
                 case ExceptionArgument.list:
@@ -457,6 +472,8 @@ namespace System {
         options,
         view,
         sourceBytesToCopy,
+        action,
+        comparison
     }
 
     //

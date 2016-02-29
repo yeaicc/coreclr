@@ -39,6 +39,15 @@ function print_usage {
     echo '  --sequential                 : Run tests sequentially (default is to run in parallel).'
     echo '  -v, --verbose                : Show output from each test.'
     echo '  -h|--help                    : Show usage information.'
+    echo '  --useServerGC                : Enable server GC for this test run'
+    echo ''
+    echo 'Runtime Code Coverage options:'
+    echo '  --coreclr-coverage           : Optional argument to get coreclr code coverage reports'
+    echo '  --coreclr-objs=<path>        : Location of root of the object directory'
+    echo '                                 containing the linux/mac coreclr build'
+    echo '  --coreclr-src=<path>         : Location of root of the directory'
+    echo '                                 containing the coreclr source files'
+    echo '  --coverage-output-dir=<path> : Directory where coverage output will be written to'
     echo ''
 }
 
@@ -64,6 +73,24 @@ countSkippedTests=0
 xunitOutputPath=
 xunitTestOutputPath=
 
+# libExtension determines extension for dynamic library files
+OSName=$(uname -s)
+libExtension=
+case $OSName in
+    Linux)
+        libExtension="so"
+        ;;
+
+    Darwin)
+        libExtension="dylib"
+        ;;
+    *)
+        echo "Unsupported OS $OSName detected, configuring as if for Linux"
+        libExtension="so"
+        ;;
+esac
+
+
 function xunit_output_begin {
     xunitOutputPath=$testRootDir/coreclrtests.xml
     xunitTestOutputPath=${xunitOutputPath}.test
@@ -86,7 +113,7 @@ function xunit_output_add_test {
     local testResult=$3 # Pass, Fail, or Skip
     local testScriptExitCode=$4
 
-    local testPath=${scriptFilePath:0:(-3)} # Remove trailing ".sh"
+    local testPath=${scriptFilePath%.sh} # Remove trailing ".sh"
     local testDir=$(dirname "$testPath")
     local testName=$(basename "$testPath")
 
@@ -311,8 +338,10 @@ function create_core_overlay {
         rm -f -r "$coreOverlayDir"
     fi
     mkdir "$coreOverlayDir"
-    (cd $coreFxBinDir && find . -iname '*.dll' \! -iwholename '*test*' \! -iwholename '*/ToolRuntime/*' -exec cp -f -u '{}' "$coreOverlayDir/" \;)
-    cp -f "$coreFxNativeBinDir/Native/"*.so "$coreOverlayDir/" 2>/dev/null
+
+    (cd $coreFxBinDir && find . -iname '*.dll' \! -iwholename '*test*' \! -iwholename '*/ToolRuntime/*' \! -iwholename '*RemoteExecutorConsoleApp*' -exec cp -f '{}' "$coreOverlayDir/" \;)
+    cp -f "$coreFxNativeBinDir/Native/"*."$libExtension" "$coreOverlayDir/" 2>/dev/null
+
     cp -f "$coreClrBinDir/"* "$coreOverlayDir/" 2>/dev/null
     cp -f "$mscorlibDir/mscorlib.dll" "$coreOverlayDir/"
     cp -n "$testDependenciesDir"/* "$coreOverlayDir/" 2>/dev/null
@@ -333,7 +362,7 @@ function copy_test_native_bin_to_test_root {
     fi
 
     # Copy native test components from the native test build into the respective test directory in the test root directory
-    find "$testNativeBinDir" -type f -iname '*.so' |
+    find "$testNativeBinDir" -type f -iname '*.$libExtension' |
         while IFS='' read -r filePath || [ -n "$filePath" ]; do
             local dirPath=$(dirname "$filePath")
             local destinationDirPath=${testRootDir}${dirPath:${#testNativeBinDir}}
@@ -418,8 +447,8 @@ function run_test {
     local outputFileName=$(basename "$outputFilePath")
 
     # Convert DOS line endings to Unix if needed
-    sed -i 's/\r$//' "$scriptFileName"
-
+    perl -pi -e 's/\r\n|\n|\r/\n/g' "$scriptFileName"
+    
     # Add executable file mode bit if needed
     chmod +x "$scriptFileName"
 
@@ -544,6 +573,38 @@ function run_tests_in_directory {
     done
 }
 
+function coreclr_code_coverage()
+{
+
+  local coverageDir="$coverageOutputDir/Coverage"
+  local toolsDir="$coverageOutputDir/Coverage/tools"
+  local reportsDir="$coverageOutputDir/Coverage/reports"
+  local packageName="unix-code-coverage-tools.1.0.0.nupkg"
+  rm -rf $coverageDir
+  mkdir -p $coverageDir
+  mkdir -p $toolsDir
+  mkdir -p $reportsDir
+  pushd $toolsDir > /dev/null
+
+  echo "Pulling down code coverage tools"
+  wget -q https://www.myget.org/F/dotnet-buildtools/api/v2/package/unix-code-coverage-tools/1.0.0 -O $packageName
+  echo "Unzipping to $toolsDir"
+  unzip -q -o $packageName
+
+  # Invoke gcovr
+  chmod a+rwx ./gcovr
+  chmod a+rwx ./$OSName/llvm-cov
+
+  echo
+  echo "Generating coreclr code coverage reports at $reportsDir/coreclr.html"
+  echo "./gcovr $coreClrObjs --gcov-executable=$toolsDir/$OS/llvm-cov -r $coreClrSrc --html --html-details -o $reportsDir/coreclr.html"
+  echo
+  ./gcovr $coreClrObjs --gcov-executable=$toolsDir/$OSName/llvm-cov -r $coreClrSrc --html --html-details -o $reportsDir/coreclr.html
+  exitCode=$?
+  popd > /dev/null
+  exit $exitCode
+}
+
 # Exit code constants
 readonly EXIT_CODE_SUCCESS=0       # Script ran normally.
 readonly EXIT_CODE_EXCEPTION=1     # Script exited because something exceptional happened (e.g. bad arguments, Ctrl-C interrupt).
@@ -557,7 +618,12 @@ coreClrBinDir=
 mscorlibDir=
 coreFxBinDir=
 coreFxNativeBinDir=
+coreClrObjs=
+coreClrSrc=
+coverageOutputDir=
+
 ((disableEventLogging = 0))
+((serverGC = 0))
 
 # Handle arguments
 verbose=0
@@ -607,6 +673,21 @@ do
         --sequential)
             ((maxProcesses = 1))
             ;;
+        --useServerGC)
+            ((serverGC = 1))
+            ;;
+        --coreclr-coverage)
+            CoreClrCoverage=ON
+            ;;
+        --coreclr-objs=*)
+            coreClrObjs=${i#*=}
+            ;;
+        --coreclr-src=*)
+            coreClrSrc=${i#*=}
+            ;;
+        --coverage-output-dir=*)
+            coverageOutputDir=${i#*=}
+            ;;
         *)
             echo "Unknown switch: $i"
             print_usage
@@ -619,6 +700,8 @@ if (( disableEventLogging == 0)); then
         export COMPlus_EnableEventLog=1
 fi
 
+export CORECLR_SERVER_GC="$serverGC"
+
 if [ -z "$testRootDir" ]; then
     echo "--testRootDir is required."
     print_usage
@@ -629,11 +712,51 @@ if [ ! -d "$testRootDir" ]; then
     exit $EXIT_CODE_EXCEPTION
 fi
 
+    
+# Copy native interop test libraries over to the mscorlib path in
+# order for interop tests to run on linux.
+cp $mscorlibDir/bin/* $mscorlibDir   
+
+# If this is a coverage run, make sure the appropriate args have been passed
+if [ "$CoreClrCoverage" == "ON" ]
+then
+    echo "Code coverage is enabled for this run"
+    echo ""
+    if [ ! "$OSName" == "Darwin" ] && [ ! "$OSName" == "Linux" ]
+    then
+        echo "Code Coverage not supported on $OS"
+        exit 1
+    fi
+
+    if [ -z "$coreClrObjs" ]
+    then
+        echo "Coreclr obj files are required to generate code coverage reports"
+        echo "Coreclr obj files root path can be passed using '--coreclr-obj' argument"
+        exit 1
+    fi
+
+    if [ -z "$coreClrSrc" ]
+    then
+        echo "Coreclr src files are required to generate code coverage reports"
+        echo "Coreclr src files root path can be passed using '--coreclr-src' argument"
+        exit 1
+    fi
+
+    if [ -z "$coverageOutputDir" ]
+    then
+        echo "Output directory for coverage results must be specified"
+        echo "Output path can be specified '--coverage-output-dir' argument"
+        exit 1
+    fi
+fi
+
 xunit_output_begin
 create_core_overlay
 copy_test_native_bin_to_test_root
 load_unsupported_tests
 load_failing_tests
+
+ 
 
 cd "$testRootDir"
 if [ -z "$testDirectories" ]
@@ -656,6 +779,11 @@ finish_remaining_tests
 
 print_results
 xunit_output_end
+
+if [ "$CoreClrCoverage" == "ON" ]
+then
+    coreclr_code_coverage
+fi
 
 if ((countFailedTests > 0)); then
     exit $EXIT_CODE_TEST_FAILURE

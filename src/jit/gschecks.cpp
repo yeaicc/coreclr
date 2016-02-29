@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -397,6 +396,7 @@ void Compiler::gsParamsToShadows()
     for (UINT lclNum = 0; lclNum < lvaOldCount; lclNum++)
     {
         LclVarDsc *varDsc = &lvaTable[lclNum];
+        gsShadowVarInfo[lclNum].shadowCopy = NO_SHADOW_COPY;
 
         // Only care about params whose values are on the stack
         if (!ShadowParamVarInfo::mayNeedShadowCopy(varDsc))
@@ -406,7 +406,6 @@ void Compiler::gsParamsToShadows()
 
         if (!varDsc->lvIsPtr && !varDsc->lvIsUnsafeBuffer)
         {
-            gsShadowVarInfo[lclNum].shadowCopy = NO_SHADOW_COPY;
             continue;
         }
 
@@ -415,7 +414,18 @@ void Compiler::gsParamsToShadows()
         // Copy some info
 
         var_types type = varTypeIsSmall(varDsc->TypeGet()) ? TYP_INT : varDsc->TypeGet();
-        lvaTable[shadowVar].lvType        = type;
+        lvaTable[shadowVar].lvType = type;
+
+#ifdef FEATURE_SIMD
+        lvaTable[shadowVar].lvSIMDType = varDsc->lvSIMDType;
+        lvaTable[shadowVar].lvUsedInSIMDIntrinsic = varDsc->lvUsedInSIMDIntrinsic;
+        if (varDsc->lvSIMDType)
+        {
+            lvaTable[shadowVar].lvBaseType = varDsc->lvBaseType;
+        }
+#endif
+        lvaTable[shadowVar].lvRegStruct = varDsc->lvRegStruct;
+
         lvaTable[shadowVar].lvAddrExposed = varDsc->lvAddrExposed;
         lvaTable[shadowVar].lvDoNotEnregister = varDsc->lvDoNotEnregister;
 #ifdef DEBUG
@@ -447,11 +457,6 @@ void Compiler::gsParamsToShadows()
     {
         LclVarDsc *varDsc = &lvaTable[lclNum];
 
-        if (!ShadowParamVarInfo::mayNeedShadowCopy(varDsc))
-        {
-            continue;
-        }
-
         unsigned shadowVar = gsShadowVarInfo[lclNum].shadowCopy;
         if (shadowVar == NO_SHADOW_COPY)
         {
@@ -479,6 +484,9 @@ void Compiler::gsParamsToShadows()
             dst = gtNewOperNode(GT_ADDR, TYP_BYREF, dst);
 
             opAssign = gtNewCpObjNode(dst, src, clsHnd, false);
+#if FEATURE_MULTIREG_ARGS_OR_RET
+            lvaTable[shadowVar].lvIsMultiRegArgOrRet = lvaTable[lclNum].lvIsMultiRegArgOrRet;
+#endif // FEATURE_MULTIREG_ARGS_OR_RET
         }
         else
         {
@@ -486,6 +494,60 @@ void Compiler::gsParamsToShadows()
         }
         fgEnsureFirstBBisScratch();
         (void) fgInsertStmtAtBeg(fgFirstBB, fgMorphTree(opAssign));
+    }
+
+    // If the method has "Jmp CalleeMethod", then we need to copy shadow params back to original
+    // params before "jmp" to CalleeMethod.
+    if (compJmpOpUsed)
+    {
+        // There could be more than one basic block ending with a "Jmp" type tail call.
+        // We would have to insert assignments in all such blocks, just before GT_JMP stmnt.
+        for (BasicBlock * block = fgFirstBB; block; block = block->bbNext)
+        {
+            if (block->bbJumpKind != BBJ_RETURN)
+            {
+                continue;
+            }
+
+            if  ((block->bbFlags & BBF_HAS_JMP) == 0) 
+            {
+                continue;
+            }
+
+            for (UINT lclNum = 0; lclNum < info.compArgsCount; lclNum++)
+            {
+                LclVarDsc *varDsc = &lvaTable[lclNum];
+
+                unsigned shadowVar = gsShadowVarInfo[lclNum].shadowCopy;
+                if (shadowVar == NO_SHADOW_COPY)
+                {
+                    continue;
+                }
+
+                GenTreePtr src = gtNewLclvNode(shadowVar, lvaTable[shadowVar].TypeGet());
+                GenTreePtr dst = gtNewLclvNode(lclNum, varDsc->TypeGet());
+                
+                src->gtFlags |= GTF_DONT_CSE;
+                dst->gtFlags |= GTF_DONT_CSE;
+
+                GenTreePtr opAssign = nullptr;
+                if (varDsc->TypeGet() == TYP_STRUCT)
+                {
+                    CORINFO_CLASS_HANDLE clsHnd = varDsc->lvVerTypeInfo.GetClassHandle();
+                    src = gtNewOperNode(GT_ADDR, TYP_BYREF, src);
+                    dst = gtNewOperNode(GT_ADDR, TYP_BYREF, dst);
+
+                    opAssign = gtNewCpObjNode(dst, src, clsHnd, false);
+                }
+                else
+                {
+                    opAssign = gtNewAssignNode(dst, src);
+                }
+                
+                (void) fgInsertStmtNearEnd(block, fgMorphTree(opAssign));
+            }
+
+        }
     }
 }
 

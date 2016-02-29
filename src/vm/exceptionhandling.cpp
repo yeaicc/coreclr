@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 
 //
@@ -156,6 +155,9 @@ void InitializeExceptionHandling()
 #ifdef FEATURE_PAL
     // Register handler of hardware exceptions like null reference in PAL
     PAL_SetHardwareExceptionHandler(HandleHardwareException);
+
+    // Register handler for determining whether the specified IP has code that is a GC marker for GCCover
+    PAL_SetGetGcMarkerExceptionCode(GetGcMarkerExceptionCode);
 #endif // FEATURE_PAL
 }
 
@@ -2953,33 +2955,6 @@ CLRUnwindStatus ExceptionTracker::ProcessManagedCallFrame(
                                     COMPrincipal::CLR_ImpersonateLoggedOnUser(m_hImpersonationToken);
                                     impersonating = FALSE;
                                 }
-#else // !FEATURE_PAL
-                                {
-                                    // Since we have caught the exception from the filter here in the native code,
-                                    // the exception tracker is still in the cleaned up state that we've created
-                                    // before starting native frames unwind in the UnwindManagedExceptionPass2.
-                                    // We can remove the tracker since we don't need any of the information that
-                                    // it contains anymore.
-
-                                    // To be safe to pop the tracker, we need to be in cooperative mode to make sure
-                                    // the GC won't get triggered in the middle of the tracker removal.
-                                    GCX_COOP();
-                                    ExceptionTracker* pTrackerToFree = pThread->GetExceptionState()->m_pCurrentTracker;
-                                    CONSISTENCY_CHECK(pTrackerToFree->IsValid());
-                                    _ASSERTE(pTrackerToFree->m_ScannedStackRange.IsEmpty());
-
-                                    EH_LOG((LL_INFO100, "Unlinking ExceptionTracker object 0x%p, thread = 0x%p\n", pTrackerToFree, pTrackerToFree->m_pThread));
-
-                                    // free managed tracker resources causing notification -- do this before unlinking the tracker
-                                    // this is necessary so that we know an exception is still in flight while we give the notification
-                                    FreeTrackerMemory(pTrackerToFree, memManaged);
-
-                                    // unlink the tracker from the thread
-                                    pThread->GetExceptionState()->m_pCurrentTracker = pTrackerToFree->m_pPrevNestedInfo;
-
-                                    // free unmanaged tracker resources
-                                    FreeTrackerMemory(pTrackerToFree, memUnmanaged);
-                                }
 #endif // !FEATURE_PAL 
 
                                 // Sync managed exception state, for the managed thread, based upon the active exception tracker.
@@ -3522,12 +3497,12 @@ void ExceptionTracker::PopTrackers(
     // This method is a no-op when there is no managed Thread object. We detect such a case and short circuit out in ExceptionTrackers::PopTrackers.
     // If this ever changes, then please revisit that method and fix it up appropriately.
 
-    // If this tracker does not have valid stack ranges,
+    // If this tracker does not have valid stack ranges and it is in the first pass,
     // then we came here likely when the tracker was being setup
     // and an exception took place.
     //
     // In such a case, we will not pop off the tracker
-    if (pTracker && pTracker->m_ScannedStackRange.IsEmpty())
+    if (pTracker && pTracker->m_ScannedStackRange.IsEmpty() && pTracker->IsInFirstPass())
     {
         // skip any others with empty ranges...
         do
@@ -4357,20 +4332,6 @@ static void DoEHLog(
 #ifdef FEATURE_PAL
 //---------------------------------------------------------------------------------------
 //
-// This functions return True if the given stack address is
-// within the specified stack boundaries.
-//
-// Arguments:
-//      sp - a stack pointer that needs to be verified
-//      stackLowAddress, stackHighAddress - these values specify stack boundaries
-//
-bool IsSpInStackLimits(ULONG64 sp, ULONG64 stackLowAddress, ULONG64 stackHighAddress)
-{
-    return ((sp > stackLowAddress) && (sp < stackHighAddress));
-}
-
-//---------------------------------------------------------------------------------------
-//
 // This function initiates unwinding of native frames during the unwinding of a managed 
 // exception. The managed exception can be propagated over several managed / native ranges 
 // until it is finally handled by a managed handler or leaves the stack unhandled and
@@ -4405,8 +4366,6 @@ VOID UnwindManagedExceptionPass2(PAL_SEHException& ex, CONTEXT* unwindStartConte
     EECodeInfo codeInfo;
     UINT_PTR establisherFrame = NULL;
     PVOID handlerData;
-    ULONG64 stackHighAddress = (ULONG64)PAL_GetStackBase();
-    ULONG64 stackLowAddress = (ULONG64)PAL_GetStackLimit();
 
     // Indicate that we are performing second pass.
     ex.ExceptionRecord.ExceptionFlags = EXCEPTION_UNWINDING;
@@ -4446,8 +4405,7 @@ VOID UnwindManagedExceptionPass2(PAL_SEHException& ex, CONTEXT* unwindStartConte
             // Make sure that the establisher frame pointer is within stack boundaries
             // and we did not go below that target frame.
             // TODO: make sure the establisher frame is properly aligned.
-            if (!IsSpInStackLimits(establisherFrame, stackLowAddress, stackHighAddress) ||
-                establisherFrame > ex.TargetFrameSp)
+            if (!Thread::IsAddressInCurrentStack((void*)establisherFrame) || establisherFrame > ex.TargetFrameSp)
             {
                 // TODO: add better error handling
                 UNREACHABLE();
@@ -4517,8 +4475,7 @@ VOID UnwindManagedExceptionPass2(PAL_SEHException& ex, CONTEXT* unwindStartConte
             UNREACHABLE();
         }
 
-    } while (IsSpInStackLimits(GetSP(currentFrameContext), stackLowAddress, stackHighAddress) &&
-        (establisherFrame != ex.TargetFrameSp));
+    } while (Thread::IsAddressInCurrentStack((void*)GetSP(currentFrameContext)) && (establisherFrame != ex.TargetFrameSp));
 
     _ASSERTE(!"UnwindManagedExceptionPass2: Unwinding failed. Reached the end of the stack");
     EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);
@@ -4534,12 +4491,12 @@ VOID UnwindManagedExceptionPass2(PAL_SEHException& ex, CONTEXT* unwindStartConte
 // the second pass to unwind the stack and execute the handler.
 //
 // Arguments:
-//      ex - a PAL_SEHException that stores information about the managed
-//           exception that needs to be dispatched.
+//      ex           - a PAL_SEHException that stores information about the managed
+//                     exception that needs to be dispatched.
+//      frameContext - the context of the first managed frame of the exception call stack
 //
-VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
+VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex, CONTEXT* frameContext)
 {
-    CONTEXT frameContext;
     CONTEXT unwindStartContext;
     EXCEPTION_DISPOSITION disposition;
     DISPATCHER_CONTEXT dispatcherContext;
@@ -4547,24 +4504,19 @@ VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
     UINT_PTR controlPc;
     UINT_PTR establisherFrame = NULL;
     PVOID handlerData;
-    ULONG64 stackHighAddress = (ULONG64)PAL_GetStackBase();
-    ULONG64 stackLowAddress = (ULONG64)PAL_GetStackLimit();
 
 #ifdef FEATURE_HIJACK
     GetThread()->UnhijackThread();
 #endif
 
-    RtlCaptureContext(&frameContext);
-
-    controlPc = Thread::VirtualUnwindToFirstManagedCallFrame(&frameContext);
-
-    unwindStartContext = frameContext;
+    controlPc = GetIP(frameContext);
+    unwindStartContext = *frameContext;
 
     if (!ExecutionManager::IsManagedCode(GetIP(&ex.ContextRecord)))
     {
         // This is the first time we see the managed exception, set its context to the managed frame that has caused
         // the exception to be thrown
-        ex.ContextRecord = frameContext;
+        ex.ContextRecord = *frameContext;
         ex.ExceptionRecord.ExceptionAddress = (VOID*)controlPc;
     }
 
@@ -4589,21 +4541,21 @@ VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
                 dispatcherContext.ImageBase,
                 dispatcherContext.ControlPc,
                 dispatcherContext.FunctionEntry,
-                &frameContext,
+                frameContext,
                 &handlerData,
                 &establisherFrame,
                 NULL);
 
             // Make sure that the establisher frame pointer is within stack boundaries.
             // TODO: make sure the establisher frame is properly aligned.
-            if (!IsSpInStackLimits(establisherFrame, stackLowAddress, stackHighAddress))
+            if (!Thread::IsAddressInCurrentStack((void*)establisherFrame))
             {
                 // TODO: add better error handling
                 UNREACHABLE();
             }
 
             dispatcherContext.EstablisherFrame = establisherFrame;
-            dispatcherContext.ContextRecord = &frameContext;
+            dispatcherContext.ContextRecord = frameContext;
 
             // Find exception handler in the current frame
             disposition = ProcessCLRException(&ex.ExceptionRecord,
@@ -4614,7 +4566,7 @@ VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
             if (disposition == ExceptionContinueSearch)
             {
                 // Exception handler not found. Try the parent frame.
-                controlPc = GetIP(&frameContext);
+                controlPc = GetIP(frameContext);
             }
             else if (disposition == ExceptionStackUnwind)
             {
@@ -4631,22 +4583,22 @@ VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
         }
         else
         {
-            controlPc = Thread::VirtualUnwindLeafCallFrame(&frameContext);
+            controlPc = Thread::VirtualUnwindLeafCallFrame(frameContext);
         }
 
         // Check whether we are crossing managed-to-native boundary
         while (!ExecutionManager::IsManagedCode(controlPc))
         {
-            UINT_PTR sp = GetSP(&frameContext);
+            UINT_PTR sp = GetSP(frameContext);
 
-            BOOL success = PAL_VirtualUnwind(&frameContext, NULL);
+            BOOL success = PAL_VirtualUnwind(frameContext, NULL);
             if (!success)
             {
                 _ASSERTE(!"UnwindManagedExceptionPass1: PAL_VirtualUnwind failed");
                 EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);
             }
 
-            controlPc = GetIP(&frameContext);
+            controlPc = GetIP(frameContext);
 
             if (controlPc == 0)
             {
@@ -4655,10 +4607,11 @@ VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
                     LONG disposition = InternalUnhandledExceptionFilter_Worker(&ex.ExceptionPointers);
                     _ASSERTE(disposition == EXCEPTION_CONTINUE_SEARCH);
                 }
-                EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);                    
+                TerminateProcess(GetCurrentProcess(), 1);
+                UNREACHABLE();
             }
 
-            UINT_PTR parentSp = GetSP(&frameContext);
+            UINT_PTR parentSp = GetSP(frameContext);
 
             // Find all holders on this frame that are in scopes embedded in each other and call their filters.
             NativeExceptionHolderBase* holder = nullptr;
@@ -4678,7 +4631,7 @@ VOID DECLSPEC_NORETURN UnwindManagedExceptionPass1(PAL_SEHException& ex)
             }
         }
 
-    } while (IsSpInStackLimits(GetSP(&frameContext), stackLowAddress, stackHighAddress));
+    } while (Thread::IsAddressInCurrentStack((void*)GetSP(frameContext)));
 
     _ASSERTE(!"UnwindManagedExceptionPass1: Failed to find a handler. Reached the end of the stack");
     EEPOLICY_HANDLE_FATAL_ERROR(COR_E_EXECUTIONENGINE);
@@ -4704,18 +4657,28 @@ VOID DECLSPEC_NORETURN DispatchManagedException(PAL_SEHException& ex)
     {
         try
         {
+            // Unwind the context to the first managed frame
+            CONTEXT frameContext;
+            RtlCaptureContext(&frameContext);
+            UINT_PTR currentSP = GetSP(&frameContext);
+            Thread::VirtualUnwindToFirstManagedCallFrame(&frameContext);
+            UINT_PTR firstManagedFrameSP = GetSP(&frameContext);
+
+            // Check if there is any exception holder in the skipped frames. If there is one, we need to unwind them
+            // using the C++ handling. This is a special case when the UNINSTALL_MANAGED_EXCEPTION_DISPATCHER was
+            // not at the managed to native boundary.
+            if (NativeExceptionHolderBase::FindNextHolder(nullptr, (void*)currentSP, (void*)firstManagedFrameSP) != nullptr)
+            {
+                break;
+            }
+
             if (ex.IsFirstPass())
             {
-                UnwindManagedExceptionPass1(ex);
+                UnwindManagedExceptionPass1(ex, &frameContext);
             }
             else
             {
                 // This is a continuation of pass 2 after native frames unwinding.
-                // Get the managed frame to continue unwinding from.
-                CONTEXT frameContext;
-                RtlCaptureContext(&frameContext);
-                Thread::VirtualUnwindToFirstManagedCallFrame(&frameContext);
- 
                 UnwindManagedExceptionPass2(ex, &frameContext);
             }
             UNREACHABLE();
@@ -4724,8 +4687,35 @@ VOID DECLSPEC_NORETURN DispatchManagedException(PAL_SEHException& ex)
         {
             ex = ex2;
         }
+
     }
     while (true);
+
+    // Ensure that the corruption severity is set for exceptions that didn't pass through managed frames
+    // yet and so there is no exception tracker.
+    if (ex.IsFirstPass())
+    {
+        // Get the thread and the thread exception state - they must exist at this point
+        Thread *pCurThread = GetThread();
+        _ASSERTE(pCurThread != NULL);
+
+        ThreadExceptionState * pCurTES = pCurThread->GetExceptionState();
+        _ASSERTE(pCurTES != NULL);
+
+        ExceptionTracker* pEHTracker = pCurTES->GetCurrentExceptionTracker();
+        if (pEHTracker == NULL)
+        {
+            CorruptionSeverity severity = NotCorrupting;
+            if (CEHelper::IsProcessCorruptedStateException(ex.ExceptionRecord.ExceptionCode))
+            {
+                severity = ProcessCorrupting;
+            }
+
+            pCurTES->SetLastActiveExceptionCorruptionSeverity(severity);
+        }
+    }
+
+    throw ex;
 }
 
 #ifdef _AMD64_
@@ -4802,7 +4792,7 @@ DWORD64 GetModRMOperandValue(BYTE rex, BYTE* ip, PCONTEXT pContext, bool is8Bit,
     BYTE rm = (modrm & 0x07);
 
     reg |= (rex_r << 3);
-    rm |= (rex_b << 3);
+    BYTE rmIndex = rm | (rex_b << 3);
 
     // 8 bit idiv without the REX prefix uses registers AH, CH, DH, BH for rm 4..8
     // which is an exception from the regular register indexes.
@@ -4885,7 +4875,7 @@ DWORD64 GetModRMOperandValue(BYTE rex, BYTE* ip, PCONTEXT pContext, bool is8Bit,
             }
             else
             {
-                result = GetRegisterValueByIndex(pContext, rm);
+                result = GetRegisterValueByIndex(pContext, rmIndex);
 
                 if (mod == 1)
                 {
@@ -4907,10 +4897,10 @@ DWORD64 GetModRMOperandValue(BYTE rex, BYTE* ip, PCONTEXT pContext, bool is8Bit,
         {
             // 8 bit idiv without the REX prefix uses registers AH, CH, DH or BH for rm 4..8.
             // So we shift the register index to get the real register index.
-            rm -= 4;
+            rmIndex -= 4;
         }
 
-        result = (DWORD64)GetRegisterAddressByIndex(pContext, rm);
+        result = (DWORD64)GetRegisterAddressByIndex(pContext, rmIndex);
 
         if (isAhChDhBh)
         {
@@ -5065,8 +5055,15 @@ VOID PALAPI HandleHardwareException(PAL_SEHException* ex)
         // A hardware exception is handled only if it happened in a jitted code or 
         // in one of the JIT helper functions (JIT_MemSet, ...)
         PCODE controlPc = GetIP(&ex->ContextRecord);
-        if (ExecutionManager::IsManagedCode(controlPc) || IsIPInMarkedJitHelper(controlPc))
+        BOOL isInManagedCode = ExecutionManager::IsManagedCode(controlPc);
+        if (isInManagedCode || IsIPInMarkedJitHelper(controlPc))
         {
+            if (isInManagedCode && IsGcMarker(ex->ExceptionRecord.ExceptionCode, &ex->ContextRecord))
+            {
+                RtlRestoreContext(&ex->ContextRecord, &ex->ExceptionRecord);
+                UNREACHABLE();
+            }
+
             // Create frame necessary for the exception handling
             FrameWithCookie<FaultingExceptionFrame> fef;
 #if defined(WIN64EXCEPTIONS)

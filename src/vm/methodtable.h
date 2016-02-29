@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // File: methodtable.h
 //
@@ -630,43 +629,43 @@ inline
 SystemVClassificationType CorInfoType2UnixAmd64Classification(CorElementType eeType)
 {
     static const SystemVClassificationType toSystemVAmd64ClassificationTypeMap[] = {
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_END
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_VOID
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_BOOLEAN
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_CHAR
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_I1
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_U1
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_I2
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_U2
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_I4
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_U4
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_I8
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_U8
-        SystemVClassificationTypeSSE,               // ELEMENT_TYPE_R4
-        SystemVClassificationTypeSSE,               // ELEMENT_TYPE_R8
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_STRING
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_PTR
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_BYREF
-        SystemVClassificationTypeStruct,            // ELEMENT_TYPE_VALUETYPE
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_CLASS
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_VAR              - (type variable)
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_ARRAY
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_GENERICINST
-        SystemVClassificationTypeStruct,            // ELEMENT_TYPE_TYPEDBYREF
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_VALUEARRAY_UNSUPPORTED
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_I
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_U
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_R_UNSUPPORTED
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_END
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_VOID
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_BOOLEAN
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_CHAR
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_I1
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_U1
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_I2
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_U2
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_I4
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_U4
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_I8
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_U8
+        SystemVClassificationTypeSSE,                   // ELEMENT_TYPE_R4
+        SystemVClassificationTypeSSE,                   // ELEMENT_TYPE_R8
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_STRING
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_PTR
+        SystemVClassificationTypeIntegerByRef,          // ELEMENT_TYPE_BYREF
+        SystemVClassificationTypeStruct,                // ELEMENT_TYPE_VALUETYPE
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_CLASS
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_VAR (type variable)
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_ARRAY
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_GENERICINST
+        SystemVClassificationTypeTypedReference,        // ELEMENT_TYPE_TYPEDBYREF
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_VALUEARRAY_UNSUPPORTED
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_I
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_U
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_R_UNSUPPORTED
 
         // put the correct type when we know our implementation
-        SystemVClassificationTypeInteger,           // ELEMENT_TYPE_FNPTR
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_OBJECT
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_SZARRAY
-        SystemVClassificationTypeIntegerReference,  // ELEMENT_TYPE_MVAR
+        SystemVClassificationTypeInteger,               // ELEMENT_TYPE_FNPTR
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_OBJECT
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_SZARRAY
+        SystemVClassificationTypeIntegerReference,      // ELEMENT_TYPE_MVAR
 
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_CMOD_REQD
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_CMOD_OPT
-        SystemVClassificationTypeUnknown,           // ELEMENT_TYPE_INTERNAL
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_CMOD_REQD
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_CMOD_OPT
+        SystemVClassificationTypeUnknown,               // ELEMENT_TYPE_INTERNAL
     };
 
     _ASSERTE(sizeof(toSystemVAmd64ClassificationTypeMap) == ELEMENT_TYPE_MAX);
@@ -674,7 +673,9 @@ SystemVClassificationType CorInfoType2UnixAmd64Classification(CorElementType eeT
     // spot check of the map
     _ASSERTE((SystemVClassificationType)toSystemVAmd64ClassificationTypeMap[ELEMENT_TYPE_I4] == SystemVClassificationTypeInteger);
     _ASSERTE((SystemVClassificationType)toSystemVAmd64ClassificationTypeMap[ELEMENT_TYPE_PTR] == SystemVClassificationTypeInteger);
-    _ASSERTE((SystemVClassificationType)toSystemVAmd64ClassificationTypeMap[ELEMENT_TYPE_TYPEDBYREF] == SystemVClassificationTypeStruct);
+    _ASSERTE((SystemVClassificationType)toSystemVAmd64ClassificationTypeMap[ELEMENT_TYPE_VALUETYPE] == SystemVClassificationTypeStruct);
+    _ASSERTE((SystemVClassificationType)toSystemVAmd64ClassificationTypeMap[ELEMENT_TYPE_TYPEDBYREF] == SystemVClassificationTypeTypedReference);
+    _ASSERTE((SystemVClassificationType)toSystemVAmd64ClassificationTypeMap[ELEMENT_TYPE_BYREF] == SystemVClassificationTypeIntegerByRef);
 
     return (((int)eeType) < ELEMENT_TYPE_MAX) ? (toSystemVAmd64ClassificationTypeMap[eeType]) : SystemVClassificationTypeUnknown;
 };

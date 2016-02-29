@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 //
 // GC Object Pointer Location Series Stuff
@@ -12,9 +11,9 @@
 #ifndef _GCDESC_H_
 #define _GCDESC_H_
 
-#ifdef _WIN64
+#ifdef BIT64
 typedef uint32_t HALF_SIZE_T;
-#else   // _WIN64
+#else   // BIT64
 typedef uint16_t HALF_SIZE_T;
 #endif
 

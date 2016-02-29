@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 
 // 
@@ -77,21 +76,6 @@ ULONG STDMETHODCALLTYPE ShimDataTarget::Release()
 DWORD ShimDataTarget::GetPid()
 {
     return m_processId;
-}
-
-//---------------------------------------------------------------------------------------
-//
-// Unwind the stack to the next frame.
-//
-// Return Value: 
-//     context and contextPointers filled in with the next frame
-//
-HRESULT STDMETHODCALLTYPE ShimDataTarget::VirtualUnwind(DWORD threadId, ULONG32 contextSize, PBYTE context)
-{
-#ifndef FEATURE_PAL
-    _ASSERTE(!"ShimDataTarget::VirtualUnwind NOT IMPLEMENTED");
-#endif 
-    return E_NOTIMPL;
 }
 
 //---------------------------------------------------------------------------------------

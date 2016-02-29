@@ -1,3 +1,14 @@
+
+# Set the RPATH of mscordbi so that it can find dependencies without needing to set LD_LIBRARY_PATH
+# For more information: http://www.cmake.org/Wiki/CMake_RPATH_handling.
+if(CORECLR_SET_RPATH)
+  if(CLR_CMAKE_PLATFORM_DARWIN)
+    set(CMAKE_INSTALL_RPATH "@loader_path")
+  else()
+    set(CMAKE_INSTALL_RPATH "\$ORIGIN")
+  endif(CLR_CMAKE_PLATFORM_DARWIN)
+endif(CORECLR_SET_RPATH)
+
 set(MSCORDBI_SOURCES
   mscordbi.cpp
 )  
@@ -21,7 +32,7 @@ if(WIN32)
     list(APPEND MSCORDBI_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/mscordbi.def)
 endif(WIN32)
 
-add_library(mscordbi SHARED
+add_library_clr(mscordbi SHARED
   ${MSCORDBI_SOURCES}
 )
 
@@ -56,11 +67,11 @@ if(WIN32)
 
 elseif(CLR_CMAKE_PLATFORM_UNIX)
 
-    if(CLR_CMAKE_PLATFORM_LINUX)
+    if(CLR_CMAKE_PLATFORM_LINUX OR CLR_CMAKE_PLATFORM_NETBSD)
         # This option is necessary to ensure that the overloaded new/delete operators defined inside
         # of the utilcode will be used instead of the standard library delete operator.
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Xlinker -Bsymbolic -Bsymbolic-functions")    
-    endif(CLR_CMAKE_PLATFORM_LINUX)
+    endif(CLR_CMAKE_PLATFORM_LINUX OR CLR_CMAKE_PLATFORM_NETBSD)
 
     list(APPEND COREDBI_LIBRARIES
         mdhotdata_full

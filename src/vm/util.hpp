@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // util.hpp
 //
@@ -652,14 +651,14 @@ public:
     }
 #endif
 
-    void SetThreadId()
+    void SetToCurrentThread()
     {
         WRAPPER_NO_CONTRACT;
 
         m_FiberPtrId = ClrTeb::GetFiberPtrId();
     }
 
-    BOOL IsSameThread() const
+    bool IsCurrentThread() const
     {
         WRAPPER_NO_CONTRACT;
 
@@ -668,13 +667,13 @@ public:
 
     
 #ifdef _DEBUG
-    BOOL IsUnknown() const
+    bool IsUnknown() const
     {
         LIMITED_METHOD_CONTRACT;
         return m_FiberPtrId == NULL;
     }
 #endif
-    void ResetThreadId()
+    void Clear()
     {
         LIMITED_METHOD_CONTRACT;
         m_FiberPtrId = NULL;
@@ -1078,7 +1077,12 @@ struct JITNotification
     }
 };
 
-GPTR_DECL(JITNotification,g_pNotificationTable);
+// The maximum number of TADDR sized arguments that the SOS exception notification can use
+#define MAX_CLR_NOTIFICATION_ARGS 3
+GARY_DECL(size_t, g_clrNotificationArguments, MAX_CLR_NOTIFICATION_ARGS);
+extern void InitializeClrNotifications();
+
+GPTR_DECL(JITNotification, g_pNotificationTable);
 GVAL_DECL(ULONG32, g_dacNotificationFlags);
 
 #if defined(FEATURE_PAL) && !defined(DACCESS_COMPILE)

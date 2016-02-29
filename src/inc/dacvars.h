@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // This file contains the globals and statics that are visible to DAC.
 // It is used for the following:
 // 1. in daccess.h to build the table of DAC globals
@@ -151,7 +150,7 @@ DEFINE_DACVAR(ULONG, PTR_SharedDomain, SharedDomain__m_pSharedDomain, SharedDoma
 
 DEFINE_DACVAR(ULONG, DWORD, CExecutionEngine__TlsIndex, CExecutionEngine::TlsIndex)
 
-DEFINE_DACVAR(ULONG, LONG, CNameSpace__m_GcStructuresInvalidCnt, CNameSpace::m_GcStructuresInvalidCnt)
+DEFINE_DACVAR(ULONG, LONG, GCScan__m_GcStructuresInvalidCnt, GCScan::m_GcStructuresInvalidCnt)
 
 #if defined(FEATURE_INCLUDE_ALL_INTERFACES) || defined(FEATURE_WINDOWSPHONE)
 DEFINE_DACVAR(ULONG, int, CCLRErrorReportingManager__g_ECustomDumpFlavor, CCLRErrorReportingManager::g_ECustomDumpFlavor)
@@ -236,6 +235,7 @@ DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pPredefinedArrayTypes, ::g_pPr
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_ArgumentHandleMT, ::g_ArgumentHandleMT)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_ArgIteratorMT, ::g_ArgIteratorMT)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_TypedReferenceMT, ::g_TypedReferenceMT)
+DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pByteArrayMT, ::g_pByteArrayMT)
 
 #ifdef FEATURE_COMINTEROP
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pBaseCOMObject, ::g_pBaseCOMObject)
@@ -309,7 +309,9 @@ DEFINE_DACVAR(ULONG, PTR_BYTE, WKS__gc_heap__background_saved_lowest_address, WK
 DEFINE_DACVAR(ULONG, PTR_BYTE, WKS__gc_heap__background_saved_highest_address, WKS::gc_heap::background_saved_highest_address)
 
 #ifdef FEATURE_CORECLR
+#ifndef FEATURE_PAL
 DEFINE_DACVAR(ULONG, HANDLE, dac__g_hContinueStartupEvent, ::g_hContinueStartupEvent)
+#endif // !FEATURE_PAL
 DEFINE_DACVAR(ULONG, DWORD, CorHost2__m_dwStartupFlags, CorHost2::m_dwStartupFlags)
 #endif // FEATURE_CORECLR
 
@@ -331,6 +333,8 @@ DEFINE_DACVAR(ULONG, PTR_CLRPrivBinderAppX, CLRPrivBinderAppX__s_pSingleton, CLR
 DEFINE_DACVAR(ULONG, DWORD, dac__g_MiniMetaDataBuffMaxSize, ::g_MiniMetaDataBuffMaxSize)
 DEFINE_DACVAR(ULONG, TADDR, dac__g_MiniMetaDataBuffAddress, ::g_MiniMetaDataBuffAddress)
 #endif // FEATURE_MINIMETADATA_IN_TRIAGEDUMPS
+
+DEFINE_DACVAR(ULONG, SIZE_T, dac__g_clrNotificationArguments, ::g_clrNotificationArguments)
 
 #undef DEFINE_DACVAR
 #undef DEFINE_DACVAR_SVR

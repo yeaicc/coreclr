@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -28,9 +27,9 @@ Abstract:
 #endif  // HAVE_IEEEFP_H
 #include <errno.h>
 
-#define PAL_NAN sqrt(-1)
-#define PAL_POSINF -log(0)
-#define PAL_NEGINF log(0)
+#define PAL_NAN sqrt(-1.0)
+#define PAL_POSINF -log(0.0)
+#define PAL_NEGINF log(0.0)
 
 SET_DEFAULT_DEBUG_CHANNEL(CRT);
 

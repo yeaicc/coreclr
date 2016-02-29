@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -676,6 +675,20 @@ regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *ar
 
     regState->rsCalleeRegArgMaskLiveIn |= genRegMask(inArgReg);
 
+#if FEATURE_MULTIREG_ARGS
+#ifdef _TARGET_ARM64_
+    if ((argDsc->lvOtherArgReg != REG_STK) && (argDsc->lvOtherArgReg != REG_NA))
+    {
+        regNumber secondArgReg = argDsc->lvOtherArgReg;
+
+        noway_assert(regState->rsIsFloat == false);
+        noway_assert(genRegMask(secondArgReg) & RBM_ARG_REGS);
+
+        regState->rsCalleeRegArgMaskLiveIn |= genRegMask(secondArgReg);
+    }
+#endif // TARGET_ARM64_
+#endif // FEATURE_MULTIREG_ARGS
+
 #ifdef _TARGET_ARM_
     if (argDsc->lvType == TYP_DOUBLE)
     {
@@ -725,7 +738,8 @@ regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *ar
             }
         }
     }
-#endif
+#endif // _TARGET_ARM_
+
     return inArgReg;
 }
 
@@ -2834,16 +2848,7 @@ ASG_COMMON:
             /* Casting from integral type to floating type is special */
             if (!varTypeIsFloating(type) && varTypeIsFloating(op1->TypeGet()))
             {
-                // If dblwasInt
-                if (!opts.compCanUseSSE2)
-                {
-                    // if SSE2 is not enabled this can only be a DblWasInt case
-                    assert(gtDblWasInt(op1));
-                    regMask = rpPredictRegPick(type, PREDICT_SCRATCH_REG, lockedRegs);
-                    tree->gtUsedRegs = (regMaskSmall)regMask;
-                    goto RETURN_CHECK;
-                }
-                else
+                if (opts.compCanUseSSE2)
                 {
                     // predict for SSE2 based casting
                     if (predictReg <= PREDICT_REG)
@@ -2884,12 +2889,10 @@ ASG_COMMON:
             /* otherwise must load op1 into a register */
             goto GENERIC_UNARY;
 
-#if INLINE_MATH
-
-        case GT_MATH:
+        case GT_INTRINSIC:
 
 #ifdef _TARGET_XARCH_
-            if (tree->gtMath.gtMathFN==CORINFO_INTRINSIC_Round &&
+            if (tree->gtIntrinsic.gtIntrinsicId==CORINFO_INTRINSIC_Round &&
                     tree->TypeGet()==TYP_INT)
             {
                 // This is a special case to handle the following
@@ -2908,7 +2911,6 @@ ASG_COMMON:
             }
 #endif
             __fallthrough;
-#endif
 
         case GT_NEG:
 #ifdef _TARGET_ARM_
@@ -6436,6 +6438,9 @@ void               Compiler::rpPredictRegUse()
         // it must not be in a register trashed by the callee
         if (info.compCallUnmanaged != 0)
         {
+            assert(!opts.ShouldUsePInvokeHelpers());
+            noway_assert(info.compLvFrameListRoot < lvaCount);
+
             LclVarDsc *     pinvokeVarDsc = &lvaTable[info.compLvFrameListRoot];
 
             if (pinvokeVarDsc->lvTracked)

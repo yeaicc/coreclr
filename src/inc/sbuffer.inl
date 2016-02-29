@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 // 
 
@@ -229,7 +228,7 @@ inline void SBuffer::Set(const SBuffer &buffer)
         // From the code for Resize and EnsureMutable, this is clearly impossible.
         PREFIX_ASSUME( (this->m_buffer != NULL) || (buffer.m_size == 0) );
 
-        CopyMemory(m_buffer, buffer.m_buffer, buffer.m_size);
+        MoveMemory(m_buffer, buffer.m_buffer, buffer.m_size);
     }
 
     RETURN;
@@ -255,7 +254,7 @@ inline void SBuffer::Set(const BYTE *buffer, COUNT_T size)
     // From the code for Resize, this is clearly impossible.
     PREFIX_ASSUME( (this->m_buffer != NULL) || (size == 0) );
 
-    CopyMemory(m_buffer, buffer, size);
+    MoveMemory(m_buffer, buffer, size);
 
     RETURN;
 }

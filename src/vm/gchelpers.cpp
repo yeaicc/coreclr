@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*
  * GCHELPERS.CPP 
@@ -1314,7 +1313,7 @@ void ErectWriteBarrierForMT(MethodTable **dst, MethodTable *ref)
 
     *dst = ref;
 
-#ifdef _DEBUG
+#ifdef WRITE_BARRIER_CHECK
     updateGCShadow((Object **)dst, (Object *)ref);     // support debugging write barrier, updateGCShadow only cares that these are pointers
 #endif
     

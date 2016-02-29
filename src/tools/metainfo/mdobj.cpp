@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 #include <stdio.h>
 #include <ctype.h>
@@ -13,10 +12,10 @@
 #endif
 
 #define OBJ_EXT         ".obj"
-#define OBJ_EXT_W       L".obj"
+#define OBJ_EXT_W       W(".obj")
 #define OBJ_EXT_LEN     4
 #define LIB_EXT         ".lib"
-#define LIB_EXT_W       L".lib"
+#define LIB_EXT_W       W(".lib")
 #define LIB_EXT_LEN     4
 
 extern IMetaDataDispenserEx *g_pDisp;
@@ -266,7 +265,7 @@ void DisplayFile(__in_z __in wchar_t* szFile, BOOL isFile, ULONG DumpFilter, __i
 
     if (isFile)
     {
-        wcscpy_s(szScope, 1024, L"file:");
+        wcscpy_s(szScope, 1024, W("file:"));
         wcscat_s(szScope, 1024, szFile);
     }
     else

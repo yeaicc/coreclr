@@ -14,12 +14,10 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
     add_definitions(-D_TARGET_X86_=1)
     add_definitions(-DDBG_TARGET_32BIT=1)
     add_definitions(-DDBG_TARGET_X86=1)
-    add_definitions(-DDBG_TARGET_WIN32=1)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
     add_definitions(-D_TARGET_ARM_=1)
     add_definitions(-DDBG_TARGET_32BIT=1)
     add_definitions(-DDBG_TARGET_ARM=1)
-    add_definitions(-DDBG_TARGET_WIN32=1)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
     add_definitions(-D_TARGET_ARM64_=1)
     add_definitions(-DDBG_TARGET_64BIT=1)
@@ -39,6 +37,16 @@ add_definitions(-D_UNICODE)
 # Add the Merge flag here is needed
 add_definitions(-DFEATURE_MERGE_JIT_AND_ENGINE)
 
+if(CMAKE_CONFIGURATION_TYPES) # multi-configuration generator?
+  foreach (Config DEBUG CHECKED)  
+     set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS $<$<CONFIG:${Config}>:WRITE_BARRIER_CHECK=1>)
+  endforeach (Config)
+else()
+  if(UPPERCASE_CMAKE_BUILD_TYPE STREQUAL DEBUG OR UPPERCASE_CMAKE_BUILD_TYPE STREQUAL CHECKED)
+    add_definitions(-DWRITE_BARRIER_CHECK=1)
+  endif(UPPERCASE_CMAKE_BUILD_TYPE STREQUAL DEBUG OR UPPERCASE_CMAKE_BUILD_TYPE STREQUAL CHECKED)
+endif(CMAKE_CONFIGURATION_TYPES)
+
 if(CLR_CMAKE_PLATFORM_UNIX)
     add_compile_options(-fPIC)
 endif(CLR_CMAKE_PLATFORM_UNIX)
@@ -50,13 +58,11 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     baseassemblyspec.cpp
     binder.cpp
     ceeload.cpp
-    certificatecache.cpp
     class.cpp
     classhash.cpp
     clsload.cpp
     codeman.cpp
     comdelegate.cpp
-    contexts.cpp
     contractimpl.cpp
     coreassemblyspec.cpp
     corebindresult.cpp
@@ -66,6 +72,7 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     debughelp.cpp
     debuginfostore.cpp
     decodemd.cpp
+    disassembler.cpp
     dllimport.cpp
     domainfile.cpp
     dynamicmethod.cpp
@@ -81,9 +88,6 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     fptrstubs.cpp
     frames.cpp
     ../gc/gccommon.cpp
-    gcdecode.cpp
-    ../gc/gceesvr.cpp
-    ../gc/gceewks.cpp
     ../gc/gcscan.cpp
     ../gc/gcsvr.cpp
     ../gc/gcwks.cpp
@@ -113,7 +117,6 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     perfmap.cpp
     precode.cpp
     prestub.cpp
-    readytoruninfo.cpp
     rejit.cpp
     securitydescriptor.cpp
     securitydescriptorassembly.cpp
@@ -138,19 +141,24 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     zapsig.cpp
 )
 
+if(FEATURE_READYTORUN)
+    list(APPEND VM_SOURCES_DAC_AND_WKS_COMMON
+        readytoruninfo.cpp
+    )
+endif(FEATURE_READYTORUN)
+
 set(VM_SOURCES_DAC
     ${VM_SOURCES_DAC_AND_WKS_COMMON}
+    contexts.cpp
     threaddebugblockinginfo.cpp
 )
 
 set(VM_SOURCES_WKS
     ${VM_SOURCES_DAC_AND_WKS_COMMON}
-    appdomainhelper.cpp
     appdomainnative.cpp
     appdomainstack.cpp
     assemblyname.cpp
     assemblynative.cpp
-    assemblysink.cpp
     assemblyspec.cpp
     cachelinealloc.cpp
     callhelpers.cpp
@@ -163,7 +171,6 @@ set(VM_SOURCES_WKS
     comdynamic.cpp
     comisolatedstorage.cpp
     commemoryfailpoint.cpp
-    commethodrental.cpp
     commodule.cpp
     compatibilityswitch.cpp
     comsynchronizable.cpp
@@ -172,7 +179,6 @@ set(VM_SOURCES_WKS
     comwaithandle.cpp
     constrainedexecutionregion.cpp
     coverage.cpp
-    crossdomaincalls.cpp
     customattribute.cpp
     custommarshalerinfo.cpp
     dbggcinfodecoder.cpp
@@ -183,19 +189,18 @@ set(VM_SOURCES_WKS
     eepolicy.cpp
     eetoprofinterfaceimpl.cpp
     eventstore.cpp
-    exceptionhandling.cpp
     fcall.cpp
     fieldmarshaler.cpp
     finalizerthread.cpp
     frameworkexceptionloader.cpp
     gccover.cpp
-    gcenv.cpp
+    gcenv.ee.cpp
+    gcenv.os.cpp
     gchelpers.cpp
-    gchost.cpp
-    gcinfodecoder.cpp
     genmeth.cpp
+    ../gc/gceesvr.cpp
+    ../gc/gceewks.cpp
     ../gc/handletablecache.cpp
-    hostexecutioncontext.cpp
     hosting.cpp
     ibclogger.cpp
     ilmarshalers.cpp
@@ -209,7 +214,6 @@ set(VM_SOURCES_WKS
     marshalnative.cpp
     marvin32.cpp
     mdaassistants.cpp
-    message.cpp
     methodtablebuilder.cpp
     mlinfo.cpp
     mscorlib.cpp # <DisablePrecompiledHeaders>true</DisablePrecompiledHeaders>
@@ -225,6 +229,7 @@ set(VM_SOURCES_WKS
     profattachclient.cpp
     profattachserver.cpp
     profdetach.cpp
+    profilermetadataemitvalidator.cpp
     profilingenumerators.cpp
     profilinghelper.cpp
     proftoeeinterfaceimpl.cpp
@@ -232,11 +237,9 @@ set(VM_SOURCES_WKS
     reflectclasswriter.cpp
     reflectioninvocation.cpp
     runtimehandles.cpp
-    rwlock.cpp
     safehandle.cpp
     security.cpp
     securityattributes.cpp
-    securityconfig.cpp
     securitydeclarative.cpp
     securitydeclarativecache.cpp
     securitydescriptorappdomain.cpp
@@ -259,25 +262,22 @@ set(VM_SOURCES_WKS
     testhookmgr.cpp
     threaddebugblockinginfo.cpp
     threadsuspend.cpp
-    typeequivalencehash.cpp
     typeparse.cpp
     verifier.cpp
     weakreferencenative.cpp
 )
 
-if(CLR_CMAKE_PLATFORM_LINUX OR WIN32)
+if(FEATURE_EVENT_TRACE)
     list(APPEND VM_SOURCES_WKS
         eventtrace.cpp
         )
-endif(CLR_CMAKE_PLATFORM_LINUX OR WIN32)
+endif(FEATURE_EVENT_TRACE)
 
 if(WIN32)
 
 set(VM_SOURCES_DAC_AND_WKS_WIN32
     clrtocomcall.cpp
-    comtoclrcall.cpp
     rcwwalker.cpp
-    umthunkhash.cpp #" Condition="'$(FeatureMixedMode)' == 'true'
     winrttypenameconverter.cpp
 )
 
@@ -295,6 +295,7 @@ list(APPEND VM_SOURCES_WKS
     comconnectionpoints.cpp
     cominterfacemarshaler.cpp
     commtmemberinfomap.cpp
+    comtoclrcall.cpp
     dispatchinfo.cpp
     dispparammarshaler.cpp
     dwreport.cpp
@@ -303,8 +304,7 @@ list(APPEND VM_SOURCES_WKS
     microsoft.comservices_i.c
     mngstdinterfaces.cpp
     notifyexternals.cpp
-    olecontexthelpers.cpp
-    profilermetadataemitvalidator.cpp
+    olecontexthelpers.cpp    
     rcwrefcache.cpp
     rtlfunctions.cpp
     runtimecallablewrapper.cpp
@@ -353,9 +353,16 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
         ${ARCH_SOURCES_DIR}/gmsasm.asm
         ${ARCH_SOURCES_DIR}/jithelp.asm
     )
+elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
+    set(VM_SOURCES_WKS_ARCH_ASM
+    ${ARCH_SOURCES_DIR}/AsmHelpers.asm
+    ${ARCH_SOURCES_DIR}/CallDescrWorkerARM64.asm
+    ${ARCH_SOURCES_DIR}/CrtHelpers.asm
+    ${ARCH_SOURCES_DIR}/PInvokeStubs.asm
+    )
 endif()
 
-else()
+else(WIN32)
 
     if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
         set(VM_SOURCES_WKS_ARCH_ASM
@@ -404,10 +411,13 @@ if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
         ${ARCH_SOURCES_DIR}/jithelpersamd64.cpp
         ${ARCH_SOURCES_DIR}/jitinterfaceamd64.cpp
         ${ARCH_SOURCES_DIR}/profiler.cpp
+        exceptionhandling.cpp
+        gcinfodecoder.cpp
         jitinterfacegen.cpp
     )
 elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
     set(VM_SOURCES_DAC_AND_WKS_ARCH
+        gcdecode.cpp
         exinfo.cpp
         ${ARCH_SOURCES_DIR}/cgenx86.cpp
         ${ARCH_SOURCES_DIR}/excepx86.cpp
@@ -430,11 +440,15 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
     set(VM_SOURCES_WKS_ARCH
         ${ARCH_SOURCES_DIR}/jithelpersarm.cpp
         ${ARCH_SOURCES_DIR}/profiler.cpp
+        exceptionhandling.cpp
+        gcinfodecoder.cpp
     )
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
     set(VM_SOURCES_DAC_AND_WKS_ARCH
         ${ARCH_SOURCES_DIR}/cgenarm64.cpp
         ${ARCH_SOURCES_DIR}/stubs.cpp
+        exceptionhandling.cpp
+        gcinfodecoder.cpp
     )
 endif()
 
@@ -463,6 +477,6 @@ list(APPEND VM_SOURCES_DAC
 convert_to_absolute_path(VM_SOURCES_WKS ${VM_SOURCES_WKS})
 convert_to_absolute_path(VM_SOURCES_WKS_ARCH_ASM ${VM_SOURCES_WKS_ARCH_ASM})
 convert_to_absolute_path(VM_SOURCES_DAC ${VM_SOURCES_DAC})
-    
+
 add_subdirectory(dac)
 add_subdirectory(wks)

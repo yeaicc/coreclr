@@ -1,7 +1,6 @@
-
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // 
 // threadsuspend.CPP
 // 
@@ -480,7 +479,7 @@ DWORD Thread::ResumeThread()
     DWORD res = ::ResumeThread(m_ThreadHandleForResume);
     _ASSERTE (res != 0 && "Thread is not previously suspended");
 #ifdef _DEBUG_IMPL
-    _ASSERTE (!m_Creater.IsSameThread());
+    _ASSERTE (!m_Creater.IsCurrentThread());
     if ((res != (DWORD)-1) && (res != 0))
     {
         Thread * pCurThread = GetThread();
@@ -3102,7 +3101,7 @@ void ThreadSuspend::LockThreadStore(ThreadSuspend::SUSPEND_REASON reason)
 
 
         _ASSERTE(ThreadStore::s_pThreadStore->m_holderthreadid.IsUnknown());
-        ThreadStore::s_pThreadStore->m_holderthreadid.SetThreadId();
+        ThreadStore::s_pThreadStore->m_holderthreadid.SetToCurrentThread();
 
         LOG((LF_SYNC, INFO3, "Locked thread store\n"));
 
@@ -3147,12 +3146,12 @@ void ThreadSuspend::UnlockThreadStore(BOOL bThreadDestroyed, ThreadSuspend::SUSP
         // If Thread object has been destroyed, we need to reset the ownership info in Crst.
         _ASSERTE(!bThreadDestroyed || GetThread() == NULL);
         if (bThreadDestroyed) {
-            ThreadStore::s_pThreadStore->m_Crst.m_holderthreadid.SetThreadId();
+            ThreadStore::s_pThreadStore->m_Crst.m_holderthreadid.SetToCurrentThread();
         }
 #endif
 
         ThreadStore::s_pThreadStore->m_HoldingThread = NULL;
-        ThreadStore::s_pThreadStore->m_holderthreadid.ResetThreadId();
+        ThreadStore::s_pThreadStore->m_holderthreadid.Clear();
         ThreadStore::s_pThreadStore->Leave();
 
         Thread::EndThreadAffinity();
@@ -4038,6 +4037,7 @@ int RedirectedHandledJITCaseExceptionFilter(
     // Copy the saved context record into the EH context;
     ReplaceExceptionContextRecord(pExcepPtrs->ContextRecord, pCtx);
 
+    DWORD espValue = pCtx->Esp;
     if (pThread->GetSavedRedirectContext())
     {
         delete pCtx;
@@ -4063,7 +4063,7 @@ int RedirectedHandledJITCaseExceptionFilter(
     EXCEPTION_REGISTRATION_RECORD *pCurSEH = GetCurrentSEHRecord();
 
     // Unlink all records above the target resume ESP
-    PopSEHRecords((LPVOID)(size_t)pCtx->Esp);
+    PopSEHRecords((LPVOID)(size_t)espValue);
 
     // Link the special OS handler back in to the top
     pCurSEH->Next = GetCurrentSEHRecord();
@@ -7348,7 +7348,8 @@ void STDCALL OnHijackStructInRegsWorker(HijackArgs * pArgs)
     int orefCount = 0;
     for (int i = 0; i < eeClass->GetNumberEightBytes(); i++)
     {
-        if (eeClass->GetEightByteClassification(i) == SystemVClassificationTypeIntegerReference)
+        if ((eeClass->GetEightByteClassification(i) == SystemVClassificationTypeIntegerReference) ||
+            (eeClass->GetEightByteClassification(i) == SystemVClassificationTypeIntegerByRef))
         {
             oref[orefCount++] = ObjectToOBJECTREF(*(Object **) &pArgs->ReturnValue[i]);
         }
@@ -7396,7 +7397,8 @@ void STDCALL OnHijackStructInRegsWorker(HijackArgs * pArgs)
         orefCount = 0;
         for (int i = 0; i < eeClass->GetNumberEightBytes(); i++)
         {
-            if (eeClass->GetEightByteClassification(i) == SystemVClassificationTypeIntegerReference)
+            if ((eeClass->GetEightByteClassification(i) == SystemVClassificationTypeIntegerReference) ||
+                (eeClass->GetEightByteClassification(i) == SystemVClassificationTypeIntegerByRef))
             {
                 *((OBJECTREF *) &pArgs->ReturnValue[i]) = oref[orefCount++];
             }
@@ -8446,23 +8448,23 @@ void PALAPI HandleGCSuspensionForInterruptedThread(CONTEXT *interruptedContext)
         ClrFlsValueSwitch threadStackWalking(TlsIdx_StackWalkerWalkingThread, pThread);
 
         // Hijack the return address to point to the appropriate routine based on the method's return type.
-        void *pvHijackAddr = OnHijackScalarTripThread;
+        void *pvHijackAddr = reinterpret_cast<void*>(OnHijackScalarTripThread);
         MethodDesc *pMethodDesc = codeInfo.GetMethodDesc();
         MethodTable* pMT = NULL;
         MetaSig::RETURNTYPE type = pMethodDesc->ReturnsObject(INDEBUG_COMMA(false) &pMT);
         if (type == MetaSig::RETOBJ)
         {
-            pvHijackAddr = OnHijackObjectTripThread;
+            pvHijackAddr = reinterpret_cast<void*>(OnHijackObjectTripThread);
         }
         else if (type == MetaSig::RETBYREF)
         {
-            pvHijackAddr = OnHijackInteriorPointerTripThread;
+            pvHijackAddr = reinterpret_cast<void*>(OnHijackInteriorPointerTripThread);
         }
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
         else if (type == MetaSig::RETVALUETYPE)
         {
             pThread->SetHijackReturnTypeClass(pMT->GetClass());
-            pvHijackAddr = OnHijackStructInRegsTripThread;
+            pvHijackAddr = reinterpret_cast<void*>(OnHijackStructInRegsTripThread);
         }
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
 

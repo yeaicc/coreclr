@@ -17,6 +17,7 @@ set( CORGUIDS_IDL_SOURCES
   clrprivhosting.idl
   clrprivruntimebinders.idl
   corsym.idl
+  sospriv.idl
 )
 
 if(WIN32)
@@ -70,7 +71,9 @@ add_library(corguids ${CORGUIDS_SOURCES})
 
 # Binplace the inc files for packaging later.
 
-install (FILES cor.h
+install (FILES cfi.h
+               cor.h
+               cordebuginfo.h
                corhdr.h
                corinfo.h
                corjit.h
@@ -79,3 +82,4 @@ install (FILES cor.h
                gcinfoencoder.h
                gcinfotypes.h
                DESTINATION inc)
+install (TARGETS corguids DESTINATION lib)

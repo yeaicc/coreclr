@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // GCSample.cpp
@@ -26,11 +25,11 @@
 //      static void SuspendEE(SUSPEND_REASON reason);
 //      static void RestartEE(bool bFinishedGC); //resume threads.
 //
-// * Enumeration of threads that are running managed code:
-//      static Thread * GetThreadList(Thread * pThread);
+// * Enumeration of thread-local allocators:
+//      static void GcEnumAllocContexts (enum_alloc_context_func* fn, void* param);
 //
-// * Scanning of stack roots of given thread:
-//      static void ScanStackRoots(Thread * pThread, promote_func* fn, ScanContext* sc);
+// * Scanning of stack roots:
+//      static void GcScanRoots(promote_func* fn,  int condemned, int max_gen, ScanContext* sc);
 //
 //  The sample has trivial implementation for these methods. It is single threaded, and there are no stack roots to 
 //  be reported. There are number of other callbacks that GC calls to optionally allow the execution engine to do its 
@@ -79,7 +78,7 @@ Object * AllocateObject(MethodTable * pMT)
     return pObject;
 }
 
-#if defined(_WIN64)
+#if defined(BIT64)
 // Card byte shift is different on 64bit.
 #define card_byte_shift     11
 #else
@@ -111,12 +110,15 @@ void WriteBarrier(Object ** dst, Object * ref)
     ErectWriteBarrier(dst, ref);
 }
 
-int main(int argc, char* argv[])
+int __cdecl main(int argc, char* argv[])
 {
     //
     // Initialize system info
     //
-    InitializeSystemInfo();
+    if (!GCToOSInterface::Initialize())
+    {
+        return -1;
+    }
 
     // 
     // Initialize free object methodtable. The GC uses a special array-like methodtable as placeholder
@@ -170,7 +172,7 @@ int main(int argc, char* argv[])
     My_MethodTable;
 
     // 'My' contains the MethodTable*
-    size_t baseSize = sizeof(My);
+    uint32_t baseSize = sizeof(My);
     // GC expects the size of ObjHeader (extra void*) to be included in the size.
     baseSize = baseSize + sizeof(ObjHeader);
     // Add padding as necessary. GC requires the object size to be at least MIN_OBJECT_SIZE.

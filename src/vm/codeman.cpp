@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // codeman.cpp - a managment class for handling multiple code managers
 //
 
@@ -10,6 +9,7 @@
 #include "common.h"
 #include "jitinterface.h"
 #include "corjit.h"
+#include "jithost.h"
 #include "eetwain.h"
 #include "eeconfig.h"
 #include "excep.h"
@@ -1127,7 +1127,7 @@ BOOL IJitManager::IsFilterFunclet(EECodeInfo * pCodeInfo)
 
 #else // WIN64EXCEPTIONS
 
-FORCEINLINE PTR_VOID GetUnwindDataBlob(TADDR moduleBase, PTR_RUNTIME_FUNCTION pRuntimeFunction, /* out */ SIZE_T * pSize)
+PTR_VOID GetUnwindDataBlob(TADDR moduleBase, PTR_RUNTIME_FUNCTION pRuntimeFunction, /* out */ SIZE_T * pSize)
 {
     *pSize = 0;
     return dac_cast<PTR_VOID>(pRuntimeFunction->UnwindData + moduleBase);
@@ -1333,6 +1333,8 @@ enum JIT_LOAD_STATUS
     JIT_LOAD_STATUS_DONE_LOAD,                         // LoadLibrary of the JIT dll succeeded.
     JIT_LOAD_STATUS_DONE_GET_SXSJITSTARTUP,            // GetProcAddress for "sxsJitStartup" succeeded.
     JIT_LOAD_STATUS_DONE_CALL_SXSJITSTARTUP,           // Calling sxsJitStartup() succeeded.
+    JIT_LOAD_STATUS_DONE_GET_JITSTARTUP,               // GetProcAddress for "jitStartup" succeeded.
+    JIT_LOAD_STATUS_DONE_CALL_JITSTARTUP,              // Calling jitStartup() succeeded.
     JIT_LOAD_STATUS_DONE_GET_GETJIT,                   // GetProcAddress for "getJit" succeeded.
     JIT_LOAD_STATUS_DONE_CALL_GETJIT,                  // Calling getJit() succeeded.
     JIT_LOAD_STATUS_DONE_CALL_GETVERSIONIDENTIFIER,    // Calling ICorJitCompiler::getVersionIdentifier() succeeded.
@@ -1387,16 +1389,17 @@ static void LoadAndInitializeJIT(LPCWSTR pwzJitName, OUT HINSTANCE* phJit, OUT I
     HRESULT hr = E_FAIL;
 
 #ifdef FEATURE_MERGE_JIT_AND_ENGINE
-    WCHAR CoreClrFolder[MAX_LONGPATH + 1];
+    PathString CoreClrFolderHolder;
     extern HINSTANCE g_hThisInst;
-    if (WszGetModuleFileName(g_hThisInst, CoreClrFolder, MAX_LONGPATH))
+    if (WszGetModuleFileName(g_hThisInst, CoreClrFolderHolder))
     {
-        WCHAR *filePtr = wcsrchr(CoreClrFolder, DIRECTORY_SEPARATOR_CHAR_W);
-        if (filePtr)
+        SString::Iterator iter = CoreClrFolderHolder.End();
+        BOOL findSep = CoreClrFolderHolder.FindBack(iter, DIRECTORY_SEPARATOR_CHAR_W);
+        if (findSep)
         {
-            filePtr[1] = W('\0');
-            wcscat_s(CoreClrFolder, MAX_LONGPATH, pwzJitName);
-            *phJit = CLRLoadLibrary(CoreClrFolder);
+            SString sJitName(pwzJitName);
+            CoreClrFolderHolder.Replace(iter + 1, CoreClrFolderHolder.End() - (iter + 1), sJitName);
+            *phJit = CLRLoadLibrary(CoreClrFolderHolder.GetUnicode());
             if (*phJit != NULL)
             {
                 hr = S_OK;
@@ -1424,6 +1427,18 @@ static void LoadAndInitializeJIT(LPCWSTR pwzJitName, OUT HINSTANCE* phJit, OUT I
                 (*sxsJitStartupFn) (cccallbacks);
 
                 pJitLoadData->jld_status = JIT_LOAD_STATUS_DONE_CALL_SXSJITSTARTUP;
+
+                typedef void (__stdcall* pjitStartup)(ICorJitHost*);
+                pjitStartup jitStartupFn = (pjitStartup) GetProcAddress(*phJit, "jitStartup");
+
+                if (jitStartupFn)
+                {
+                    pJitLoadData->jld_status = JIT_LOAD_STATUS_DONE_GET_JITSTARTUP;
+
+                    (*jitStartupFn)(JitHost::getJitHost());
+
+                    pJitLoadData->jld_status = JIT_LOAD_STATUS_DONE_CALL_JITSTARTUP;
+                }
 
                 typedef ICorJitCompiler* (__stdcall* pGetJitFn)();
                 pGetJitFn getJitFn = (pGetJitFn) GetProcAddress(*phJit, "getJit");
@@ -1488,6 +1503,7 @@ static void LoadAndInitializeJIT(LPCWSTR pwzJitName, OUT HINSTANCE* phJit, OUT I
 }
 
 #ifdef FEATURE_MERGE_JIT_AND_ENGINE
+EXTERN_C void __stdcall jitStartup(ICorJitHost* host);
 EXTERN_C ICorJitCompiler* __stdcall getJit();
 #endif // FEATURE_MERGE_JIT_AND_ENGINE
 
@@ -1515,11 +1531,11 @@ BOOL EEJitManager::LoadJIT()
 
 #ifdef FEATURE_MERGE_JIT_AND_ENGINE
 
-    typedef ICorJitCompiler* (__stdcall* pGetJitFn)();
-    pGetJitFn getJitFn = (pGetJitFn) getJit;
     EX_TRY
     {
-        newJitCompiler = (*getJitFn)();
+        jitStartup(JitHost::getJitHost());
+
+        newJitCompiler = getJit();
 
         // We don't need to call getVersionIdentifier(), since the JIT is linked together with the VM.
     }

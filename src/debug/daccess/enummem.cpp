@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 // File: enummem.cpp
 // 
@@ -403,7 +402,7 @@ HRESULT ClrDataAccess::DumpManagedObject(CLRDataEnumMemoryFlags flags, OBJECTREF
         return status;
     }
     
-    if (!CNameSpace::GetGcRuntimeStructuresValid ())
+    if (!GCScan::GetGcRuntimeStructuresValid ())
     {
         // GC is in progress, don't dump this object
         return S_OK;
@@ -461,7 +460,7 @@ HRESULT ClrDataAccess::DumpManagedExcepObject(CLRDataEnumMemoryFlags flags, OBJE
         return S_OK;
     }
 
-    if (!CNameSpace::GetGcRuntimeStructuresValid ())
+    if (!GCScan::GetGcRuntimeStructuresValid ())
     {
         // GC is in progress, don't dump this object
         return S_OK;

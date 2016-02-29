@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -949,7 +948,7 @@ void                CodeGen::psiBegProlog()
             bool isStructHandled = false;
 #if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
             SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR structDesc;
-            if (lclVarDsc1->TypeGet() == TYP_STRUCT)
+            if (varTypeIsStruct(lclVarDsc1))
             {
                 CORINFO_CLASS_HANDLE typeHnd = lclVarDsc1->lvVerTypeInfo.GetClassHandle();
                 assert(typeHnd != nullptr);
@@ -1043,6 +1042,10 @@ void                CodeGen::psiBegProlog()
 
 void                CodeGen::psiAdjustStackLevel(unsigned size)
 {
+#ifdef DEBUGGING_SUPPORT
+    if (!compiler->opts.compScopeInfo || (compiler->info.compVarScopesCount == 0))
+        return;
+
     assert(compiler->compGeneratingProlog);
 
 #ifdef ACCURATE_PROLOG_DEBUG_INFO
@@ -1069,6 +1072,7 @@ void                CodeGen::psiAdjustStackLevel(unsigned size)
     }
     
 #endif // ACCURATE_PROLOG_DEBUG_INFO
+#endif // DEBUGGING_SUPPORT
 }
 
 
@@ -1082,6 +1086,10 @@ void                CodeGen::psiAdjustStackLevel(unsigned size)
 
 void                CodeGen::psiMoveESPtoEBP()
 {
+#ifdef DEBUGGING_SUPPORT
+    if (!compiler->opts.compScopeInfo || (compiler->info.compVarScopesCount == 0))
+        return;
+
     assert(compiler->compGeneratingProlog);
     assert(doubleAlignOrFramePointerUsed());
 
@@ -1109,6 +1117,7 @@ void                CodeGen::psiMoveESPtoEBP()
     }
     
 #endif // ACCURATE_PROLOG_DEBUG_INFO
+#endif // DEBUGGING_SUPPORT
 }
 
 
@@ -1126,6 +1135,7 @@ void            CodeGen::psiMoveToReg (unsigned    varNum,
                                         regNumber   reg, 
                                         regNumber   otherReg)
 {
+#ifdef DEBUGGING_SUPPORT
     assert(compiler->compGeneratingProlog);
 
     if (!compiler->opts.compScopeInfo)
@@ -1175,6 +1185,7 @@ void            CodeGen::psiMoveToReg (unsigned    varNum,
            !"Parameter scope not found (Assert doesnt always indicate error)");
 
 #endif // ACCURATE_PROLOG_DEBUG_INFO
+#endif // DEBUGGING_SUPPORT
 }
 
 
@@ -1187,6 +1198,10 @@ void            CodeGen::psiMoveToReg (unsigned    varNum,
 
 void                CodeGen::psiMoveToStack(unsigned   varNum)
 {
+#ifdef DEBUGGING_SUPPORT
+    if (!compiler->opts.compScopeInfo || (compiler->info.compVarScopesCount == 0))
+        return;
+
     assert(compiler->compGeneratingProlog);
     assert( compiler->lvaTable[varNum].lvIsRegArg);
     assert(!compiler->lvaTable[varNum].lvRegister);
@@ -1223,6 +1238,7 @@ void                CodeGen::psiMoveToStack(unsigned   varNum)
            !"Parameter scope not found (Assert doesnt always indicate error)");
 
 #endif // ACCURATE_PROLOG_DEBUG_INFO   
+#endif // DEBUGGING_SUPPORT
 }
 
 /*****************************************************************************

@@ -1,5 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 using System;
 using System.Collections;
 using System.Text;
@@ -379,6 +380,24 @@ namespace System.IO {
             }
         }
 
+        [System.Security.SecurityCritical]
+        private unsafe bool OrdinalEqualsStackAlloc(String compareTo)
+        {
+            Contract.Requires(useStackAlloc, "Currently no efficient implementation for StringBuilder.OrdinalEquals(String)");
+
+            if (Length != compareTo.Length) {
+                return false;
+            }
+
+            for (int i = 0; i < compareTo.Length; i++) {
+                if (m_arrayPtr[i] != compareTo[i]) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         [System.Security.SecuritySafeCritical]
         public override String ToString() {
             if (useStackAlloc) {
@@ -386,6 +405,22 @@ namespace System.IO {
             }
             else {
                 return m_sb.ToString();
+            }
+        }
+
+        [System.Security.SecuritySafeCritical]
+        internal String ToStringOrExisting(String existingString)
+        {
+            if (useStackAlloc) {
+                return OrdinalEqualsStackAlloc(existingString) ?
+                    existingString : 
+                    new String(m_arrayPtr, 0, Length);
+            }
+            else {
+                string newString = m_sb.ToString(); // currently no good StringBuilder.OrdinalEquals(string)
+                return String.Equals(newString, existingString, StringComparison.Ordinal) ?
+                    existingString :
+                    newString;
             }
         }
 

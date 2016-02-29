@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // switches.h switch configuration of common runtime features
 //
@@ -87,11 +86,16 @@
 
 #elif defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_)
     #define PAGE_SIZE               0x1000
-    #define USE_UPPER_ADDRESS       1
     #define UPPER_ADDRESS_MAPPING_FACTOR 2
     #define CLR_UPPER_ADDRESS_MIN   0x64400000000
     #define CODEHEAP_START_ADDRESS  0x64480000000
     #define CLR_UPPER_ADDRESS_MAX   0x644FC000000
+
+#if !defined(FEATURE_PAL)
+    #define USE_UPPER_ADDRESS       1
+#else
+    #define USE_UPPER_ADDRESS       0
+#endif // !FEATURE_PAL
 
 #else
     #error Please add a new #elif clause and define all portability macros for the new platform
@@ -135,8 +139,7 @@
 #error "Platform must support either safe thread suspension or GC polling"
 #endif
 
-// GCCoverage has a dependency on msvcdisXXX.dll, which is not available for CoreSystem. Hence, it is disabled for CoreSystem builds.
-#if defined(STRESS_HEAP) && defined(_DEBUG) && defined(FEATURE_HIJACK) && !(defined(FEATURE_CORESYSTEM) && (defined(_TARGET_X86_) || defined(_TARGET_AMD64_)))
+#if defined(STRESS_HEAP) && defined(_DEBUG) && defined(FEATURE_HIJACK)
 #define HAVE_GCCOVER
 #endif
 

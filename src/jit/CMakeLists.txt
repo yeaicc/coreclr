@@ -6,59 +6,62 @@ include_directories("../inc")
 # Enable the following for UNIX altjit on Windows
 # add_definitions(-DALT_JIT)
 
-if (WIN32) 
 if (CLR_CMAKE_PLATFORM_ARCH_AMD64)
-  add_definitions(-DFEATURE_SIMD -DFEATURE_AVX_SUPPORT) 
+  add_definitions(-DFEATURE_SIMD) 
+  add_definitions(-DFEATURE_AVX_SUPPORT) 
 endif (CLR_CMAKE_PLATFORM_ARCH_AMD64)
-endif (WIN32)
 
 set( JIT_SOURCES
   alloc.cpp
+  assertionprop.cpp
   bitset.cpp
   block.cpp
+  codegencommon.cpp
   compiler.cpp
+  copyprop.cpp
   disasm.cpp
-  eeinterface.cpp
+  earlyprop.cpp
   ee_il_dll.cpp
-  jiteh.cpp
+  eeinterface.cpp
+  emit.cpp
   error.cpp
   flowgraph.cpp
-  gcinfo.cpp
   gcdecode.cpp
   gcencode.cpp
+  gcinfo.cpp
   gentree.cpp
   gschecks.cpp
   hashbv.cpp
   importer.cpp
+  inline.cpp
+  inlinepolicy.cpp
   instr.cpp
+  jiteh.cpp
+  jittelemetry.cpp
   lclvars.cpp
   liveness.cpp
+  loopcloning.cpp
+  lower.cpp
+  lsra.cpp
   morph.cpp
-  optimizer.cpp
   optcse.cpp
+  optimizer.cpp
+  rangecheck.cpp
   rationalize.cpp
   regalloc.cpp
-  regset.cpp
   register_arg_convention.cpp
-  emit.cpp
+  regset.cpp
   scopeinfo.cpp
   sharedfloat.cpp
   sm.cpp
   smdata.cpp
   smweights.cpp
+  ssabuilder.cpp
+  ssarenamestate.cpp
   typeinfo.cpp
   unwind.cpp
   utils.cpp
-  ssabuilder.cpp
-  ssarenamestate.cpp
   valuenum.cpp
-  copyprop.cpp
-  codegencommon.cpp
-  assertionprop.cpp
-  rangecheck.cpp
-  loopcloning.cpp
-  lower.cpp
-  lsra.cpp
 )
 
 if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
@@ -78,6 +81,8 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
     lowerarm.cpp
     codegenarm.cpp
     unwindarm.cpp
+    codegenlegacy.cpp
+    registerfp.cpp
   )
 elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
   set( ARCH_SOURCES
@@ -85,6 +90,8 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
     targetx86.cpp
     lowerxarch.cpp
     codegenxarch.cpp
+    codegenlegacy.cpp
+    stackfp.cpp
   )
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
   set( ARCH_SOURCES
@@ -134,3 +141,7 @@ set(CLR_EXPORTED_SYMBOL_FILE ${CLRJIT_EXPORTS_DEF})
 add_subdirectory(dll)
 add_subdirectory(crossgen)
 add_subdirectory(standalone)
+
+if (CLR_CMAKE_PLATFORM_ARCH_I386 OR CLR_CMAKE_PLATFORM_ARCH_ARM)
+    add_subdirectory(protojit)
+endif (CLR_CMAKE_PLATFORM_ARCH_I386 OR CLR_CMAKE_PLATFORM_ARCH_ARM)

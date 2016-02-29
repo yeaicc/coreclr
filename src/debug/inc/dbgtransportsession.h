@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #ifndef __DBG_TRANSPORT_SESSION_INCLUDED
@@ -306,9 +305,11 @@ enum IPCEventType
 class DbgTransportSession
 {
 public:
-
     // No real work done in the constructor. Use Init() instead.
     DbgTransportSession();
+
+    // Cleanup what is allocated/created in Init()
+    ~DbgTransportSession();
 
     // Allocates initial resources (including starting the transport thread). The session will start in the
     // SS_Opening state. That is, the RS will immediately start trying to Connect() a connection while the
@@ -329,6 +330,28 @@ public:
     // SS_Resync). On either side the session will no longer be functional after this call returns (though
     // Init() may be called again to start over from the beginning).
     void Shutdown();
+
+    // Cleans up the named pipe connection so no tmp files are left behind. Does only
+    // the minimum and must be safe to call at any time. Called during PAL ExitProcess,
+    // TerminateProcess and for unhandled native exceptions and asserts.
+    void AbortConnection();
+
+    LONG AddRef()
+    {
+        LONG ref = InterlockedIncrement(&m_ref);
+        return ref;
+    }
+
+    LONG Release()
+    {
+        _ASSERTE(m_ref > 0);
+        LONG ref = InterlockedDecrement(&m_ref);
+        if (ref == 0)
+        {
+            delete this;
+        }
+        return ref;
+    }
 
 #ifndef RIGHT_SIDE_COMPILE
     // API used only by the LS to drive the transport into a state where it won't accept connections. This is
@@ -371,6 +394,7 @@ public:
     // Read and write memory on the LS from the RS.
     HRESULT ReadMemory(PBYTE pbRemoteAddress, PBYTE pbBuffer, SIZE_T cbBuffer);
     HRESULT WriteMemory(PBYTE pbRemoteAddress, PBYTE pbBuffer, SIZE_T cbBuffer);
+    HRESULT VirtualUnwind(DWORD threadId, ULONG32 contextSize, PBYTE context);
 
     // Read and write the debugger control block on the LS from the RS.
     HRESULT GetDCB(DebuggerIPCControlBlock *pDCB);
@@ -417,6 +441,7 @@ private:
         // Misc management operations.
         MT_ReadMemory,      // RS <-> LS : RS wants to read LS memory block (or LS is replying to such a request)
         MT_WriteMemory,     // RS <-> LS : RS wants to write LS memory block (or LS is replying to such a request)
+        MT_VirtualUnwind,   // RS <-> LS : RS wants to LS unwind a stack frame (or LS is replying to such a request)
         MT_GetDCB,          // RS <-> LS : RS wants to read LS DCB (or LS is replying to such a request)
         MT_SetDCB,          // RS <-> LS : RS wants to write LS DCB (or LS is replying to such a request)
         MT_GetAppDomainCB,  // RS <-> LS : RS wants to read LS AppDomainCB (or LS is replying to such a request)
@@ -557,6 +582,7 @@ private:
         LONG        m_cSentEvent;
         LONG        m_cSentReadMemory;
         LONG        m_cSentWriteMemory;
+        LONG        m_cSentVirtualUnwind;
         LONG        m_cSentGetDCB;
         LONG        m_cSentSetDCB;
         LONG        m_cSentGetAppDomainCB;
@@ -571,6 +597,7 @@ private:
         LONG        m_cReceivedEvent;
         LONG        m_cReceivedReadMemory;
         LONG        m_cReceivedWriteMemory;
+        LONG        m_cReceivedVirtualUnwind;
         LONG        m_cReceivedGetDCB;
         LONG        m_cReceivedSetDCB;
         LONG        m_cReceivedGetAppDomainCB;
@@ -609,6 +636,9 @@ private:
 #define DBG_TRANSPORT_ADD_STAT(_name, _amount)
 
 #endif // _DEBUG
+
+    // Reference count
+    LONG m_ref;
 
     // Some flags used to record how far we got in Init() (used for cleanup in Shutdown()).
     bool m_fInitStateLock;

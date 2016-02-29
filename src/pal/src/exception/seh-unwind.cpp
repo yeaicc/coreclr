@@ -1,8 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Copyright (c) Geoff Norton. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -159,19 +157,19 @@ static void UnwindContextToWinContext(unw_cursor_t *cursor, CONTEXT *winContext)
 
 static void GetContextPointer(unw_cursor_t *cursor, unw_context_t *unwContext, int reg, SIZE_T **contextPointer)
 {
-#if defined(__APPLE__)
-    // Returning NULL indicates that we don't have context pointers available
-    *contextPointer = NULL;
-#else
+#if defined(HAVE_UNW_GET_SAVE_LOC)
     unw_save_loc_t saveLoc;
     unw_get_save_loc(cursor, reg, &saveLoc);
     if (saveLoc.type == UNW_SLT_MEMORY)
     {
         SIZE_T *pLoc = (SIZE_T *)saveLoc.u.addr;
         // Filter out fake save locations that point to unwContext 
-        if ((pLoc < (SIZE_T *)unwContext) || ((SIZE_T *)(unwContext + 1) <= pLoc))
+        if (unwContext == NULL || (pLoc < (SIZE_T *)unwContext) || ((SIZE_T *)(unwContext + 1) <= pLoc))
             *contextPointer = (SIZE_T *)saveLoc.u.addr;
     }
+#else
+    // Returning NULL indicates that we don't have context pointers available
+    *contextPointer = NULL;
 #endif
 }
 
@@ -304,7 +302,7 @@ BOOL PAL_VirtualUnwind(CONTEXT *context, KNONVOLATILE_CONTEXT_POINTERS *contextP
 
 // These methods are only used on the AMD64 build
 #ifdef _AMD64_
-#ifdef __LINUX__
+#ifdef HAVE_UNW_GET_ACCESSORS
 
 static struct LibunwindCallbacksInfoType
 {
@@ -483,7 +481,6 @@ BOOL PAL_VirtualUnwindOutOfProc(CONTEXT *context,
     LockHolder lockHolder(&lock.cs);
 
     int st;
-    unw_context_t unwContext;
     unw_cursor_t cursor;
     unw_addr_space_t addrSpace = 0;
     void *libunwindUptPtr = NULL;
@@ -491,7 +488,7 @@ BOOL PAL_VirtualUnwindOutOfProc(CONTEXT *context,
 
     LibunwindCallbacksInfo.Context = context;
     LibunwindCallbacksInfo.readMemCallback = readMemCallback;
-    WinContextToUnwindContext(context, &unwContext);
+
     addrSpace = unw_create_addr_space(&unwind_accessors, 0);
 #ifdef HAVE_LIBUNWIND_PTRACE    
     libunwindUptPtr = _UPT_create(pid);
@@ -514,7 +511,7 @@ BOOL PAL_VirtualUnwindOutOfProc(CONTEXT *context,
 
     if (contextPointers != NULL)
     {
-        GetContextPointers(&cursor, &unwContext, contextPointers);
+        GetContextPointers(&cursor, NULL, contextPointers);
     }
     result = TRUE;
 
@@ -531,7 +528,7 @@ Exit:
     }    
     return result;
 }
-#else // __LINUX__
+#else // HAVE_UNW_GET_ACCESSORS
 
 BOOL PAL_VirtualUnwindOutOfProc(CONTEXT *context, 
                                 KNONVOLATILE_CONTEXT_POINTERS *contextPointers, 
@@ -542,7 +539,7 @@ BOOL PAL_VirtualUnwindOutOfProc(CONTEXT *context,
     return FALSE;
 }
 
-#endif // !__LINUX__
+#endif // !HAVE_UNW_GET_ACCESSORS
 #endif // _AMD64_
 
 /*++
@@ -556,9 +553,16 @@ Note:
     The name of this function and the name of the ExceptionRecord 
     parameter is used in the sos lldb plugin code to read the exception
     record. See coreclr\src\ToolBox\SOS\lldbplugin\debugclient.cpp.
+
+    This function must not be inlined or optimized so the below PAL_VirtualUnwind
+    calls end up with RaiseException caller's context and so the above debugger 
+    code finds the function and ExceptionRecord parameter.
 --*/
 PAL_NORETURN
-static void RtlpRaiseException(EXCEPTION_RECORD *ExceptionRecord)
+__attribute__((noinline))
+__attribute__((optnone))
+static void 
+RtlpRaiseException(EXCEPTION_RECORD *ExceptionRecord)
 {
     // Capture the context of RtlpRaiseException.
     CONTEXT ContextRecord;
@@ -572,6 +576,7 @@ static void RtlpRaiseException(EXCEPTION_RECORD *ExceptionRecord)
     // The frame we're looking at now is RaiseException. We have to unwind one 
     // level further to get the actual context user code could be resumed at.
     PAL_VirtualUnwind(&ContextRecord, NULL);
+
 #if defined(_X86_)
     ExceptionRecord->ExceptionAddress = (void *) ContextRecord.Eip;
 #elif defined(_AMD64_)
@@ -582,19 +587,7 @@ static void RtlpRaiseException(EXCEPTION_RECORD *ExceptionRecord)
 #error unsupported architecture
 #endif
 
-    EXCEPTION_POINTERS pointers;
-    pointers.ExceptionRecord = ExceptionRecord;
-    pointers.ContextRecord = &ContextRecord;
-
-    SEHRaiseException(InternalGetCurrentThread(), &pointers, 0);
-}
-
-PAL_NORETURN
-void SEHRaiseException(CPalThread *pthrCurrent,
-                       PEXCEPTION_POINTERS lpExceptionPointers,
-                       int signal_code)
-{
-    throw PAL_SEHException(lpExceptionPointers->ExceptionRecord, lpExceptionPointers->ContextRecord);
+    throw PAL_SEHException(ExceptionRecord, &ContextRecord);
 }
 
 /*++

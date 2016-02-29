@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #include "dbgtransportsession.h"
@@ -36,7 +35,35 @@ DbgTransportSession *g_pDbgTransport = NULL;
 // No real work done in the constructor. Use Init() instead.
 DbgTransportSession::DbgTransportSession()
 {
+    m_ref = 1;
     m_eState = SS_Closed;
+}
+
+DbgTransportSession::~DbgTransportSession()
+{
+    DbgTransportLog(LC_Proxy, "DbgTransportSession::~DbgTransportSession() called");
+
+    // No other threads are now using session resources. We're free to deallocate them as we wish (if they
+    // were allocated in the first place).
+    if (m_hTransportThread)
+        CloseHandle(m_hTransportThread);
+    if (m_rghEventReadyEvent[IPCET_OldStyle])
+        CloseHandle(m_rghEventReadyEvent[IPCET_OldStyle]);
+    if (m_rghEventReadyEvent[IPCET_DebugEvent])
+        CloseHandle(m_rghEventReadyEvent[IPCET_DebugEvent]);
+    if (m_pEventBuffers)
+        delete [] m_pEventBuffers;
+
+#ifdef RIGHT_SIDE_COMPILE
+    if (m_hSessionOpenEvent)
+        CloseHandle(m_hSessionOpenEvent);
+
+    if (m_hProcessExited)
+        CloseHandle(m_hProcessExited);
+#endif // RIGHT_SIDE_COMPILE
+
+    if (m_fInitStateLock)
+        m_sStateLock.Destroy();
 }
 
 // Allocates initial resources (including starting the transport thread). The session will start in the
@@ -56,6 +83,12 @@ HRESULT DbgTransportSession::Init(DebuggerIPCControlBlock *pDCB, AppDomainEnumer
     // Start with a blank slate so that Shutdown() on a partially initialized instance will only do the
     // cleanup necessary.
     memset(this, 0, sizeof(*this));
+
+    // Because of the above memset the embeded classes/structs need to be reinitialized especially
+    // the two way pipe; it expects the in/out handles to be -1 instead of 0.
+    m_ref = 1;
+    m_pipe = TwoWayPipe();
+    m_sStateLock = DbgTransportLock();
 
     // Initialize all per-session state variables.
     InitSessionState();
@@ -119,9 +152,13 @@ HRESULT DbgTransportSession::Init(DebuggerIPCControlBlock *pDCB, AppDomainEnumer
 
     // Start the transport thread which handles forming and re-forming connections, driving the session
     // state to SS_Open and receiving and initially processing all incoming traffic.
+    AddRef();
     m_hTransportThread = CreateThread(NULL, 0, TransportWorkerStatic, this, 0, NULL);
     if (m_hTransportThread == NULL)
+    {
+        Release();
         return E_OUTOFMEMORY;
+    }
 
     return S_OK;
 }
@@ -160,7 +197,7 @@ void DbgTransportSession::Shutdown()
             SessionState ePreviousState = m_eState;
             m_eState = SS_Closed;
 
-            if ((ePreviousState != SS_Opening_NC) && (ePreviousState != SS_Resync_NC) && (ePreviousState != SS_Closed))
+            if (ePreviousState != SS_Closed)
             {
                 m_pipe.Disconnect();
             }
@@ -171,36 +208,18 @@ void DbgTransportSession::Shutdown()
         // Signal the m_hSessionOpenEvent now to quickly error out any callers of WaitForSessionToOpen().
         SetEvent(m_hSessionOpenEvent);
 #endif // RIGHT_SIDE_COMPILE
-
-        // Now let the transport thread shut itself down cleanly. This will take care of emptying the send queue
-        // as well.
-        WaitForSingleObject(m_hTransportThread, INFINITE);
     }
 
-    // No other threads are now using session resources. We're free to deallocate them as we wish (if they
-    // were allocated in the first place).
-    if (m_hTransportThread)
-        CloseHandle(m_hTransportThread);
-    if (m_rghEventReadyEvent[IPCET_OldStyle])
-        CloseHandle(m_rghEventReadyEvent[IPCET_OldStyle]);
-    if (m_rghEventReadyEvent[IPCET_DebugEvent])
-        CloseHandle(m_rghEventReadyEvent[IPCET_DebugEvent]);
-    if (m_pEventBuffers)
-        delete [] m_pEventBuffers;
+    // The transport instance is no longer valid
+    Release();
+}
 
-#ifdef RIGHT_SIDE_COMPILE
-    if (m_hSessionOpenEvent)
-        CloseHandle(m_hSessionOpenEvent);
-
-    if (m_hProcessExited)
-    {
-        CloseHandle(m_hProcessExited);
-    }
-#endif // RIGHT_SIDE_COMPILE
-
-    if (m_fInitStateLock)
-        m_sStateLock.Destroy();
-
+// Cleans up the named pipe connection so no tmp files are left behind. Does only
+// the minimum and must be safe to call at any time. Called during PAL ExitProcess,
+// TerminateProcess and for unhandled native exceptions and asserts.
+void DbgTransportSession::AbortConnection()
+{
+    m_pipe.Disconnect();
 }
 
 #ifndef RIGHT_SIDE_COMPILE
@@ -459,7 +478,6 @@ void MarshalDCBToDCBTransport(DebuggerIPCControlBlock* pIn, DebuggerIPCControlBl
     pOut->m_specialThreadListDirty =         pIn->m_specialThreadListDirty;
 
     pOut->m_rightSideShouldCreateHelperThread = pIn->m_rightSideShouldCreateHelperThread;
-
 }
 
 
@@ -502,6 +520,16 @@ HRESULT DbgTransportSession::WriteMemory(PBYTE pbRemoteAddress, PBYTE pbBuffer, 
     // If we reached here the send was successful but the actual memory operation may not have been (due to
     // unmapped memory or page protections etc.). So the final result comes back to us in the reply.
     return sMessage.m_sHeader.TypeSpecificData.MemoryAccess.m_hrResult;
+}
+
+HRESULT DbgTransportSession::VirtualUnwind(DWORD threadId, ULONG32 contextSize, PBYTE context)
+{
+    DbgTransportLog(LC_Requests, "Sending 'VirtualUnwind'");
+    DBG_TRANSPORT_INC_STAT(SentVirtualUnwind);
+
+    Message sMessage;
+    sMessage.Init(MT_VirtualUnwind, context, contextSize, context, contextSize);
+    return SendRequestMessageAndWait(&sMessage);
 }
 
 // Read and write the debugger control block on the LS from the RS.
@@ -923,6 +951,7 @@ void DbgTransportSession::FlushSendQueue(DWORD dwLastProcessedId)
             MessageType eType = pMsg->m_sHeader.m_eType;
             if (eType != MT_ReadMemory &&
                 eType != MT_WriteMemory &&
+                eType != MT_VirtualUnwind &&
                 eType != MT_GetDCB &&
                 eType != MT_SetDCB &&
                 eType != MT_GetAppDomainCB)
@@ -1618,6 +1647,9 @@ void DbgTransportSession::TransportWorker()
             // temporary data block used in DCB messages
             DebuggerIPCControlBlockTransport dcbt;
 
+            // temporary virtual stack unwind context buffer
+            CONTEXT frameContext;
+
             // Read a message header block.
             if (!ReceiveBlock((PBYTE)&sReceiveHeader, sizeof(MessageHeader)))
                 HANDLE_TRANSIENT_ERROR();
@@ -1908,6 +1940,33 @@ void DbgTransportSession::TransportWorker()
 #endif // RIGHT_SIDE_COMPILE
                 break;
 
+            case MT_VirtualUnwind:
+#ifdef RIGHT_SIDE_COMPILE                
+                if (!ProcessReply(&sReceiveHeader))
+                    HANDLE_TRANSIENT_ERROR();
+#else // RIGHT_SIDE_COMPILE
+                if (sReceiveHeader.m_cbDataBlock != (DWORD)sizeof(frameContext))
+                {
+                    _ASSERTE(!"Inconsistent VirtualUnwind request");
+                    HANDLE_CRITICAL_ERROR();
+                }
+
+                if (!ReceiveBlock((PBYTE)&frameContext, sizeof(frameContext)))
+                {
+                    HANDLE_TRANSIENT_ERROR();
+                }
+
+                if (!PAL_VirtualUnwind(&frameContext, NULL))
+                {
+                    HANDLE_TRANSIENT_ERROR();
+                }
+
+                fReplyRequired = true;
+                pbOptReplyData = (PBYTE)&frameContext;
+                cbOptReplyData = sizeof(frameContext);
+#endif // RIGHT_SIDE_COMPILE
+                break;
+
             case MT_GetDCB:
 #ifdef RIGHT_SIDE_COMPILE                
                 if (!ProcessReply(&sReceiveHeader))
@@ -2053,6 +2112,7 @@ void DbgTransportSession::TransportWorker()
 #ifdef RIGHT_SIDE_COMPILE
             case MT_ReadMemory:
             case MT_WriteMemory:
+            case MT_VirtualUnwind:
             case MT_GetDCB:
             case MT_SetDCB:
             case MT_GetAppDomainCB:
@@ -2062,6 +2122,7 @@ void DbgTransportSession::TransportWorker()
 #else // RIGHT_SIDE_COMPILE
             case MT_ReadMemory:
             case MT_WriteMemory:
+            case MT_VirtualUnwind:
             case MT_GetDCB:
             case MT_SetDCB:
             case MT_GetAppDomainCB:
@@ -2082,6 +2143,10 @@ void DbgTransportSession::TransportWorker()
             }
         }
     } // Leave m_sStateLock
+
+    // Now release all the resources allocated for the transport now that the
+    // worker thread isn't using them anymore.
+    Release();
 }
 
 // Given a fully initialized debugger event structure, return the size of the structure in bytes (this is not
@@ -2441,6 +2506,8 @@ const char *DbgTransportSession::MessageName(MessageType eType)
         return "ReadMemory";
     case MT_WriteMemory:
         return "WriteMemory";
+    case MT_VirtualUnwind:
+        return "VirtualUnwind";
     case MT_GetDCB:
         return "GetDCB";
     case MT_SetDCB:
@@ -2497,6 +2564,10 @@ void DbgTransportSession::DbgTransportLogMessageReceived(MessageHeader *pHeader)
                         (DWORD)pHeader->TypeSpecificData.MemoryAccess.m_cbLeftSideBuffer);
         DBG_TRANSPORT_INC_STAT(ReceivedWriteMemory);
         return;
+    case MT_VirtualUnwind:
+        DbgTransportLog(LC_Requests,  "Received 'VirtualUnwind' reply");
+        DBG_TRANSPORT_INC_STAT(ReceivedVirtualUnwind);
+        return;
     case MT_GetDCB:
         DbgTransportLog(LC_Requests,  "Received 'GetDCB' reply");
         DBG_TRANSPORT_INC_STAT(ReceivedGetDCB);
@@ -2521,6 +2592,10 @@ void DbgTransportSession::DbgTransportLogMessageReceived(MessageHeader *pHeader)
                         (PBYTE)pHeader->TypeSpecificData.MemoryAccess.m_pbLeftSideBuffer,
                         (DWORD)pHeader->TypeSpecificData.MemoryAccess.m_cbLeftSideBuffer);
         DBG_TRANSPORT_INC_STAT(ReceivedWriteMemory);
+        return;
+    case MT_VirtualUnwind:
+        DbgTransportLog(LC_Requests,  "Received 'VirtualUnwind'");
+        DBG_TRANSPORT_INC_STAT(ReceivedVirtualUnwind);
         return;
     case MT_GetDCB:
         DbgTransportLog(LC_Requests,  "Received 'GetDCB'");

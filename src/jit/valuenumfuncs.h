@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 // Defines the functions understood by the value-numbering system.
@@ -74,10 +73,23 @@ ValueNumFuncDef(Abs, 1, false, false, false)
 ValueNumFuncDef(RoundDouble, 1, false, false, false)
 ValueNumFuncDef(RoundFloat, 1, false, false, false)
 ValueNumFuncDef(RoundInt, 1, false, false, false)
-
+ValueNumFuncDef(Cosh, 1, false, false, false)
+ValueNumFuncDef(Sinh, 1, false, false, false)
+ValueNumFuncDef(Tan, 1, false, false, false)
+ValueNumFuncDef(Tanh, 1, false, false, false)
+ValueNumFuncDef(Asin, 1, false, false, false)
+ValueNumFuncDef(Acos, 1, false, false, false)
+ValueNumFuncDef(Atan, 1, false, false, false)
+ValueNumFuncDef(Atan2, 2, false, false, false)
+ValueNumFuncDef(Log10, 1, false, false, false)
+ValueNumFuncDef(Pow, 2, false, false, false)
+ValueNumFuncDef(Exp, 1, false, false, false)
+ValueNumFuncDef(Ceiling, 1, false, false, false)
+ValueNumFuncDef(Floor, 1, false, false, false)
 
 ValueNumFuncDef(ManagedThreadId, 0, false, false, false)
 
+ValueNumFuncDef(ObjGetType, 1, false, false, false)
 ValueNumFuncDef(GetgenericsGcstaticBase, 1, false, true, true)
 ValueNumFuncDef(GetgenericsNongcstaticBase, 1, false, true, true)
 ValueNumFuncDef(GetsharedGcstaticBase, 2, false, true, true)

@@ -11,12 +11,10 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
   add_definitions(-D_TARGET_X86_=1)
   add_definitions(-DDBG_TARGET_32BIT=1)
   add_definitions(-DDBG_TARGET_X86=1)
-  add_definitions(-DDBG_TARGET_WIN32=1)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
   add_definitions(-D_TARGET_ARM_=1)
   add_definitions(-DDBG_TARGET_32BIT=1)
   add_definitions(-DDBG_TARGET_ARM=1)
-  add_definitions(-DDBG_TARGET_WIN32=1)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
   add_definitions(-D_TARGET_ARM64_=1)
   add_definitions(-DDBG_TARGET_64BIT=1)
@@ -65,15 +63,17 @@ endif(CLR_CMAKE_PLATFORM_UNIX)
 if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
   list(APPEND CORDBEE_SOURCES_WKS 
     ${ARCH_SOURCES_DIR}/debuggerregdisplayhelper.cpp
+    ${ARCH_SOURCES_DIR}/amd64walker.cpp
   )
-  list(APPEND CORDBEE_SOURCES_WKS amd64/amd64walker.cpp)
 elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
   list(APPEND CORDBEE_SOURCES_WKS 
     ${ARCH_SOURCES_DIR}/debuggerregdisplayhelper.cpp
+    ${ARCH_SOURCES_DIR}/x86walker.cpp
   )
-  list(APPEND CORDBEE_SOURCES_WKS i386/x86walker.cpp)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
-  list(APPEND CORDBEE_SOURCES_WKS arm/armwalker.cpp)
+  list(APPEND CORDBEE_SOURCES_WKS ${ARCH_SOURCES_DIR}/armwalker.cpp)
+elseif(CLR_CMAKE_PLATFORM_ARCH_ARM64)
+  list(APPEND CORDBEE_SOURCES_WKS ${ARCH_SOURCES_DIR}/arm64walker.cpp)
 endif()
 
 convert_to_absolute_path(CORDBEE_SOURCES_DAC ${CORDBEE_SOURCES_DAC})

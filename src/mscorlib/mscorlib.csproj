@@ -4,7 +4,7 @@
   
   <!-- Include common build properties -->
   <Import Project="..\..\dir.props" />
-  
+ 
   <!-- Compilation options -->
   <PropertyGroup>
     <AvailablePlatforms>amd64,x86,arm,arm64</AvailablePlatforms>
@@ -39,7 +39,6 @@
 
     <SignAssembly>true</SignAssembly>
     <DelaySign>true</DelaySign>
-    <AssemblyOriginatorKeyFile Condition="'$(AssemblyOriginatorKeyFile)' == ''">$(MSBuildThisFileDirectory)Tools\Signing\PublicTestKey.snk</AssemblyOriginatorKeyFile>
 
     <DefineConstants>$(DefineConstants);NEW_EXPERIMENTAL_ASYNC_IO;_USE_NLS_PLUS_TABLE;RESOURCE_SATELLITE_CONFIG;INSIDE_CLR;CODE_ANALYSIS_BASELINE</DefineConstants>
   </PropertyGroup>
@@ -66,7 +65,7 @@
   </PropertyGroup>
   
   <!-- Configuration specific properties -->
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'Checked'">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <DefineConstants>DBG;_DEBUG;_LOGGING;DEBUG;TRACE;$(DefineConstants)</DefineConstants>
@@ -125,6 +124,7 @@
     
     <!-- These are needed by BCLRewriter -->
     <_BuildType Condition="'$(Configuration)' == 'Debug'">chk</_BuildType>
+    <_BuildType Condition="'$(Configuration)' == 'Checked'">chk</_BuildType>
     <_BuildType Condition="'$(Configuration)' == 'Release'">ret</_BuildType>
 
     <!-- These are needed to make sure we have the right set of defines -->
@@ -170,7 +170,15 @@
     </EmbeddedResource>
   </ItemGroup>
 
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.Targets" />
+
+  <!-- Import signing tools -->
+  <Import Condition="Exists('$(ToolsDir)\sign.targets')" Project="$(ToolsDir)\sign.targets" />
+
+  <!-- Overwrite the key that we are going to use for signing -->
+  <PropertyGroup>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)Tools\Signing\mscorlib.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
 
   <Import Project="$(MSBuildThisFileDirectory)Tools\Versioning\GenerateVersionInfo.targets"/>
   <Import Project="GenerateSplitStringResources.targets"/>

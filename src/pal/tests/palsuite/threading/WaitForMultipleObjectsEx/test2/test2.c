@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*=====================================================================
 **
@@ -133,8 +132,8 @@ VOID PALAPI APCFunc(ULONG_PTR dwParam)
 DWORD PALAPI WaiterProc(LPVOID lpParameter)
 {
     HANDLE Semaphore;
-    DWORD OldTickCount;
-    DWORD NewTickCount;
+    UINT64 OldTimeStamp;
+    UINT64 NewTimeStamp;
     BOOL Alertable;
     DWORD ret;
 
@@ -149,12 +148,18 @@ DWORD PALAPI WaiterProc(LPVOID lpParameter)
 
     Alertable = (BOOL) lpParameter;
 
-    OldTickCount = GetTickCount();
+    LARGE_INTEGER performanceFrequency;
+    if (!QueryPerformanceFrequency(&performanceFrequency))
+    {
+        Fail("Failed to query performance frequency!");
+    }
+
+    OldTimeStamp = GetHighPrecisionTimeStamp(performanceFrequency);
 
     ret = WaitForMultipleObjectsEx(1, &Semaphore, FALSE, ChildThreadWaitTime, 
         Alertable);
     
-    NewTickCount = GetTickCount();
+    NewTimeStamp = GetHighPrecisionTimeStamp(performanceFrequency);
 
 
     if (Alertable && ret != WAIT_IO_COMPLETION)
@@ -168,17 +173,7 @@ DWORD PALAPI WaiterProc(LPVOID lpParameter)
             "Expected return of WAIT_TIMEOUT, got %d.\n", ret);
     }
 
-
-    /* 
-    * Check for DWORD wraparound
-    */
-    if (OldTickCount>NewTickCount)
-    {
-        OldTickCount -= NewTickCount+1;
-        NewTickCount  = 0xFFFFFFFF;
-    }
-
-    ThreadWaitDelta = NewTickCount - OldTickCount;
+    ThreadWaitDelta = NewTimeStamp - OldTimeStamp;
 
     ret = CloseHandle(Semaphore);
     if (!ret)

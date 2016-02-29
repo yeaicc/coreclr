@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*****************************************************************************/
 #ifndef _TARGET_H_
@@ -24,6 +23,20 @@
 #else // !(defined(FEATURE_CORECLR) && defined(PLATFORM_UNIX))
 #define FEATURE_VARARG    1
 #endif // !(defined(FEATURE_CORECLR) && defined(PLATFORM_UNIX))
+
+/*****************************************************************************/
+// The following are human readable names for the target architectures
+#if defined(_TARGET_X86_)
+  #define TARGET_READABLE_NAME "X86"
+#elif defined(_TARGET_AMD64_)
+  #define TARGET_READABLE_NAME "AMD64"
+#elif defined(_TARGET_ARM_)
+  #define TARGET_READABLE_NAME "ARM"
+#elif defined(_TARGET_ARM64_)
+  #define TARGET_READABLE_NAME "ARM64"
+#else
+  #error Unsupported or unset target architecture
+#endif
 
 /*****************************************************************************/
 // The following are intended to capture only those #defines that cannot be replaced
@@ -362,6 +375,12 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        0       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
+  #define FEATURE_MULTIREG_ARGS_OR_RET  0  // Support for passing and/or returning single values in more than one register
+  #define FEATURE_MULTIREG_ARGS         0  // Support for passing a single argument in more than one register  
+  #define FEATURE_MULTIREG_RET          0  // Support for returning a single value in more than one register  
+  #define MAX_ARG_REG_COUNT             2  // Maximum registers used to pass an argument.
+  #define MAX_RET_REG_COUNT             2  // Maximum registers used to return a value.
+
 #ifdef FEATURE_USE_ASM_GC_WRITE_BARRIERS
   #define NOGC_WRITE_BARRIERS      1       // We have specialized WriteBarrier JIT Helpers that DO-NOT trash the RBM_CALLEE_TRASH registers
 #else
@@ -409,8 +428,11 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 
   #define RBM_ALLFLOAT            (RBM_XMM0 | RBM_XMM1 | RBM_XMM2 | RBM_XMM3 | RBM_XMM4 | RBM_XMM5 | RBM_XMM6 | RBM_XMM7)
   #define RBM_ALLDOUBLE            RBM_ALLFLOAT
-  #define RBM_FLT_CALLEE_SAVED    (RBM_XMM6|RBM_XMM7)
-  #define RBM_FLT_CALLEE_TRASH    (RBM_XMM0|RBM_XMM1|RBM_XMM2|RBM_XMM3|RBM_XMM4|RBM_XMM5)
+
+  // TODO-CQ: Currently we are following the x86 ABI for SSE2 registers.
+  // This should be reconsidered.
+  #define RBM_FLT_CALLEE_SAVED     RBM_NONE
+  #define RBM_FLT_CALLEE_TRASH     RBM_ALLFLOAT
   #define REG_VAR_ORDER_FLT        REG_XMM0, REG_XMM1, REG_XMM2, REG_XMM3, REG_XMM4, REG_XMM5, REG_XMM6, REG_XMM7
 
   #define REG_FLT_CALLEE_SAVED_FIRST   REG_XMM6
@@ -448,7 +470,6 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 
   #define RBM_INT_CALLEE_SAVED    (RBM_EBX|RBM_ESI|RBM_EDI)
   #define RBM_INT_CALLEE_TRASH    (RBM_EAX|RBM_ECX|RBM_EDX)
-  #define RBM_CALLEE_TRASH_NOGC    0
 
   #define RBM_CALLEE_SAVED        (RBM_INT_CALLEE_SAVED | RBM_FLT_CALLEE_SAVED)
   #define RBM_CALLEE_TRASH        (RBM_INT_CALLEE_TRASH | RBM_FLT_CALLEE_TRASH)
@@ -528,8 +549,15 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define REG_JUMP_THUNK_PARAM     REG_EAX
   #define RBM_JUMP_THUNK_PARAM     RBM_EAX
 
+#if NOGC_WRITE_BARRIERS
   #define REG_WRITE_BARRIER        REG_EDX
   #define RBM_WRITE_BARRIER        RBM_EDX
+
+  // We don't allow using ebp as a source register. Maybe we should only prevent this for ETW_EBP_FRAMED (but that is always set right now).
+  #define RBM_WRITE_BARRIER_SRC    (RBM_EAX|RBM_ECX|RBM_EBX|RBM_ESI|RBM_EDI)
+
+  #define RBM_CALLEE_TRASH_NOGC    RBM_NONE
+#endif // NOGC_WRITE_BARRIERS
 
   // IL stub's secret parameter (CORJIT_FLG_PUBLISH_SECRET_PARAM)
   #define REG_SECRET_STUB_PARAM    REG_EAX
@@ -654,6 +682,11 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 
 #ifdef FEATURE_SIMD
   #define ALIGN_SIMD_TYPES         1       // whether SIMD type locals are to be aligned
+#if defined(UNIX_AMD64_ABI) || !defined(FEATURE_AVX_SUPPORT)
+  #define FEATURE_PARTIAL_SIMD_CALLEE_SAVE 0 // Whether SIMD registers are partially saved at calls
+#else // !UNIX_AMD64_ABI && !FEATURE_AVX_SUPPORT
+  #define FEATURE_PARTIAL_SIMD_CALLEE_SAVE 1 // Whether SIMD registers are partially saved at calls
+#endif // !UNIX_AMD64_ABI
 #endif
   #define FEATURE_WRITE_BARRIER    1       // Generate the WriteBarrier calls for GC (currently not the x86-style register-customized barriers)
   #define FEATURE_FIXED_OUT_ARGS   1       // Preallocate the outgoing arg area in the prolog
@@ -661,6 +694,23 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_FASTTAILCALL     1       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     1       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        0       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
+#ifdef    UNIX_AMD64_ABI
+  #define FEATURE_MULTIREG_ARGS_OR_RET  1  // Support for passing and/or returning single values in more than one register
+  #define FEATURE_MULTIREG_ARGS         1  // Support for passing a single argument in more than one register  
+  #define FEATURE_MULTIREG_RET          1  // Support for returning a single value in more than one register
+  #define FEATURE_STRUCT_CLASSIFIER     1  // Uses a classifier function to determine if structs are passed/returned in more than one register
+  #define MAX_PASS_MULTIREG_BYTES      32  // Maximum size of a struct that could be passed in more than one register
+  #define MAX_RET_MULTIREG_BYTES       32  // Maximum size of a struct that could be returned in more than one register
+  #define MAX_ARG_REG_COUNT             2  // Maximum registers used to pass an argument.
+  #define MAX_RET_REG_COUNT             2  // Maximum registers used to return a value.
+#else // !UNIX_AMD64_ABI
+  #define FEATURE_MULTIREG_ARGS_OR_RET  0  // Support for passing and/or returning single values in more than one register
+  #define FEATURE_MULTIREG_ARGS         0  // Support for passing a single argument in more than one register  
+  #define FEATURE_MULTIREG_RET          0  // Support for returning a single value in more than one register  
+  #define MAX_ARG_REG_COUNT             1  // Maximum registers used to pass an argument.
+  #define MAX_RET_REG_COUNT             1  // Maximum registers used to return a value.
+#endif // !UNIX_AMD64_ABI
+
 #ifdef FEATURE_USE_ASM_GC_WRITE_BARRIERS
   #define NOGC_WRITE_BARRIERS      0       // We DO-NOT have specialized WriteBarrier JIT Helpers that DO-NOT trash the RBM_CALLEE_TRASH registers
 #else
@@ -686,9 +736,13 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define REG_FP_FIRST             REG_XMM0
   #define REG_FP_LAST              REG_XMM15
   #define FIRST_FP_ARGREG          REG_XMM0
-  #define LAST_FP_ARGREG           REG_XMM3
-  #define VOLATILE_FP             (RBM_XMM0 | RBM_XMM1 | RBM_XMM2 | RBM_XMM3 | RBM_XMM4 | RBM_XMM5)
-  #define PRESERVED_FP            (RBM_XMM8 | RBM_XMM9 | RBM_XMM10 | RBM_XMM11 | RBM_XMM12 | RBM_XMM13 | RBM_XMM14 | RBM_XMM15)
+
+#ifdef    UNIX_AMD64_ABI
+  #define LAST_FP_ARGREG        REG_XMM7
+#else // !UNIX_AMD64_ABI
+  #define LAST_FP_ARGREG        REG_XMM3
+#endif // !UNIX_AMD64_ABI
+
   #define REGNUM_BITS              6       // number of bits in a REG_*
   #define TINY_REGNUM_BITS         6       // number used in a tiny instrdesc (same)
   #define REGMASK_BITS             32      // number of bits in a REGNUM_MASK
@@ -1073,6 +1127,14 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        1       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
+  #define FEATURE_MULTIREG_ARGS_OR_RET  1  // Support for passing and/or returning single values in more than one register (including HFA support)
+  #define FEATURE_MULTIREG_ARGS         1  // Support for passing a single argument in more than one register (including passing HFAs)
+  #define FEATURE_MULTIREG_RET          1  // Support for returning a single value in more than one register (including HFA returns)
+  #define FEATURE_STRUCT_CLASSIFIER     0  // Uses a classifier function to determine is structs are passed/returned in more than one register
+  #define MAX_PASS_MULTIREG_BYTES      32  // Maximum size of a struct that could be passed in more than one register (Max is an HFA of 4 doubles)
+  #define MAX_RET_MULTIREG_BYTES       32  // Maximum size of a struct that could be returned in more than one register (Max is an HFA of 4 doubles)
+  #define MAX_ARG_REG_COUNT             4  // Maximum registers used to pass an argument.
+  #define MAX_RET_REG_COUNT             4  // Maximum registers used to return a value.
 #ifdef FEATURE_USE_ASM_GC_WRITE_BARRIERS
   #define NOGC_WRITE_BARRIERS      0       // We DO-NOT have specialized WriteBarrier JIT Helpers that DO-NOT trash the RBM_CALLEE_TRASH registers
 #else
@@ -1080,8 +1142,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 #endif
   #define USER_ARGS_COME_LAST      1
   #define EMIT_TRACK_STACK_DEPTH   1       // This is something of a workaround.  For both ARM and AMD64, the frame size is fixed, so we don't really
-                                           // need to track stack depth, but this is currently necessary to
-                                           // get GC information reported at call sites.
+                                           // need to track stack depth, but this is currently necessary to get GC information reported at call sites.
   #define TARGET_POINTER_SIZE      4       // equal to sizeof(void*) and the managed pointer size in bytes for this target
   #define FEATURE_EH               1       // To aid platform bring-up, eliminate exceptional EH clauses (catch, filter, filter-handler, fault) and directly execute 'finally' clauses.
   #define FEATURE_EH_FUNCLETS      1
@@ -1379,6 +1440,14 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        1       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
+  #define FEATURE_MULTIREG_ARGS_OR_RET  1  // Support for passing and/or returning single values in more than one register  
+  #define FEATURE_MULTIREG_ARGS         1  // Support for passing a single argument in more than one register  
+  #define FEATURE_MULTIREG_RET          0  // Support for returning a single value in more than one register  
+  #define FEATURE_STRUCT_CLASSIFIER     0   // Uses a classifier function to determine is structs are passed/returned in more than one register
+  #define MAX_PASS_MULTIREG_BYTES      16   // Maximum size of a struct that could be passed in more than one register
+  #define MAX_ARG_REG_COUNT             2  // Maximum registers used to pass an argument.
+  #define MAX_RET_REG_COUNT             2  // Maximum registers used to return a value.
+
 #ifdef FEATURE_USE_ASM_GC_WRITE_BARRIERS
   #define NOGC_WRITE_BARRIERS      1       // We have specialized WriteBarrier JIT Helpers that DO-NOT trash the RBM_CALLEE_TRASH registers
 #else
@@ -1386,8 +1455,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 #endif
   #define USER_ARGS_COME_LAST      1
   #define EMIT_TRACK_STACK_DEPTH   1       // This is something of a workaround.  For both ARM and AMD64, the frame size is fixed, so we don't really
-                                           // need to track stack depth, but this is currently necessary to
-                                           // get GC information reported at call sites.
+                                           // need to track stack depth, but this is currently necessary to get GC information reported at call sites.
   #define TARGET_POINTER_SIZE      8       // equal to sizeof(void*) and the managed pointer size in bytes for this target
   #define FEATURE_EH               1       // To aid platform bring-up, eliminate exceptional EH clauses (catch, filter, filter-handler, fault) and directly execute 'finally' clauses.
   #define FEATURE_EH_FUNCLETS      1

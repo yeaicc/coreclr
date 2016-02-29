@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 // ==++==
 // 
@@ -185,12 +184,6 @@ HMODULE g_hInstance = NULL;
 #include "ntinfo.h"
 #endif // FEATURE_PAL
 
-// Size of a fixed array:
-#ifndef ARRAYSIZE
-#define ARRAYSIZE(a) (sizeof(a)/sizeof((a)[0]))
-#endif // !ARRAYSIZE
-
-
 #ifndef IfFailRet
 #define IfFailRet(EXPR) do { Status = (EXPR); if(FAILED(Status)) { return (Status); } } while (0)
 #endif
@@ -304,7 +297,6 @@ DECLARE_API(IP2MD)
     DMLOut("MethodDesc:   %s\n", DMLMethodDesc(pMD));
     DumpMDInfo(TO_TADDR(pMD), cdaStart, FALSE /* fStackTraceFormat */);
 
-#ifndef FEATURE_PAL
     char  filename[MAX_PATH_FNAME+1];
     ULONG linenum;
     // symlines will be non-zero only if SYMOPT_LOAD_LINES was set in the symbol options
@@ -322,18 +314,15 @@ DECLARE_API(IP2MD)
     {
         ExtOut("Source file:  %s @ %d\n", filename, linenum);
     }
-#endif
 
     return Status;
 }
 
-#ifndef FEATURE_PAL
-
 // (MAX_STACK_FRAMES is also used by x86 to prevent infinite loops in _EFN_StackTrace)
 #define MAX_STACK_FRAMES 1000
 
-
 #ifdef _TARGET_WIN64_
+
 // I use a global set of frames for stack walking on win64 because the debugger's
 // GetStackTrace function doesn't provide a way to find out the total size of a stackwalk,
 // and I'd like to have a reasonably big maximum without overflowing the stack by declaring
@@ -341,8 +330,36 @@ DECLARE_API(IP2MD)
 // (so no dynamic allocation if possible).
 DEBUG_STACK_FRAME g_Frames[MAX_STACK_FRAMES];
 AMD64_CONTEXT g_X64FrameContexts[MAX_STACK_FRAMES];
-#endif
 
+static HRESULT
+GetContextStackTrace(PULONG pnumFrames)
+{
+    PDEBUG_CONTROL4 debugControl4;
+    HRESULT hr;
+
+    // Do we have advanced capability?
+    if ((hr = g_ExtControl->QueryInterface(__uuidof(IDebugControl4), (void **)&debugControl4)) == S_OK)
+    {
+        // GetContextStackTrace fills g_X64FrameContexts as an array of 
+        // contexts packed as target architecture contexts. We cannot 
+        // safely cast this as an array of CROSS_PLATFORM_CONTEXT, since 
+        // sizeof(CROSS_PLATFORM_CONTEXT) != sizeof(TGT_CONTEXT)
+        hr = debugControl4->GetContextStackTrace(
+            NULL,
+            0,
+            g_Frames,
+            MAX_STACK_FRAMES,
+            g_X64FrameContexts,
+            MAX_STACK_FRAMES*g_targetMachine->GetContextSize(),
+            g_targetMachine->GetContextSize(),
+            pnumFrames);
+
+        debugControl4->Release();
+    }
+    return hr;
+}
+
+#endif // _TARGET_WIN64_
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -411,6 +428,7 @@ DECLARE_API(DumpStack)
 
     DumpStackFlag DSFlag;
     DSFlag.fEEonly = FALSE;
+    DSFlag.fSuppressSrcInfo = FALSE;
     DSFlag.top = 0;
     DSFlag.end = 0;
 
@@ -419,7 +437,9 @@ DECLARE_API(DumpStack)
         // name, vptr, type, hasValue
         {"-EE", &DSFlag.fEEonly, COBOOL, FALSE},
         {"-n",  &DSFlag.fSuppressSrcInfo, COBOOL, FALSE},
+#ifndef FEATURE_PAL
         {"/d", &dml, COBOOL, FALSE}
+#endif
     };
     CMDValue arg[] = {
         // vptr, type
@@ -466,6 +486,7 @@ DECLARE_API (EEStack)
 
     DumpStackFlag DSFlag;
     DSFlag.fEEonly = FALSE;
+    DSFlag.fSuppressSrcInfo = FALSE;
     DSFlag.top = 0;
     DSFlag.end = 0;
 
@@ -475,7 +496,9 @@ DECLARE_API (EEStack)
     {   // name, vptr, type, hasValue
         {"-EE", &DSFlag.fEEonly, COBOOL, FALSE},
         {"-short", &bShortList, COBOOL, FALSE},
+#ifndef FEATURE_PAL
         {"/d", &dml, COBOOL, FALSE}
+#endif
     };    
 
     if (!GetCMDOption(args, option, _countof(option), NULL, 0, NULL)) 
@@ -559,8 +582,6 @@ DECLARE_API (EEStack)
     g_ExtSystem->SetCurrentThreadId(Tid);
     return Status;
 }
-
-#endif // FEATURE_PAL
 
 HRESULT DumpStackObjectsRaw(size_t nArg, __in_z LPSTR exprBottom, __in_z LPSTR exprTop, BOOL bVerify)
 {
@@ -713,8 +734,6 @@ DECLARE_API(DumpMD)
     return Status;
 }
 
-#ifndef FEATURE_PAL
-
 BOOL GatherDynamicInfo(TADDR DynamicMethodObj, DacpObjectData *codeArray, 
                        DacpObjectData *tokenArray, TADDR *ptokenArrayAddr)
 {
@@ -791,7 +810,6 @@ BOOL GatherDynamicInfo(TADDR DynamicMethodObj, DacpObjectData *codeArray,
     bRet = TRUE; // whew.
     return bRet;
 }
-
 
 DECLARE_API(DumpIL)
 {
@@ -1012,7 +1030,6 @@ void DumpSigWorker (
     ExtOut("%S\n", (PCWSTR)sigString.Ptr());
 }
 
-
 /**********************************************************************\
 * Routine Description:                                                 *
 *                                                                      *
@@ -1059,8 +1076,6 @@ DECLARE_API(DumpSig)
     DumpSigWorker(dwSigAddr, dwModuleAddr, TRUE);
     return Status;
 }
-
-
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -1110,9 +1125,6 @@ DECLARE_API(DumpSigElem)
     DumpSigWorker(dwSigAddr, dwModuleAddr, FALSE);
     return Status;
 }
-
-#endif // FEATURE_PAL
-
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -1237,7 +1249,6 @@ DECLARE_API(DumpClass)
 
     return Status;
 }
-
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -6102,12 +6113,14 @@ void IssueDebuggerBPCommand ( CLRDATA_ADDRESS addr )
     if (!bUnique)
     {
         bUnique = TRUE;
-        for ( int i = 0; i < curLimit; ++i )
+        for (int i = 0; i < curLimit; ++i)
+        {
             if (alreadyPlacedBPs[i] == addr)
             {
                 bUnique = FALSE;
                 break;
             }
+        }
     }
     if (bUnique)
     {
@@ -6115,7 +6128,7 @@ void IssueDebuggerBPCommand ( CLRDATA_ADDRESS addr )
         static WCHAR wszNameBuffer[1024]; // should be large enough
 
         // get the MethodDesc name
-               CLRDATA_ADDRESS pMD;
+        CLRDATA_ADDRESS pMD;
         if (g_sos->GetMethodDescPtrFromIP(addr, &pMD) != S_OK
             || g_sos->GetMethodDescName(pMD, 1024, wszNameBuffer, NULL) != S_OK)
         {
@@ -6130,8 +6143,10 @@ void IssueDebuggerBPCommand ( CLRDATA_ADDRESS addr )
         ExtOut("Setting breakpoint: %s [%S]\n", buffer, wszNameBuffer);
         g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer, 0);
 
-        if ( curLimit < MaxBPsCached )
+        if (curLimit < MaxBPsCached)
+        {
             alreadyPlacedBPs[curLimit++] = addr;
+        }
     }
 }
 
@@ -6299,6 +6314,21 @@ public:
     }
 #endif
 
+    void CleanupNotifications()
+    {
+#ifdef FEATURE_PAL
+        if (m_breakpoints == NULL)
+        {
+            ULONG32 flags = 0;
+            g_clrData->GetOtherNotificationFlags(&flags);
+            flags &= ~(CLRDATA_NOTIFY_ON_MODULE_LOAD | CLRDATA_NOTIFY_ON_MODULE_UNLOAD);
+            g_clrData->SetOtherNotificationFlags(flags);
+
+            g_ExtServices->ClearExceptionCallback();
+        }
+#endif
+    }
+
     void ClearBreakpoint(size_t breakPointToClear)
     {
         PendingBreakpoint *pCur = m_breakpoints;
@@ -6320,6 +6350,7 @@ public:
         {
             ExtOut("Invalid pending breakpoint index.\n");
         }
+        CleanupNotifications();
     }
 
     void ClearAllBreakpoints()
@@ -6332,11 +6363,14 @@ public:
             iBreakpointIndex++;
             pCur = pNext;
         }
+        CleanupNotifications();
+
         ExtOut("All pending breakpoints cleared.\n");
     }
 
     HRESULT LoadSymbolsForModule(TADDR mod, SymbolReader* pSymbolReader)
     {
+#ifndef FEATURE_PAL
         HRESULT Status = S_OK;
         ToRelease<IXCLRDataModule> module;
         IfFailRet(g_sos->GetModule(mod, &module));
@@ -6374,7 +6408,7 @@ public:
             ExtOut("SOS warning: No symbols for module %S, source line breakpoints in this module will not bind hr=0x%x\n", wszNameBuffer, Status);
             return S_FALSE; // not finding symbols is a typical case
         }
-
+#endif // FEATURE_PAL
         return S_OK;
     }
 
@@ -6852,9 +6886,43 @@ int CNotification::s_condemnedGen = -1;
 
 BOOL CheckCLRNotificationEvent(DEBUG_LAST_EVENT_INFO_EXCEPTION* pdle)
 {
+    ISOSDacInterface4 *psos4 = NULL;
+    CLRDATA_ADDRESS arguments[3];
+    HRESULT Status;
+
+    if (SUCCEEDED(Status = g_sos->QueryInterface(__uuidof(ISOSDacInterface4), (void**) &psos4)))
+    {
+        int count = _countof(arguments);
+        int countNeeded = 0;
+
+        Status = psos4->GetClrNotification(arguments, count, &countNeeded);
+        psos4->Release();
+
+        if (SUCCEEDED(Status))
+        {
+            memset(&pdle->ExceptionRecord, 0, sizeof(pdle->ExceptionRecord));
+            pdle->FirstChance = TRUE;
+            pdle->ExceptionRecord.ExceptionCode = CLRDATA_NOTIFY_EXCEPTION;
+
+            _ASSERTE(count <= EXCEPTION_MAXIMUM_PARAMETERS);
+            for (int i = 0; i < count; i++)
+            {
+                pdle->ExceptionRecord.ExceptionInformation[i] = arguments[i];
+            }
+            // The rest of the ExceptionRecord isn't used by TranslateExceptionRecordToNotification
+            return TRUE;
+        }
+        // No pending exception notification
+        return FALSE;
+    }
+
+    // The new DAC based interface doesn't exists so ask the debugger for the last exception 
+    // information. NOTE: this function doesn't work on xplat version when the coreclr symbols
+    // have been stripped.
+
     ULONG Type, ProcessId, ThreadId;
     ULONG ExtraInformationUsed;
-    HRESULT Status = g_ExtControl->GetLastEventInformation(
+    Status = g_ExtControl->GetLastEventInformation(
         &Type,
         &ProcessId,
         &ThreadId,
@@ -6906,7 +6974,7 @@ HRESULT HandleCLRNotificationEvent()
     HRESULT Status = g_clrData->TranslateExceptionRecordToNotification(&dle.ExceptionRecord, &Notification);
     if (Status != S_OK)
     {
-        ExtOut("Error processing exception notification\n");
+        ExtErr("Error processing exception notification\n");
         return Status;
     }
     else
@@ -6930,6 +6998,8 @@ HRESULT HandleCLRNotificationEvent()
     return S_OK;
 }
 
+#ifndef FEATURE_PAL
+
 DECLARE_API(HandleCLRN)
 {
     INIT_API();    
@@ -6938,9 +7008,19 @@ DECLARE_API(HandleCLRN)
     return HandleCLRNotificationEvent();
 }
 
+#else // FEATURE_PAL
+
+HRESULT HandleExceptionNotification(ILLDBServices *client)
+{
+    INIT_API();
+    return HandleCLRNotificationEvent();
+}
+
+#endif // FEATURE_PAL
+
 DECLARE_API(bpmd)
 {
-    INIT_API_NOEE();    
+    INIT_API();    
     MINIDUMP_NOT_SUPPORTED();    
     int i;
     char buffer[1024];    
@@ -6957,7 +7037,7 @@ DECLARE_API(bpmd)
     //
 
     StringHolder DllName,TypeName;
-    int lineNumber;
+    int lineNumber = 0;
     size_t Offset = 0;
 
     DWORD_PTR pMD = NULL;
@@ -7029,6 +7109,7 @@ DECLARE_API(bpmd)
         CHAR* pColon = strchr(DllName.data, ':');
         if(NULL != pColon)
         {
+#ifndef FEATURE_PAL
             fIsFilename = true;
             *pColon = '\0';
             pColon++;
@@ -7043,6 +7124,10 @@ DECLARE_API(bpmd)
                 fBadParam = true;
             }
             if(nArg != 1) fBadParam = 1;
+#else
+        ExtOut("File name:Line number not supported\n");
+        fBadParam = true;
+#endif // FEATURE_PAL
         }
     }
 
@@ -7083,7 +7168,10 @@ DECLARE_API(bpmd)
     LPWSTR FunctionName = (LPWSTR)alloca(mdNameLen * sizeof(WCHAR));
     LPWSTR Filename = (LPWSTR)alloca(MAX_LONGPATH * sizeof(WCHAR));
 
-    BOOL bNeedNotificationExceptions=FALSE;
+    BOOL bNeedNotificationExceptions = FALSE;
+#ifdef FEATURE_PAL
+    BOOL bNeedModuleNotificationExceptions = FALSE;
+#endif
 
     if (pMD == NULL)
     {
@@ -7114,7 +7202,7 @@ DECLARE_API(bpmd)
             else
             {
                 // get the module list
-                moduleList =ModuleFromName(fIsFilename ? NULL : DllName.data, &numModule);
+                moduleList = ModuleFromName(fIsFilename ? NULL : DllName.data, &numModule);
 
                 // Its OK if moduleList is NULL
                 // There is a very normal case when checking for modules after clr is loaded
@@ -7136,7 +7224,9 @@ DECLARE_API(bpmd)
         {
             ToRelease<IXCLRDataModule> ModDef;
             if (g_sos->GetModule(moduleList[iModule], &ModDef) != S_OK)
+            {
                 continue;
+            }
 
             HRESULT symbolsLoaded = S_FALSE;
             if(!fIsFilename)
@@ -7199,15 +7289,17 @@ DECLARE_API(bpmd)
                 }
             }
 
-            if(g_bpoints.Update(moduleList[iModule], FALSE))
+            if (g_bpoints.Update(moduleList[iModule], FALSE))
+            {
                 bNeedNotificationExceptions = TRUE;
+            }
         }
 
         if (!fNoFutureModule)
         {
             // add a pending breakpoint that will find future loaded modules, and
             // wait for the module load notification.
-            if(!fIsFilename)
+            if (!fIsFilename)
             {
                 g_bpoints.Add(ModuleName, FunctionName, NULL, (DWORD)Offset);
             }
@@ -7216,6 +7308,9 @@ DECLARE_API(bpmd)
                 g_bpoints.Add(Filename, lineNumber, NULL);
             }
             bNeedNotificationExceptions = TRUE;
+#ifdef FEATURE_PAL
+            bNeedModuleNotificationExceptions = TRUE;
+#endif
         }
     }
     else /* We were given a MethodDesc already */
@@ -7299,13 +7394,14 @@ DECLARE_API(bpmd)
         sprintf_s(buffer, _countof(buffer), "sxe -c \"!HandleCLRN\" clrn");
         Status = g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer, 0);        
 #else
-        sprintf_s(buffer, _countof(buffer), "breakpoint set -E c++ -h false -w true");
-        Status = g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer, 0);        
-        if (Status == S_OK)
+        if (bNeedModuleNotificationExceptions)
         {
-            sprintf_s(buffer, _countof(buffer), "breakpoint command add -o \"sos HandleCLRN\"");
-            Status = g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer, 0);
+            ULONG32 flags = 0;
+            g_clrData->GetOtherNotificationFlags(&flags);
+            flags |= (CLRDATA_NOTIFY_ON_MODULE_LOAD | CLRDATA_NOTIFY_ON_MODULE_UNLOAD);
+            g_clrData->SetOtherNotificationFlags(flags);
         }
+        Status = g_ExtServices->SetExceptionCallback(HandleExceptionNotification);
 #endif // FEATURE_PAL
     }
 
@@ -8046,7 +8142,6 @@ BOOL gatherEh(UINT clauseIndex,UINT totalClauses,DACEHInfo *pEHInfo,LPVOID token
     return TRUE;
 }
 
-#ifndef FEATURE_PAL
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -8071,11 +8166,15 @@ DECLARE_API(u)
 
     CMDOption option[] = 
     {   // name, vptr, type, hasValue
+#ifndef FEATURE_PAL
         {"-gcinfo", &fWithGCInfo, COBOOL, FALSE},
+#endif
         {"-ehinfo", &fWithEHInfo, COBOOL, FALSE},
         {"-n", &bSuppressLines, COBOOL, FALSE},
         {"-o", &bDisplayOffsets, COBOOL, FALSE},
+#ifndef FEATURE_PAL
         {"/d", &dml, COBOOL, FALSE},
+#endif
     };
     CMDValue arg[] = 
     {   // vptr, type
@@ -8336,8 +8435,6 @@ DECLARE_API(u)
 
     return Status;
 }
-
-#endif // FEATURE_PAL
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -11910,7 +12007,7 @@ void PrintRef(const SOSStackRefData &ref, TableOutput &out)
 class ClrStackImpl
 {
 public:
-    static void PrintThread(ULONG osID, BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC)
+    static void PrintThread(ULONG osID, BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC, BOOL bFull)
     {
         // Symbols variables
         ULONG symlines = 0; // symlines will be non-zero only if SYMOPT_LOAD_LINES was set in the symbol options
@@ -11930,6 +12027,21 @@ public:
             ExtOut("Failed to start stack walk: %lx\n", hr);
             return;
         }
+
+#ifdef _TARGET_WIN64_
+        PDEBUG_STACK_FRAME currentNativeFrame = NULL;
+        ULONG numNativeFrames = 0;
+        if (bFull)
+        {
+            hr = GetContextStackTrace(&numNativeFrames);
+            if (FAILED(hr))
+            {
+                ExtOut("Failed to get native stack frames: %lx\n", hr);
+                return;
+            }
+            currentNativeFrame = &g_Frames[0];
+        }
+#endif // _TARGET_WIN64_
         
         unsigned int refCount = 0, errCount = 0;
         ArrayHolder<SOSStackRefData> pRefs = NULL;
@@ -11955,15 +12067,29 @@ public:
             if (SUCCEEDED(frameDataResult) && FrameData.frameAddr)
                 sp = FrameData.frameAddr;
 
-            // Print the stack and instruction pointers.
+#ifdef _TARGET_WIN64_
+            while ((numNativeFrames > 0) && (currentNativeFrame->StackOffset <= sp))
+            {
+                if (currentNativeFrame->StackOffset != sp)
+                {
+                    PrintNativeStackFrame(out, currentNativeFrame, bSuppressLines);
+                }
+                currentNativeFrame++;
+                numNativeFrames--;
+            }
+#endif // _TARGET_WIN64_
+
+            // Print the stack pointer.
             out.WriteColumn(0, sp);
-            out.WriteColumn(1, InstructionPtr(ip));
 
             // Print the method/Frame info
             if (SUCCEEDED(frameDataResult) && FrameData.frameAddr)
             {
+                // Skip the instruction pointer because it doesn't really mean anything for method frames
+                out.WriteColumn(1, bFull ? String("") : InstructionPtr(ip));
+                
                 // This is a clr!Frame.
-                out.WriteColumn(2, GetFrameFromAddress(TO_TADDR(FrameData.frameAddr), pStackWalk));
+                out.WriteColumn(2, GetFrameFromAddress(TO_TADDR(FrameData.frameAddr), pStackWalk, bFull));
             
                 // Print out gc references for the Frame.  
                 for (unsigned int i = 0; i < refCount; ++i)
@@ -11977,7 +12103,8 @@ public:
             }
             else
             {
-                out.WriteColumn(2, MethodNameFromIP(ip, bSuppressLines));
+                out.WriteColumn(1, InstructionPtr(ip));
+                out.WriteColumn(2, MethodNameFromIP(ip, bSuppressLines, bFull, bFull));
                     
                 // Print out gc references.  refCount will be zero if bGC is false (or if we
                 // failed to fetch gc reference information).
@@ -11995,8 +12122,17 @@ public:
             }
 
         } while (pStackWalk->Next() == S_OK);
+
+#ifdef _TARGET_WIN64_
+        while (numNativeFrames > 0)
+        {
+            PrintNativeStackFrame(out, currentNativeFrame, bSuppressLines);
+            currentNativeFrame++;
+            numNativeFrames--;
+        }
+#endif // _TARGET_WIN64_
     }
-    
+
     static HRESULT GetFrameLocation(IXCLRDataStackWalk *pStackWalk, CLRDATA_ADDRESS *ip, CLRDATA_ADDRESS *sp)
     {
         CROSS_PLATFORM_CONTEXT context;
@@ -12018,7 +12154,51 @@ public:
         return S_OK;
     }
     
-    static void PrintCurrentThread(BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC)
+    static void PrintNativeStackFrame(TableOutput out, PDEBUG_STACK_FRAME frame, BOOL bSuppressLines)
+    {
+        char filename[MAX_PATH_FNAME + 1];
+        char symbol[1024];
+        ULONG64 displacement;
+
+        ULONG64 ip = frame->InstructionOffset;
+
+        out.WriteColumn(0, frame->StackOffset);
+        out.WriteColumn(1, InstructionPtr(ip));
+
+        HRESULT hr = g_ExtSymbols->GetNameByOffset(TO_CDADDR(ip), symbol, _countof(symbol), NULL, &displacement);
+        if (SUCCEEDED(hr) && symbol[0] != '\0')
+        {
+            String frameOutput;
+            frameOutput += symbol;
+
+            if (displacement)
+            {
+                frameOutput += " + ";
+                frameOutput += Decimal(displacement);
+            }
+
+            if (!bSuppressLines)
+            {
+                ULONG line;
+                hr = g_ExtSymbols->GetLineByOffset(TO_CDADDR(ip), &line, filename, _countof(filename), NULL, NULL);
+                if (SUCCEEDED(hr))
+                {
+                    frameOutput += " at ";
+                    frameOutput += filename;
+                    frameOutput += ":";
+                    frameOutput += Decimal(line);
+                }
+            }
+
+            out.WriteColumn(2, frameOutput);
+        }
+        else
+        {
+            out.WriteColumn(2, "");
+        }
+    }
+
+    static void PrintCurrentThread(BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC, BOOL bNative)
     {
         ULONG id = 0;
         ULONG osid = 0;
@@ -12028,7 +12208,7 @@ public:
         g_ExtSystem->GetCurrentThreadId(&id);
         ExtOut("(%d)\n", id);
         
-        PrintThread(osid, bParams, bLocals, bSuppressLines, bGC);
+        PrintThread(osid, bParams, bLocals, bSuppressLines, bGC, bNative);
     }
 private: 
 
@@ -12439,6 +12619,7 @@ DECLARE_API(ClrStack)
     BOOL bICorDebug = FALSE;
     BOOL bGC = FALSE;
     BOOL dml = FALSE;
+    BOOL bFull = FALSE;
     DWORD frameToDumpVariablesFor = -1;
     StringHolder cvariableName;
     ArrayHolder<WCHAR> wvariableName = new NOTHROW WCHAR[mdNameLen];
@@ -12459,6 +12640,7 @@ DECLARE_API(ClrStack)
         {"-n", &bSuppressLines, COBOOL, FALSE},
         {"-i", &bICorDebug, COBOOL, FALSE},
         {"-gc", &bGC, COBOOL, FALSE},
+        {"-f", &bFull, COBOOL, FALSE},
 #ifndef FEATURE_PAL
         {"/d", &dml, COBOOL, FALSE},
 #endif
@@ -12509,7 +12691,7 @@ DECLARE_API(ClrStack)
         return ClrStackImplWithICorDebug::ClrStackFromPublicInterface(bParams, bLocals, FALSE, wvariableName, frameToDumpVariablesFor);
     }
     
-    ClrStackImpl::PrintCurrentThread(bParams, bLocals, bSuppressLines, bGC);
+    ClrStackImpl::PrintCurrentThread(bParams, bLocals, bSuppressLines, bGC, bFull);
     
     return S_OK;
 }
@@ -12648,11 +12830,11 @@ DECLARE_API(SaveModule)
 
     IMAGE_DOS_HEADER DosHeader;
     if (g_ExtData->ReadVirtual(TO_CDADDR(dllBase), &DosHeader, sizeof(DosHeader), NULL) != S_OK)
-        return FALSE;
+        return S_FALSE;
 
     IMAGE_NT_HEADERS Header;
     if (g_ExtData->ReadVirtual(TO_CDADDR(dllBase + DosHeader.e_lfanew), &Header, sizeof(Header), NULL) != S_OK)
-        return FALSE;
+        return S_FALSE;
 
     DWORD_PTR sectionAddr = dllBase + DosHeader.e_lfanew + offsetof(IMAGE_NT_HEADERS,OptionalHeader)
             + Header.FileHeader.SizeOfOptionalHeader;    
@@ -12850,14 +13032,11 @@ static HRESULT DumpMDInfoBuffer(DWORD_PTR dwStartAddr, DWORD Flags, ULONG64 Esp,
         return E_FAIL;
     }
 
-    static WCHAR wszNameBuffer[1024]; // should be large enough
+    ArrayHolder<WCHAR> wszNameBuffer = new WCHAR[MAX_LONGPATH+1];
 
     if (Flags & SOS_STACKTRACE_SHOWADDRESSES)
     {
-        _snwprintf_s(wszNameBuffer, _countof(wszNameBuffer), _countof(wszNameBuffer)-1, W("%p %p "), 
-                    (void*)(size_t) Esp, 
-                    (void*)(size_t) IPAddr); // _TRUNCATE
-
+        _snwprintf_s(wszNameBuffer, MAX_LONGPATH, MAX_LONGPATH, W("%p %p "), (void*)(size_t) Esp, (void*)(size_t) IPAddr); // _TRUNCATE
         DOAPPEND(wszNameBuffer);
     }
 
@@ -12877,35 +13056,42 @@ static HRESULT DumpMDInfoBuffer(DWORD_PTR dwStartAddr, DWORD Flags, ULONG64 Esp,
     }
     ULONG Index;
     ULONG64 base;
-    if (g_ExtSymbols->GetModuleByOffset(UL64_TO_CDA(addrInModule), 0, &Index, 
-        &base) == S_OK)
+    if (g_ExtSymbols->GetModuleByOffset(UL64_TO_CDA(addrInModule), 0, &Index, &base) == S_OK)
     {                                    
-        CHAR ModuleName[MAX_LONGPATH+1];
-
-        if (g_ExtSymbols->GetModuleNames (Index, base,
-            NULL, 0, NULL,
-            ModuleName, MAX_LONGPATH, NULL,
-            NULL, 0, NULL) == S_OK)
+        ArrayHolder<char> szModuleName = new char[MAX_LONGPATH+1];
+        if (g_ExtSymbols->GetModuleNames(Index, base, NULL, 0, NULL, szModuleName, MAX_LONGPATH, NULL, NULL, 0, NULL) == S_OK)
         {
-            MultiByteToWideChar (CP_ACP, 
-                    0, 
-                    ModuleName, 
-                    -1, 
-                    wszNameBuffer, 
-                    ARRAYSIZE(wszNameBuffer));
+            MultiByteToWideChar (CP_ACP, 0, szModuleName, MAX_LONGPATH, wszNameBuffer, MAX_LONGPATH);
             DOAPPEND (wszNameBuffer);
             bModuleNameWorked = TRUE;
         }
     }
+#ifdef FEATURE_PAL
+    else
+    {
+        if (g_sos->GetPEFileName(dmd.File, MAX_LONGPATH, wszNameBuffer, NULL) == S_OK)
+        {
+            if (wszNameBuffer[0] != W('\0'))
+            {
+                WCHAR *pJustName = _wcsrchr(wszNameBuffer, DIRECTORY_SEPARATOR_CHAR_W);
+                if (pJustName == NULL)
+                    pJustName = wszNameBuffer - 1;
 
-    // Under certain circumstances DacpMethodDescData::GetMethodName() 
+                DOAPPEND(pJustName + 1);
+                bModuleNameWorked = TRUE;
+            }
+        }
+    }
+#endif // FEATURE_PAL
+
+    // Under certain circumstances DacpMethodDescData::GetMethodDescName() 
     //   returns a module qualified method name
-    HRESULT hr = g_sos->GetMethodDescName(dwStartAddr, 1024, wszNameBuffer, NULL);
+    HRESULT hr = g_sos->GetMethodDescName(dwStartAddr, MAX_LONGPATH, wszNameBuffer, NULL);
 
     WCHAR* pwszMethNameBegin = (hr != S_OK ? NULL : _wcschr(wszNameBuffer, L'!'));
     if (!bModuleNameWorked && hr == S_OK && pwszMethNameBegin != NULL)
     {
-        // if we weren't able to get the module name, but GetMethodName returned
+        // if we weren't able to get the module name, but GetMethodDescName returned
         // the module as part of the returned method name, use this data
         DOAPPEND(wszNameBuffer);
     }
@@ -12919,8 +13105,8 @@ static HRESULT DumpMDInfoBuffer(DWORD_PTR dwStartAddr, DWORD Flags, ULONG64 Esp,
         if (hr == S_OK)
         {
             // the module name we retrieved above from debugger will take 
-            // precedence over the name possibly returned by GetMethodName()
-            DOAPPEND(pwszMethNameBegin != NULL ? (pwszMethNameBegin+1) : wszNameBuffer);
+            // precedence over the name possibly returned by GetMethodDescName()
+            DOAPPEND(pwszMethNameBegin != NULL ? (pwszMethNameBegin+1) : (WCHAR *)wszNameBuffer);
         }
         else
         {
@@ -12931,15 +13117,13 @@ static HRESULT DumpMDInfoBuffer(DWORD_PTR dwStartAddr, DWORD Flags, ULONG64 Esp,
     ULONG64 Displacement = (IPAddr - MethodDescData.NativeCodeAddr);
     if (Displacement)
     {
-        _snwprintf_s(wszNameBuffer,_countof (wszNameBuffer),  _countof (wszNameBuffer)-1, W("+%#x"), Displacement); // _TRUNCATE
+        _snwprintf_s(wszNameBuffer, MAX_LONGPATH, MAX_LONGPATH, W("+%#x"), Displacement); // _TRUNCATE
         DOAPPEND (wszNameBuffer);
     }
 
     return S_OK;
 #undef DOAPPEND
 }
-
-#ifndef FEATURE_PAL
 
 BOOL AppendContext(LPVOID pTransitionContexts, size_t maxCount, size_t *pcurCount, size_t uiSizeOfContext,
     CROSS_PLATFORM_CONTEXT *context)
@@ -12969,7 +13153,7 @@ BOOL AppendContext(LPVOID pTransitionContexts, size_t maxCount, size_t *pcurCoun
 }
 
 HRESULT CALLBACK ImplementEFNStackTrace(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     __out_ecount_opt(*puiTextLength) WCHAR wszTextOut[],
     size_t *puiTextLength,
     LPVOID pTransitionContexts,
@@ -13036,41 +13220,16 @@ HRESULT CALLBACK ImplementEFNStackTrace(
     }
 
 #ifdef _TARGET_WIN64_
-
     ULONG numFrames = 0;
-    PDEBUG_CONTROL4 g_ExtControl4 = NULL;
-    // Do we have advanced capability?
-    if ((Status = g_ExtControl->QueryInterface(__uuidof(IDebugControl4),
-                                 (void **)&g_ExtControl4)) == S_OK)
-    {
-        // GetContextStackTrace fills g_X64FrameContexts as an array of 
-        // contexts packed as target architecture contexts. We cannot 
-        // safely cast this as an array of CROSS_PLATFORM_CONTEXT, since 
-        // sizeof(CROSS_PLATFORM_CONTEXT) != sizeof(TGT_CONTEXT)
-        Status = g_ExtControl4->GetContextStackTrace(
-            NULL,
-            0,
-            g_Frames,
-            MAX_STACK_FRAMES,
-            g_X64FrameContexts,
-            MAX_STACK_FRAMES*g_targetMachine->GetContextSize(),
-            g_targetMachine->GetContextSize(),
-            &numFrames
-            );
-    }
-    else
-    {
-        // The new interface is required for context information
-        goto Exit;
-    }
+    BOOL bInNative = TRUE;
 
+    Status = GetContextStackTrace(&numFrames);
     if (FAILED(Status))
     {
         goto Exit;
     }
 
-    BOOL bInNative = TRUE;
-    for (ULONG i=0; i < numFrames; i++)
+    for (ULONG i = 0; i < numFrames; i++)
     {
         PDEBUG_STACK_FRAME pCur = g_Frames + i;                
 
@@ -13132,11 +13291,6 @@ HRESULT CALLBACK ImplementEFNStackTrace(
     }
 
 Exit:
-    if (g_ExtControl4)
-    {
-        g_ExtControl4->Release();
-        g_ExtControl4 = NULL;
-    }
 #else // _TARGET_WIN64_
 
 #ifdef _DEBUG
@@ -13280,9 +13434,15 @@ Exit:
     return Status;
 }
 
+#ifdef FEATURE_PAL
+#define PAL_TRY_NAKED PAL_CPP_TRY
+#define PAL_EXCEPT_NAKED(disp) PAL_CPP_CATCH_ALL
+#define PAL_ENDTRY_NAKED PAL_CPP_ENDTRY
+#endif
+
 // TODO: Convert PAL_TRY_NAKED to something that works on the Mac.
 HRESULT CALLBACK ImplementEFNStackTraceTry(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     __out_ecount_opt(*puiTextLength) WCHAR wszTextOut[],
     size_t *puiTextLength,
     LPVOID pTransitionContexts,
@@ -13294,7 +13454,7 @@ HRESULT CALLBACK ImplementEFNStackTraceTry(
 
     PAL_TRY_NAKED
     {
-        Status = ImplementEFNStackTrace(Client, wszTextOut, puiTextLength, 
+        Status = ImplementEFNStackTrace(client, wszTextOut, puiTextLength, 
             pTransitionContexts, puiTransitionContextCount,
             uiSizeOfContext, Flags);
     }
@@ -13308,7 +13468,7 @@ HRESULT CALLBACK ImplementEFNStackTraceTry(
 
 // See sos_stacktrace.h for the contract with the callers regarding the LPVOID arguments.
 HRESULT CALLBACK _EFN_StackTrace(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     __out_ecount_opt(*puiTextLength) WCHAR wszTextOut[],
     size_t *puiTextLength,
     __out_bcount_opt(uiSizeOfContext*(*puiTransitionContextCount)) LPVOID pTransitionContexts,
@@ -13318,7 +13478,7 @@ HRESULT CALLBACK _EFN_StackTrace(
 {
     INIT_API();    
 
-    Status = ImplementEFNStackTraceTry(Client, wszTextOut, puiTextLength, 
+    Status = ImplementEFNStackTraceTry(client, wszTextOut, puiTextLength, 
         pTransitionContexts, puiTransitionContextCount,
         uiSizeOfContext, Flags);
 
@@ -13596,7 +13756,6 @@ HRESULT ImplementEFNGetManagedExcepStack(
     return Status;
 }
 
-#ifndef FEATURE_PAL
 // TODO: Enable this when ImplementEFNStackTraceTry is fixed.
 // This function, like VerifyDAC, exists for the purpose of testing
 // hard-to-get-to SOS APIs.
@@ -13664,7 +13823,7 @@ DECLARE_API(VerifyStackTrace)
     {
         size_t textLength = 0;
         size_t contextLength = 0;
-        Status = ImplementEFNStackTraceTry(Client,
+        Status = ImplementEFNStackTraceTry(client,
                                  NULL,
                                  &textLength,
                                  NULL,
@@ -13699,7 +13858,7 @@ DECLARE_API(VerifyStackTrace)
             return Status;
         }
 
-        Status = ImplementEFNStackTrace(Client,
+        Status = ImplementEFNStackTrace(client,
                                  wszBuffer,
                                  &textLength,
                                  pContexts,
@@ -13757,7 +13916,7 @@ DECLARE_API(VerifyStackTrace)
             return Status;
         }
 
-        Status = ImplementEFNStackTrace(Client,
+        Status = ImplementEFNStackTrace(client,
                                  wszBuffer,
                                  &textLength,
                                  pSimple,
@@ -13802,9 +13961,8 @@ DECLARE_API(VerifyStackTrace)
 
     return Status;
 }
-#endif // !FEATURE_PAL
 
-
+#ifndef FEATURE_PAL
 
 // This is an internal-only Apollo extension to de-optimize the code
 DECLARE_API(SuppressJitOptimization)
@@ -14009,12 +14167,14 @@ DECLARE_API(ExposeDML)
     return S_OK;
 }
 
+#endif // FEATURE_PAL
+
 // According to kksharma the Windows debuggers always sign-extend
 // arguments when calling externally, therefore StackObjAddr 
 // conforms to CLRDATA_ADDRESS contract.
 HRESULT CALLBACK 
 _EFN_GetManagedExcepStack(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     ULONG64 StackObjAddr,
    __out_ecount (cbString) PSTR szStackString,
     ULONG cbString
@@ -14045,7 +14205,7 @@ _EFN_GetManagedExcepStack(
 // same as _EFN_GetManagedExcepStack, but returns the stack as a wide string.
 HRESULT CALLBACK
 _EFN_GetManagedExcepStackW(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     ULONG64 StackObjAddr,
     __out_ecount(cchString) PWSTR wszStackString,
     ULONG cchString
@@ -14061,7 +14221,7 @@ _EFN_GetManagedExcepStackW(
 // conforms to CLRDATA_ADDRESS contract.
 HRESULT CALLBACK 
 _EFN_GetManagedObjectName(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     ULONG64 objAddr,
     __out_ecount (cbName) PSTR szName,
     ULONG cbName
@@ -14089,7 +14249,7 @@ _EFN_GetManagedObjectName(
 // conforms to CLRDATA_ADDRESS contract.
 HRESULT CALLBACK 
 _EFN_GetManagedObjectFieldInfo(
-    PDEBUG_CLIENT Client,
+    PDEBUG_CLIENT client,
     ULONG64 objAddr,
     __out_ecount (mdNameLen) PSTR szFieldName,
     PULONG64 pValue,
@@ -14157,39 +14317,30 @@ void PrintHelp (__in_z LPCSTR pszCmdName)
             return;
         }
 #else
-#define SOS_DOCUMENT_FILENAME "sosdocs.txt"
-
-        char  lpFilename[MAX_LONGPATH+12]; // + 12 to make enough room for strcat function.
-        DWORD nReturnedSize;
-        nReturnedSize = GetModuleFileName(g_hInstance, lpFilename, MAX_LONGPATH);
-        if ( nReturnedSize == 0 || nReturnedSize == MAX_LONGPATH ) {
-            // We consider both of these cases as failed.
-            ExtOut("Error getting the name for the current module\n");
+        int err = PAL_InitializeDLL();
+        if(err != 0)
+        {
+            ExtOut("Error initializing PAL\n");
             return;
         }
-
-        // Find the last "\" or "/" in the path.
-        char * pChar = lpFilename + strlen(lpFilename) - 1;
-        while ( pChar != lpFilename-1 && * pChar != '\\' && * pChar != '/' ) { * pChar-- = 0; }
-        strcat(lpFilename, SOS_DOCUMENT_FILENAME);
+        char lpFilename[MAX_LONGPATH + 12]; // + 12 to make enough room for strcat function.
+        strcpy_s(lpFilename, _countof(lpFilename), g_ExtServices->GetCoreClrDirectory());
+        strcat_s(lpFilename, _countof(lpFilename), "sosdocsunix.txt");
         
-        HANDLE hSosDocFile = CreateFileA(lpFilename,
-                                 GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        HANDLE hSosDocFile = CreateFileA(lpFilename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         if (hSosDocFile == INVALID_HANDLE_VALUE) {
             ExtOut("Error finding documentation file\n");
             return;
         }
 
-        HANDLE hMappedSosDocFile = CreateFileMappingA(hSosDocFile,
-                                       NULL, PAGE_READONLY, 0, 0, NULL);
+        HANDLE hMappedSosDocFile = CreateFileMappingA(hSosDocFile, NULL, PAGE_READONLY, 0, 0, NULL);
         CloseHandle(hSosDocFile);
         if (hMappedSosDocFile == NULL) { 
             ExtOut("Error mapping documentation file\n");
             return;
         }
 
-        pText = (LPSTR)MapViewOfFile(hMappedSosDocFile,
-                           FILE_MAP_READ, 0, 0, 0);
+        pText = (LPSTR)MapViewOfFile(hMappedSosDocFile, FILE_MAP_READ, 0, 0, 0);
         CloseHandle(hMappedSosDocFile);
         if (pText == NULL)
         {
@@ -14251,13 +14402,12 @@ void PrintHelp (__in_z LPCSTR pszCmdName)
 *    arguments passed into each.
 *                                                                      *
 \**********************************************************************/
-extern "C" HRESULT CALLBACK
-Help(PDEBUG_CLIENT Client, PCSTR Args)
+DECLARE_API(Help)
 {
     // Call extension initialization functions directly, because we don't need the DAC dll to be initialized to get help.
     HRESULT Status;
     __ExtensionCleanUp __extensionCleanUp;
-    if ((Status = ExtQuery(Client)) != S_OK) return Status;
+    if ((Status = ExtQuery(client)) != S_OK) return Status;
     ControlC = FALSE;
 
     StringHolder commandName;
@@ -14266,7 +14416,7 @@ Help(PDEBUG_CLIENT Client, PCSTR Args)
         {&commandName.data, COSTRING}
     };
     size_t nArg;
-    if (!GetCMDOption(Args, NULL, 0, arg, _countof(arg), &nArg))
+    if (!GetCMDOption(args, NULL, 0, arg, _countof(arg), &nArg))
     {
         return Status;
     }
@@ -14300,5 +14450,3 @@ Help(PDEBUG_CLIENT Client, PCSTR Args)
     
     return S_OK;
 }
-
-#endif // FEATURE_PAL

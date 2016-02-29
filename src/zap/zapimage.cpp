@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // ZapImage.cpp
 //
@@ -1161,7 +1160,7 @@ typedef BOOL (WINAPI *WofShouldCompressBinaries_t) (
 
 typedef HRESULT (WINAPI *WofSetFileDataLocation_t) (
     __in HANDLE hFile,
-    __out ULONG Provider,
+    __in ULONG Provider,
     __in PVOID FileInfo,
     __in ULONG Length
     );
@@ -1853,7 +1852,14 @@ void ZapImage::OutputTables()
 
     if (IsReadyToRunCompilation())
     {
+#ifndef FEATURE_CORECLR
+        // Some older versions of Windows (e.g., Win7) can incorrectly fixup
+        // relocations if IsDll is not set. In CoreCLR, we handle this by
+        // always using the default value of IsDll, which is true. We can't
+        // use the same fix in desktop CLR, since in this case the ReadyToRun
+        // image can be used to create processes.
         SetIsDll(m_ModuleDecoder.IsDll());
+#endif
 
         SetSizeOfStackReserve(m_ModuleDecoder.GetSizeOfStackReserve());
         SetSizeOfStackCommit(m_ModuleDecoder.GetSizeOfStackCommit());
@@ -3746,12 +3752,14 @@ ZapImage::CompileStatus ZapImage::TryCompileMethodWorker(CORINFO_METHOD_HANDLE h
     if (m_zapper->m_pOpt->m_onlyOneMethod && (m_zapper->m_pOpt->m_onlyOneMethod != md))
         return NOT_COMPILED;
 
+    if (GetCompileInfo()->HasCustomAttribute(handle, "System.Runtime.BypassNGenAttribute"))
+        return NOT_COMPILED;
+
 #ifdef MDIL
     // This is a quick workaround to opt specific methods out of MDIL generation to work around bugs.
     if (m_zapper->m_pOpt->m_compilerFlags & CORJIT_FLG_MDIL)
     {
-        HRESULT hr = m_pMDImport->GetCustomAttributeByName(md, "System.Runtime.BypassMdilAttribute", NULL, NULL);
-        if (hr == S_OK)
+        if (GetCompileInfo()->HasCustomAttribute(handle, "System.Runtime.BypassMdilAttribute"))
             return NOT_COMPILED;
     }
 #endif
@@ -3760,8 +3768,7 @@ ZapImage::CompileStatus ZapImage::TryCompileMethodWorker(CORINFO_METHOD_HANDLE h
     // This is a quick workaround to opt specific methods out of ReadyToRun compilation to work around bugs.
     if (IsReadyToRunCompilation())
     {
-        HRESULT hr = m_pMDImport->GetCustomAttributeByName(md, "System.Runtime.BypassReadyToRun", NULL, NULL);
-        if (hr == S_OK)
+        if (GetCompileInfo()->HasCustomAttribute(handle, "System.Runtime.BypassReadyToRunAttribute"))
             return NOT_COMPILED;
     }
 #endif

@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // This file contains the members of CodeGen that are defined and used
@@ -37,14 +36,37 @@
 
     void                genCkfinite(GenTreePtr treeNode);
 
-    void                genMathIntrinsic(GenTreePtr treeNode);
+    void                genIntrinsic(GenTreePtr treeNode);
 
     void                genPutArgStk(GenTreePtr treeNode);
     unsigned            getBaseVarForPutArgStk(GenTreePtr treeNode);
 
+#ifdef _TARGET_XARCH_
+    unsigned            getFirstArgWithStackSlot();
+#endif // !_TARGET_XARCH_
+
+    void                genCompareFloat(GenTreePtr treeNode);
+
+    void                genCompareInt(GenTreePtr treeNode);
+
+#if !defined(_TARGET_64BIT_)
+    void                genCompareLong(GenTreePtr treeNode);
+#endif
+
+#ifdef _TARGET_ARM64_
+    void                genCodeForLdObj(GenTreeOp* treeNode);
+#endif
+
 #ifdef FEATURE_SIMD
+    enum SIMDScalarMoveType
+    {
+        SMT_ZeroInitUpper,                  // zero initlaize target upper bits
+        SMT_ZeroInitUpper_SrcHasUpperZeros, // zero initialize target upper bits; source upper bits are known to be zero
+        SMT_PreserveUpper                   // preserve target upper bits
+    };
+
     instruction         getOpForSIMDIntrinsic(SIMDIntrinsicID intrinsicId, var_types baseType, unsigned *ival = nullptr);
-	void				genSIMDScalarMove(var_types type, regNumber target, regNumber src, bool zeroInit);
+    void                genSIMDScalarMove(var_types type, regNumber target, regNumber src, SIMDScalarMoveType moveType);
     void                genSIMDIntrinsicInit(GenTreeSIMD* simdNode);
     void                genSIMDIntrinsicInitN(GenTreeSIMD* simdNode);
     void                genSIMDIntrinsicInitArray(GenTreeSIMD* simdNode);
@@ -132,8 +154,7 @@
     void                genCodeForCpBlkUnroll    (GenTreeCpBlk* cpBlkNode);
 
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
-    void                genPutStructArgStk(GenTreePtr treeNode
-                                           FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(unsigned baseVarNum));
+    void                genPutStructArgStk(GenTreePtr treeNode, unsigned baseVarNum);
 
     void                genStructPutArgRepMovs(GenTreePutArgStk* putArgStkNode, unsigned baseVarNum);
     void                genStructPutArgUnroll(GenTreePutArgStk* putArgStkNode, unsigned baseVarNum);
@@ -159,20 +180,34 @@
 
     instruction         genGetInsForOper    (genTreeOps oper, var_types type);
 
+    void                genStoreInd(GenTreePtr node);
+
+    bool                genEmitOptimizedGCWriteBarrier(GCInfo::WriteBarrierForm writeBarrierForm, GenTree* addr, GenTree* data);
+
     void                genCallInstruction(GenTreePtr call);
     
     void                genJmpMethod(GenTreePtr jmp);
 
-#if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
-    void genGetStructTypeSizeOffset(const SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR& structDesc,
-                                    var_types* type0,
-                                    var_types* type1,
-                                    emitAttr* size0,
-                                    emitAttr* size1,
-                                    unsigned __int8* offset0,
-                                    unsigned __int8* offset1);
-
     bool                genStoreRegisterReturnInLclVar(GenTreePtr treeNode);
+
+    // Deals with codegen for muti-register struct returns.
+    bool                isStructReturn(GenTreePtr treeNode);
+    void                genStructReturn(GenTreePtr treeNode);
+
+    // Codegen for GT_RETURN.
+    void                genReturn(GenTreePtr treeNode);
+
+#if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
+    void                getStructTypeOffset(const SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR& structDesc,
+                                            var_types* type0,
+                                            var_types* type1,
+                                            unsigned __int8* offset0,
+                                            unsigned __int8* offset1);
+
+    void                getStructReturnRegisters(var_types type0,
+                                                 var_types type1,
+                                                 regNumber* retRegPtr0,
+                                                 regNumber* retRegPtr1);
 #endif // defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
 
     void                genLclHeap(GenTreePtr tree);

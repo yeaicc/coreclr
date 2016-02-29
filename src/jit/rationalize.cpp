@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #include "jitpch.h"
@@ -867,8 +866,8 @@ void Rationalizer::MorphAsgIntoStoreLcl(GenTreeStmt* stmt, GenTreePtr pTree)
     GenTreeLclVarCommon* var = lhs->AsLclVarCommon();
     pTree->SetOper(storeForm(var->OperGet()));
     GenTreeLclVarCommon* dst = pTree->AsLclVarCommon();
-    dst->SetSsaNum(var->gtSsaNum);
     dst->SetLclNum(var->gtLclNum);
+    dst->SetSsaNum(var->gtSsaNum);
     dst->gtType = lhs->gtType;
 
     if (lhs->OperGet() == GT_LCL_FLD)
@@ -943,24 +942,44 @@ void Compiler::fgFixupIfCallArg(ArrayStack<GenTree *> *parentStack,
         DBEXEC(VERBOSE, dumpTreeStack(GetTlsCompiler(), parentStack));
         return;
     }
-
+     
     // we have replaced an arg, so update pointers in argtable
+    fgFixupArgTabEntryPtr(parentCall, oldChild, newChild);
+}
+
+//------------------------------------------------------------------------
+// fgFixupArgTabEntryPtr: Fixup the fgArgTabEntryPtr of parentCall after 
+//                        replacing oldArg with newArg 
+//
+// Arguments:
+//    parentCall - a pointer to the parent call node
+//    oldArg     - the original argument node
+//    newArg     - the replacement argument node
+//
+
+void Compiler::fgFixupArgTabEntryPtr(GenTreePtr parentCall,
+                                     GenTreePtr oldArg,
+                                     GenTreePtr newArg)
+{
+    assert(parentCall != nullptr);
+    assert(oldArg != nullptr);
+    assert(newArg != nullptr);
+
     JITDUMP("parent call was :\n");
     DISPTREE(parentCall);
 
     JITDUMP("old child was :\n");
-    DISPTREE(oldChild);
+    DISPTREE(oldArg);
     
-    DBEXEC(VERBOSE, dumpTreeStack(GetTlsCompiler(), parentStack));
-    
-    if (oldChild->gtFlags & GTF_LATE_ARG)
+    if (oldArg->gtFlags & GTF_LATE_ARG)
     {
-        newChild->gtFlags |= GTF_LATE_ARG;
+        newArg->gtFlags |= GTF_LATE_ARG;
     }
     else
     {
-        fgArgTabEntryPtr fp = Compiler::gtArgEntryByNode(parentCall, oldChild);
-        fp->node = newChild;
+        fgArgTabEntryPtr fp = Compiler::gtArgEntryByNode(parentCall, oldArg);
+        assert(fp->node == oldArg);
+        fp->node = newArg;
     }
 
     JITDUMP("parent call:\n");
@@ -1078,13 +1097,22 @@ Location Rationalizer::RewriteSimpleTransforms(Location loc)
     DISPTREE(statement);
     JITDUMP("\n");
 
-    if (tree->OperGet() == GT_COMMA && statement->gtStmtIsTopLevel())
+    if (statement->gtStmtIsTopLevel())
     {
-        Location loc1, loc2;
-        RewriteTopLevelComma(loc, &loc1, &loc2);
-        RewriteSimpleTransforms(loc1);
-        RewriteSimpleTransforms(loc2);
-        return loc1;
+        if (tree->OperGet() == GT_COMMA)
+        {
+            Location loc1, loc2;
+            RewriteTopLevelComma(loc, &loc1, &loc2);
+            RewriteSimpleTransforms(loc1);
+            RewriteSimpleTransforms(loc2);
+            return loc1;
+        }
+        else if (tree->OperKind() & GTK_CONST)
+        {
+            // Don't bother generating a top level statement that is just a constant.
+            // We can get these if we decide to hoist a large constant value out of a loop.
+            tree->gtBashToNOP();
+        }
     }
 
     SplitData tmpState = {0};
@@ -1436,7 +1464,7 @@ void Rationalizer::RewriteCopyBlk(GenTreePtr* ppTree, Compiler::fgWalkData* data
 
     // Src: Get rid of parent node of GT_ADDR(..) if its child happens to be of a SIMD type.
     GenTree* simdSrc = nullptr;
-    if (srcAddr->OperGet() == GT_ADDR && comp->isSIMDType(srcAddr->gtGetOp1()))
+    if (srcAddr->OperGet() == GT_ADDR && varTypeIsSIMD(srcAddr->gtGetOp1()))
     {
         comp->fgSnipInnerNode(srcAddr);
         simdSrc = srcAddr->gtGetOp1();
@@ -1526,19 +1554,21 @@ void Rationalizer::RewriteLdObj(GenTreePtr* ppTree, Compiler::fgWalkData* data)
 {    
 #ifdef FEATURE_SIMD
     Compiler* comp = data->compiler;
+    GenTreeLdObj* ldObj = (*ppTree)->AsLdObj();
 
+    // For UNIX struct passing, we can have LdObj nodes for arguments.
+    // For other cases, we should never see a non-SIMD type here.
+#ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
+    if (!varTypeIsSIMD(ldObj))
+    {
+        return;
+    }
+#endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
     // Should come here only if featureSIMD is enabled
     noway_assert(comp->featureSIMD);
-
-    GenTreeLdObj* ldObj = (*ppTree)->AsLdObj();
-    assert(ldObj->OperGet() == GT_LDOBJ);
-
-    unsigned simdSize = 0;
-    var_types baseType = comp->getBaseTypeAndSizeOfSIMDType(ldObj->gtClass, &simdSize);
-    assert(baseType != TYP_UNKNOWN);
-    var_types simdType = comp->getSIMDTypeForSize(simdSize);
-
-    assert(ldObj->TypeGet() == TYP_STRUCT || ldObj->TypeGet() == simdType);
+    // On  we should only call this with a SIMD type.
+    noway_assert(varTypeIsSIMD(ldObj));
+    var_types simdType = ldObj->TypeGet();
 
     // If the operand of ldobj is a GT_ADDR(GT_LCL_VAR) and LclVar is known to be a SIMD type,
     // replace ldobj by GT_LCL_VAR.
@@ -1567,6 +1597,7 @@ void Rationalizer::RewriteLdObj(GenTreePtr* ppTree, Compiler::fgWalkData* data)
         {
             comp->fgSnipInnerNode(ldObj);
         }
+        comp->fgFixupIfCallArg(data->parentStack, ldObj, src);
         src->gtType = simdType;
 
         *ppTree = src;
@@ -1583,12 +1614,138 @@ void Rationalizer::RewriteLdObj(GenTreePtr* ppTree, Compiler::fgWalkData* data)
 #endif
 }
 
+// RewriteNodeAsCall : Replace the given tree node by a GT_CALL.
+//
+// Arguments:
+//    ppTree      - A pointer-to-a-pointer for the tree node
+//    fgWalkData  - A pointer to tree walk data providing the context
+//    callHnd     - The method handle of the call to be generated
+//    entryPoint  - The method entrypoint of the call to be generated
+//    args        - The argument list of the call to be generated
+//
+// Return Value:
+//    None.
+//
+
+void Rationalizer::RewriteNodeAsCall(GenTreePtr* ppTree, Compiler::fgWalkData* data,
+    CORINFO_METHOD_HANDLE callHnd,
+#ifdef FEATURE_READYTORUN_COMPILER
+    CORINFO_CONST_LOOKUP entryPoint,
+#endif
+    GenTreeArgList* args)
+{
+    GenTreePtr tree = *ppTree;
+    Compiler*  comp = data->compiler;
+    SplitData* tmpState = (SplitData *)data->pCallbackData;
+    GenTreePtr root = tmpState->root;
+    GenTreePtr treeFirstNode = comp->fgGetFirstNode(tree);
+    GenTreePtr treeLastNode = tree;
+    GenTreePtr treePrevNode = treeFirstNode->gtPrev;
+    GenTreePtr treeNextNode = treeLastNode->gtNext;
+
+    // Create the call node
+    GenTreeCall* call = comp->gtNewCallNode(CT_USER_FUNC, callHnd, tree->gtType, args);
+    call = comp->fgMorphArgs(call);
+    call->CopyCosts(tree);
+#ifdef FEATURE_READYTORUN_COMPILER
+    call->gtCall.gtEntryPoint = entryPoint;
+#endif
+
+    // Replace "tree" with "call"
+    *ppTree = call;
+        
+    // Rebuild the evaluation order.
+    comp->gtSetStmtInfo(root);
+
+    // Rebuild the execution order.
+    comp->fgSetTreeSeq(call, treePrevNode);
+
+    // Restore linear-order Prev and Next for "call".
+    if (treePrevNode)
+    {
+        treeFirstNode = comp->fgGetFirstNode(call);
+        treeFirstNode->gtPrev = treePrevNode;
+        treePrevNode->gtNext = treeFirstNode;
+    }
+    else
+    {
+        // Update the linear oder start of "root" if treeFirstNode 
+        // appears to have replaced the original first node.
+        assert(treeFirstNode == root->gtStmt.gtStmtList);
+        root->gtStmt.gtStmtList = comp->fgGetFirstNode(call);
+    }
+
+    if (treeNextNode)
+    {
+        treeLastNode = call;
+        treeLastNode->gtNext = treeNextNode;
+        treeNextNode->gtPrev = treeLastNode;
+    }
+    
+    comp->fgFixupIfCallArg(data->parentStack, tree, call);
+
+    // Propagate flags of "call" to its parents.
+    // 0 is current node, so start at 1
+    for (int i = 1; i < data->parentStack->Height(); i++)
+    {
+        GenTree *node = data->parentStack->Index(i);
+        node->gtFlags |= GTF_CALL;
+        node->gtFlags |= call->gtFlags & GTF_ALL_EFFECT;
+    }
+
+    // Since "tree" is replaced with "call", pop "tree" node (i.e the current node)
+    // and replace it with "call" on parent stack.
+    assert(data->parentStack->Top() == tree);
+    (void)data->parentStack->Pop();
+    data->parentStack->Push(call);
+
+    DBEXEC(TRUE, ValidateStatement(root, tmpState->block));
+}
+
+// RewriteIntrinsicAsUserCall : Rewrite an intrinsic operator as a GT_CALL to the original method.
+//
+// Arguments:
+//    ppTree      - A pointer-to-a-pointer for the intrinsic node
+//    fgWalkData  - A pointer to tree walk data providing the context
+//
+// Return Value:
+//    None.
+//
+// Some intrinsics, such as operation Sqrt, are rewritten back to calls, and some are not. 
+// The ones that are not being rewritten here must be handled in Codegen.
+// Conceptually, the lower is the right place to do the rewrite. Keeping it in rationalization is
+// mainly for throughput issue.
+
+void Rationalizer::RewriteIntrinsicAsUserCall(GenTreePtr* ppTree, Compiler::fgWalkData* data)
+{    
+    GenTreePtr tree = *ppTree;
+    Compiler*  comp = data->compiler;
+    GenTreeArgList* args;
+
+    assert(tree->OperGet() == GT_INTRINSIC);
+
+    if (tree->gtOp.gtOp2 == nullptr)
+    {
+        args = comp->gtNewArgList(tree->gtOp.gtOp1);
+    }
+    else
+    {
+        args = comp->gtNewArgList(tree->gtOp.gtOp1, tree->gtOp.gtOp2);
+    }
+
+    RewriteNodeAsCall(ppTree, data,
+        tree->gtIntrinsic.gtMethodHandle,
+#ifdef FEATURE_READYTORUN_COMPILER
+        tree->gtIntrinsic.gtEntryPoint,
+#endif
+        args);
+}
+
 // tree walker callback function that rewrites ASG and ADDR nodes
 Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Compiler::fgWalkData *data)
 {
     GenTree *tree = *ppTree;
     Compiler* comp = data->compiler;
-
     SplitData *tmpState = (SplitData *) data->pCallbackData;
 
     while (tree->OperGet() == GT_COMMA)
@@ -1616,32 +1773,8 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
         case GT_LCL_FLD:
         case GT_REG_VAR:
         case GT_PHI_ARG:
-            FixupIfSIMDLocal(comp, lhs->AsLclVarCommon());
             MorphAsgIntoStoreLcl(tmpState->root->AsStmt(), tree);
             tree->gtFlags &= ~GTF_REVERSE_OPS;
-
-#if defined(FEATURE_SIMD) && defined(_TARGET_AMD64_)
-            // Vector2 parameter passing: A Vector2 struct is pointer size and as per
-            // ABI needs to be passed in an integer register.  But at the same time
-            // a Vector2 is also considered TYP_DOUBLE by SIMD logic and hence will
-            // be allocated an XMM reg.  Hence, passing Vector2 as a parameter to 
-            // a method could result in either putarg_reg (post lowering) or st.loc
-            // where the target type is TYP_LONG and source type is TYP_DOUBLE.  Similarly
-            // trying to return Vector2 value from a method will result in gt_return
-            // with mismatch in src and target types.  LSRA already handles putarg_Reg and
-            // gt_return cases by introducing GT_COPY above the source value. The logic
-            // here is meant to handle st.loc case.
-            dataSrc = tree->gtGetOp1();
-            if (tree->TypeGet() == TYP_I_IMPL &&
-                dataSrc->TypeGet() == TYP_I_IMPL &&
-                comp->isSIMDTypeLocal(dataSrc))
-            {
-                // Introduce a GT_COPY above RHS
-                GenTreePtr newNode = comp->gtNewOperNode(GT_COPY, TYP_LONG, dataSrc);
-                tree->gtOp.gtOp1 = newNode;
-                dataSrc->InsertAfterSelf(newNode, tmpState->root->AsStmt());
-            }
-#endif // FEATURE_SIMD && _TARGET_AMD64_
             break;
 
         case GT_IND:
@@ -1668,6 +1801,12 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
                     store->gtNext->gtPrev = store;
                 assert (store->gtPrev != nullptr);
                 store->gtPrev->gtNext = store;
+
+                // Since "tree" is replaced with "store", pop "tree" node (i.e the current node)
+                // and replace it with "store" on parent stack.
+                assert(data->parentStack->Top() == tree);
+                (void)data->parentStack->Pop();
+                data->parentStack->Push(store);
 
                 JITDUMP("root:\n");
                 DISPTREE(tmpState->root);
@@ -1708,8 +1847,6 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
         GenTree *child = tree->gtOp.gtOp1;
         if (child->IsLocal())
         {
-            FixupIfSIMDLocal(comp, child->AsLclVarCommon());
-
             // We are changing the child from GT_LCL_VAR TO GT_LCL_VAR_ADDR.
             // Therefore gtType of the child needs to be changed to a TYP_BYREF
 
@@ -1813,9 +1950,16 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
         JITDUMP("\n");
     }
 #endif // _TARGET_XARCH_
+    else if ((tree->gtOper == GT_INTRINSIC) && 
+             Compiler::IsIntrinsicImplementedByUserCall(tree->gtIntrinsic.gtIntrinsicId))
+    {
+        RewriteIntrinsicAsUserCall(ppTree, data);
+    }
 #ifdef FEATURE_SIMD
     else
-    {
+    {       
+        assert(tree->gtOper != GT_INTRINSIC || Compiler::IsTargetIntrinsic(tree->gtIntrinsic.gtIntrinsicId));
+
         // Transform the treeNode types for SIMD nodes.
         // If we have a SIMD type, set its size in simdSize, and later we will
         // set the actual type according to its size (which may be less than a full
@@ -1823,6 +1967,10 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
         unsigned simdSize = 0;
         switch(tree->gtOper)
         {
+        default:
+            // Nothing to do for most nodes.
+            break;
+
         case GT_INITBLK:
             RewriteInitBlk(ppTree, data);
             break;
@@ -1865,7 +2013,7 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
                     // This happens when it is consumed by a GT_RET_EXPR.
                     // It can only be a Vector2f or Vector2i.
                     assert(genTypeSize(simdTree->gtSIMDBaseType) == 4);
-                    simdTree->gtType = TYP_DOUBLE;
+                    simdTree->gtType = TYP_SIMD8;
                 }
                 else if (simdTree->gtType == TYP_STRUCT || varTypeIsSIMD(simdTree))
                 {
@@ -1922,12 +2070,6 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
                     }
                 }
             }
-
-            break;
-
-        case GT_LCL_VAR:
-        case GT_STORE_LCL_VAR:
-            FixupIfSIMDLocal(comp, tree->AsLclVarCommon());
             break;
         }
         if ((*ppTree) != tree)
@@ -1966,24 +2108,34 @@ void Rationalizer::FixupIfSIMDLocal(Compiler* comp, GenTreeLclVarCommon* tree)
     // Note that struct args though marked as lvIsSIMD=true,
     // the tree node representing such an arg should not be 
     // marked as a SIMD type, since it is a byref of a SIMD type.
-    if (!varDsc->lvSIMDType || tree->gtType == TYP_BYREF)
+    if (!varTypeIsSIMD(varDsc))
     {
         return;
     }
     switch(tree->OperGet())
     {
+    default:
+        // Nothing to do for most tree nodes.
+        break;
+
     case GT_LCL_FLD:
-        if (tree->AsLclFld()->gtFieldSeq == FieldSeqStore::NotAField() && tree->AsLclFld()->gtLclOffs == 0)
+        // We may see a lclFld used for pointer-sized structs that have been morphed, in which
+        // case we can change it to GT_LCL_VAR.
+        // However, we may also see a lclFld with FieldSeqStore::NotAField() for structs that can't
+        // be analyzed, e.g. those with overlapping fields such as the IL implementation of Vector<T>.
+        if ((tree->AsLclFld()->gtFieldSeq == FieldSeqStore::NotAField()) &&
+            (tree->AsLclFld()->gtLclOffs == 0)                           &&
+            (tree->gtType == TYP_I_IMPL)                                 && 
+            (varDsc->lvExactSize == TARGET_POINTER_SIZE))
         {
-            // We will only see this for pointer-sized structs that have been morphed.
-            assert(tree->gtType == TYP_I_IMPL);
             tree->SetOper(GT_LCL_VAR);
             tree->gtFlags &= ~(GTF_VAR_USEASG);
         }
         else
         {
-            // If we access a field of a SIMD lclVar via GT_LCL_FLD, it must not have been promoted.
-            assert(varDsc->lvPromoted == false);
+            // If we access a field of a SIMD lclVar via GT_LCL_FLD, it cannot have been
+            // independently promoted.
+            assert(comp->lvaGetPromotionType(varDsc) != Compiler::PROMOTION_TYPE_INDEPENDENT);
             return;
         }
         break;
@@ -1991,13 +2143,6 @@ void Rationalizer::FixupIfSIMDLocal(Compiler* comp, GenTreeLclVarCommon* tree)
         assert(tree->gtType == TYP_I_IMPL);
         tree->SetOper(GT_STORE_LCL_VAR);
         tree->gtFlags &= ~(GTF_VAR_USEASG);
-        break;
-    case GT_LCL_VAR:
-    case GT_STORE_LCL_VAR:
-        // This is either TYP_STRUCT or a SIMD type, or a 8 byte SIMD that has already been transformed.
-        assert(tree->gtType == TYP_STRUCT ||
-               varTypeIsSIMD(tree->gtType) ||
-               (varDsc->lvExactSize == 8 && tree->gtType == TYP_DOUBLE));
         break;
     }
     unsigned simdSize = (unsigned int) roundUp(varDsc->lvExactSize, TARGET_POINTER_SIZE);

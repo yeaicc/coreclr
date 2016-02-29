@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // ===========================================================================
 // File: Prestub.cpp
 //
@@ -210,10 +209,11 @@ void DACNotifyCompilationFinished(MethodDesc *methodDesc)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
-        MODE_ANY;
+        SO_INTOLERANT;
+        MODE_PREEMPTIVE;
     }
     CONTRACTL_END;
+
     // Is the list active?
     JITNotifications jn(g_pNotificationTable);
     if (jn.IsActive())
@@ -2615,7 +2615,7 @@ extern "C" SIZE_T STDCALL DynamicHelperWorker(TransitionBlock * pTransitionBlock
     TypeHandle th;
     MethodDesc * pMD = NULL;
     FieldDesc * pFD = NULL;
-    CORCOMPILE_FIXUP_BLOB_KIND kind = (CORCOMPILE_FIXUP_BLOB_KIND)0;
+    CORCOMPILE_FIXUP_BLOB_KIND kind = ENCODE_NONE;
 
     {
         GCX_PREEMP_THREAD_EXISTS(CURRENT_THREAD);

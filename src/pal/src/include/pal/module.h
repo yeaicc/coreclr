@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -83,19 +82,6 @@ Return value :
 
 --*/
 BOOL LOADSetExeName(LPWSTR name);
-
-/*++
-Function :
-    LOADFreeModules
-
-    Release all resources held by the module manager (including dlopen handles)
-
-Parameters:
-    BOOL bTerminateUnconditionally: If TRUE, this will avoid calling any DllMains
-
-    (no return value)
---*/
-void LOADFreeModules(BOOL bTerminateUnconditionally);
 
 /*++
 Function :

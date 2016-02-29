@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //
 // vars.hpp
 //
@@ -341,8 +340,9 @@ class REF : public OBJECTREF
 
 };
 
-#define VALIDATEOBJECTREF(objref) ((objref).Validate())
-#define VALIDATEOBJECT(obj) obj->Validate()
+// the while (0) syntax below is to force a trailing semicolon on users of the macro
+#define VALIDATEOBJECTREF(objref) do {if ((objref) != NULL) (objref).Validate();} while (0)
+#define VALIDATEOBJECT(obj) do {if ((obj) != NULL) (obj)->Validate();} while (0)
 
 #define ObjectToOBJECTREF(obj)     (OBJECTREF(obj))
 #define OBJECTREFToObject(objref)  ((objref).operator-> ())
@@ -426,6 +426,8 @@ GPTR_DECL(MethodTable,      g_pOverlappedDataClass);
 GPTR_DECL(MethodTable,      g_ArgumentHandleMT);
 GPTR_DECL(MethodTable,      g_ArgIteratorMT);
 GPTR_DECL(MethodTable,      g_TypedReferenceMT);
+
+GPTR_DECL(MethodTable,      g_pByteArrayMT);
 
 #ifdef FEATURE_COMINTEROP
 GPTR_DECL(MethodTable,      g_pBaseCOMObject);

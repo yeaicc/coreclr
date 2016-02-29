@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // QCall.H
 
 
@@ -187,7 +186,7 @@ public:
             CONTRACTL_END;
 
             // The space for the return value has to be on the stack
-            _ASSERTE(GetThread()->IsAddressInStack(m_ppStringObject));
+            _ASSERTE(Thread::IsAddressInCurrentStack(m_ppStringObject));
 
             *m_ppStringObject = STRINGREFToObject(s);
         }
@@ -214,7 +213,7 @@ public:
             LIMITED_METHOD_CONTRACT;
 
             // The space for the return value has to be on the stack
-            _ASSERTE(GetThread()->IsAddressInStack(m_ppObject));
+            _ASSERTE(Thread::IsAddressInCurrentStack(m_ppObject));
 
             *m_ppObject = OBJECTREFToObject(o);
         }

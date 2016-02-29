@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*++
 
@@ -141,9 +140,9 @@ typedef enum
 /* Static global. The init function must be called
 before any other functions and if it is not successful, 
 no other functions should be done. */
-static HANDLE pStdIn;
-static HANDLE pStdOut;
-static HANDLE pStdErr;
+static HANDLE pStdIn = INVALID_HANDLE_VALUE;
+static HANDLE pStdOut = INVALID_HANDLE_VALUE;
+static HANDLE pStdErr = INVALID_HANDLE_VALUE;
 
 /*++
 Function : 
@@ -169,9 +168,9 @@ void FILEGetProperNotFoundError( LPSTR lpPath, LPDWORD lpErrorCode )
         return;
     }
 
-    if ( NULL == ( lpDupedPath = InternalStrdup( lpPath ) ) )
+    if ( NULL == ( lpDupedPath = strdup(lpPath) ) )
     {
-        ERROR( "InternalStrdup() failed!\n" );
+        ERROR( "strdup() failed!\n" );
         *lpErrorCode = ERROR_NOT_ENOUGH_MEMORY;
         return;
     }
@@ -270,10 +269,10 @@ CorUnix::InternalCanonicalizeRealPath(LPCSTR lpUnixPath, LPSTR lpBuffer, DWORD c
     lpRealPath = realpath(lpUnixPath, lpBuffer);
 #else   // !REALPATH_SUPPORTS_NONEXISTENT_FILES
 
-    lpExistingPath = InternalStrdup(lpUnixPath);
+    lpExistingPath = strdup(lpUnixPath);
     if (lpExistingPath == NULL)
     {
-        ERROR ("InternalStrdup failed with error %d\n", errno);
+        ERROR ("strdup failed with error %d\n", errno);
         palError = ERROR_NOT_ENOUGH_MEMORY;
         goto LExit;
     }
@@ -516,10 +515,10 @@ CorUnix::InternalCreateFile(
         goto done;
     }
 
-    lpUnixPath = InternalStrdup(lpFileName);
+    lpUnixPath = strdup(lpFileName);
     if ( lpUnixPath == NULL )
     {
-        ERROR("InternalStrdup() failed\n");
+        ERROR("strdup() failed\n");
         palError = ERROR_NOT_ENOUGH_MEMORY;
         goto done;
     }
@@ -1220,7 +1219,7 @@ DeleteFileA(
     if (palError != NO_ERROR)
     {
         InternalFree(lpFullUnixFileName);
-        lpFullUnixFileName = InternalStrdup(lpUnixFileName);
+        lpFullUnixFileName = strdup(lpUnixFileName);
         if (!lpFullUnixFileName)
         {
             palError = ERROR_NOT_ENOUGH_MEMORY;
@@ -3990,10 +3989,10 @@ CopyFileA(
     }
 
     /* Need to preserve the owner/group and chmod() flags */
-    lpUnixPath = InternalStrdup(lpExistingFileName);
+    lpUnixPath = strdup(lpExistingFileName);
     if ( lpUnixPath == NULL )
     {
-        ERROR("InternalStrdup() failed\n");
+        ERROR("strdup() failed\n");
         pThread->SetLastError(FILEGetLastErrorFromErrno());
         goto done;
     }
@@ -4020,10 +4019,10 @@ CopyFileA(
     }
 
     InternalFree(lpUnixPath);
-    lpUnixPath = InternalStrdup(lpNewFileName);
+    lpUnixPath = strdup(lpNewFileName);
     if ( lpUnixPath == NULL )
     {
-        ERROR("InternalStrdup() failed\n");
+        ERROR("strdup() failed\n");
         pThread->SetLastError(FILEGetLastErrorFromErrno());
         goto done;
     }
@@ -4147,9 +4146,9 @@ SetFileAttributesA(
         goto done;
     }
 
-    if ((UnixFileName = InternalStrdup(lpFileName)) == NULL)
+    if ((UnixFileName = strdup(lpFileName)) == NULL)
     {
-        ERROR("InternalStrdup() failed\n");
+        ERROR("strdup() failed\n");
         dwLastError = ERROR_NOT_ENOUGH_MEMORY;
         goto done;
     }
@@ -4942,12 +4941,25 @@ void FILECleanupStdHandles(void)
     stdin_handle = pStdIn;
     stdout_handle = pStdOut;
     stderr_handle = pStdErr;
+
     pStdIn = INVALID_HANDLE_VALUE;
     pStdOut = INVALID_HANDLE_VALUE;
     pStdErr = INVALID_HANDLE_VALUE;
-    CloseHandle(stdin_handle);
-    CloseHandle(stdout_handle);
-    CloseHandle(stderr_handle);
+
+    if (stdin_handle != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(stdin_handle);
+    }
+
+    if (stdout_handle != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(stdout_handle);
+    }
+
+    if (stderr_handle != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(stderr_handle);
+    }
 }
 
 

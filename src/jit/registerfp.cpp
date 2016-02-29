@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #include "jitpch.h"
@@ -78,7 +77,7 @@ void CodeGen::genFloatConst(GenTree *tree, RegSet::RegisterPreference *pref)
 
 void CodeGen::genFloatMath(GenTree *tree, RegSet::RegisterPreference *pref)
 {
-    assert(tree->OperGet() == GT_MATH);
+    assert(tree->OperGet() == GT_INTRINSIC);
 
     GenTreePtr op1 = tree->gtOp.gtOp1;
 
@@ -87,7 +86,7 @@ void CodeGen::genFloatMath(GenTree *tree, RegSet::RegisterPreference *pref)
 
     instruction ins;
 
-    switch (tree->gtMath.gtMathFN)
+    switch (tree->gtIntrinsic.gtIntrinsicId)
     {
     case CORINFO_INTRINSIC_Sin:
         ins = INS_invalid; 
@@ -215,7 +214,7 @@ void CodeGen::genFloatSimple(GenTree *tree, RegSet::RegisterPreference *pref)
             genFloatAsgArith(tree);
             break;
         }
-        case GT_MATH:
+        case GT_INTRINSIC:
             genFloatMath(tree, pref);
             break;
 
@@ -315,7 +314,8 @@ void CodeGen::genFloatCheckFinite(GenTree *tree, RegSet::RegisterPreference *pre
     inst_RV_IV(INS_cmp, reg, expMask, EA_4BYTE);
 
     // If exponent was all 1's, we need to throw ArithExcep
-    genJumpToThrowHlpBlk(EJ_je, SCK_ARITH_EXCPN);
+    emitJumpKind jmpEqual = genJumpKindForOper(GT_EQ, CK_SIGNED);
+    genJumpToThrowHlpBlk(jmpEqual, SCK_ARITH_EXCPN);
 
     genCodeForTreeFloat_DONE(tree, op1->gtRegNum);
 }

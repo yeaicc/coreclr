@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*****************************************************************************/
 #ifndef _VARTYPE_H_
@@ -18,6 +17,7 @@ enum    var_types_classification
     VTF_GCR = 0x0008,   // type is GC ref
     VTF_BYR = 0x0010,   // type is Byref
     VTF_I   = 0x0020,   // is machine sized 
+    VTF_S   = 0x0040,   // is a struct type
 };
 
 DECLARE_TYPED_ENUM(var_types,BYTE)
@@ -73,23 +73,18 @@ inline var_types TypeGet(var_types v) { return v; }
 template <class T>
 inline  bool        varTypeIsSIMD(T vt)
 {
-    if (TypeGet(vt) == TYP_SIMD12)
+    switch(TypeGet(vt))
     {
-        return true;
-    }
-
-    if (TypeGet(vt) == TYP_SIMD16)
-    {
-        return true;
-    }
-
+    case TYP_SIMD8:
+    case TYP_SIMD12:
+    case TYP_SIMD16:
 #ifdef FEATURE_AVX_SUPPORT
-    if (TypeGet(vt) == TYP_SIMD32)
-    {
-        return true;
-    }
+    case TYP_SIMD32:
 #endif // FEATURE_AVX_SUPPORT
-    return false;
+        return true;
+    default:
+        return false;
+    }
 }
 #else // FEATURE_SIMD
 
@@ -257,12 +252,24 @@ inline  bool        varTypeIsComposite(T vt)
 template <class T>
 inline  bool        varTypeIsPromotable(T vt)
 {
-    return (TypeGet(vt) == TYP_STRUCT ||
-           (TypeGet(vt) == TYP_BLK)   ||
+    return (varTypeIsStruct(vt)
+            || (TypeGet(vt) == TYP_BLK)
 #if !defined(_TARGET_64BIT_)
-           varTypeIsLong(vt)          ||
+            || varTypeIsLong(vt)
 #endif // !defined(_TARGET_64BIT_)
-           varTypeIsSIMD(vt));
+            );
+}
+
+template <class T>
+inline  bool        varTypeIsStruct(T vt)
+{
+    return          ((varTypeClassification[TypeGet(vt)] & VTF_S) != 0); 
+}
+
+template <class T>
+inline  bool        varTypeIsEnregisterableStruct(T vt)
+{
+    return          (TypeGet(vt) != TYP_STRUCT); 
 }
 
 /*****************************************************************************/

@@ -1,5 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 using System.Collections.Generic;
@@ -16,8 +17,7 @@ namespace System
             HasLookedForOverride = 0x4,
             UnknownValue = 0x8 // Has no default and could not find an override
         }
-        private static Dictionary<string, SwitchValueState> s_switchMap = new Dictionary<string, SwitchValueState>();
-        private static readonly object s_syncLock = new object();
+        private static readonly Dictionary<string, SwitchValueState> s_switchMap = new Dictionary<string, SwitchValueState>();
 
         public static string BaseDirectory
         {
@@ -32,8 +32,16 @@ namespace System
             }
         }
 
-        #region Switch APIs
+        public static string TargetFrameworkName
+        {
+            get
+            {
+                // Forward the value that is set on the current domain.
+                return AppDomain.CurrentDomain.SetupInformation.TargetFrameworkName;
+            }
+        }
 
+        #region Switch APIs
         static AppContext()
         {
             // populate the AppContext with the default set of values
@@ -149,11 +157,13 @@ namespace System
             if (switchName.Length == 0)
                 throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), "switchName");
 
-            lock (s_syncLock)
+            SwitchValueState switchValue = (isEnabled ? SwitchValueState.HasTrueValue : SwitchValueState.HasFalseValue)
+                                            | SwitchValueState.HasLookedForOverride;
+
+            lock (s_switchMap)
             {
                 // Store the new value and the fact that we checked in the dictionary
-                s_switchMap[switchName] = (isEnabled ? SwitchValueState.HasTrueValue : SwitchValueState.HasFalseValue)
-                                            | SwitchValueState.HasLookedForOverride;
+                s_switchMap[switchName] = switchValue;
             }
         }
 

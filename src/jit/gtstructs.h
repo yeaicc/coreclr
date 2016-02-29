@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 /*****************************************************************************/
@@ -68,7 +67,7 @@ GTSTRUCT_1(Call        , GT_CALL)
 GTSTRUCT_1(ArgList     , GT_LIST)
 GTSTRUCT_1(Colon       , GT_COLON)
 GTSTRUCT_1(FptrVal     , GT_FTN_ADDR)
-GTSTRUCT_1(Math        , GT_MATH) 
+GTSTRUCT_1(Intrinsic   , GT_INTRINSIC) 
 GTSTRUCT_1(Index       , GT_INDEX)
 #ifdef FEATURE_SIMD
 GTSTRUCT_2(BoundsChk   , GT_ARR_BOUNDS_CHECK, GT_SIMD_CHK)

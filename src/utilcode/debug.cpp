@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 //*****************************************************************************
 // Debug.cpp
 //
@@ -240,8 +239,8 @@ VOID LogAssert(
     GetSystemTime(&st);
 #endif
 
-    WCHAR exename[300];
-    WszGetModuleFileName(NULL, exename, sizeof(exename)/sizeof(WCHAR));
+    PathString exename;
+    WszGetModuleFileName(NULL, exename);
 
     LOG((LF_ASSERT,
          LL_FATALERROR,
@@ -260,7 +259,7 @@ VOID LogAssert(
          szFile,
          iLine,
          szExpr));
-    LOG((LF_ASSERT, LL_FATALERROR, "RUNNING EXE: %ws\n", exename));
+    LOG((LF_ASSERT, LL_FATALERROR, "RUNNING EXE: %ws\n", exename.GetUnicode()));
 }
 
 //*****************************************************************************
@@ -349,13 +348,6 @@ bool _DbgBreakCheck(
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_FORBID_FAULT;
     STATIC_CONTRACT_DEBUG_ONLY;
-
-    RaiseExceptionOnAssert(rTestAndRaise);
-
-    if (DebugBreakOnAssert())
-    {
-        DebugBreak();
-    }
 
     DBGIGNORE* pDBGIFNORE = GetDBGIGNORE();
     _DBGIGNOREDATA *psData;
@@ -490,6 +482,11 @@ bool _DbgBreakCheck(
 
     switch(ret)
     {
+    case 0:
+#if 0
+        // The message box was not displayed. Tell caller to break.
+        return true;
+#endif
     // For abort, just quit the app.
     case IDABORT:
         TerminateProcess(GetCurrentProcess(), 1);
@@ -538,10 +535,6 @@ bool _DbgBreakCheck(
         psData->iLine = iLine;
         strcpy(psData->rcFile, szFile);
         break;
-
-    case 0:
-        // The message box was not displayed. Tell caller to break.
-        return true;
     }
 
     return false;
@@ -557,13 +550,6 @@ bool _DbgBreakCheckNoThrow(
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_FORBID_FAULT;
     STATIC_CONTRACT_DEBUG_ONLY;
-
-    RaiseExceptionOnAssert(rTestAndRaise);
-
-    if (DebugBreakOnAssert())
-    {
-        DebugBreak();
-    }
 
     bool failed = false;
     bool result = false;
@@ -706,11 +692,6 @@ VOID DbgAssertDialog(const char *szFile, int iLine, const char *szExpr)
     dbgForceToMemory = &szExpr;
 
     RaiseExceptionOnAssert(rTestAndRaise);
-
-    if (DebugBreakOnAssert())
-    {
-        DebugBreak();
-    }
 
     BOOL fConstrained = FALSE;
 

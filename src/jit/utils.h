@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -47,7 +46,6 @@ inline const char* dspBool(bool b)
 }
 
 #ifdef FEATURE_CORECLR
-#ifndef CROSSGEN_COMPILE
 #ifdef _CRT_ABS_DEFINED
 // we don't have the full standard library
 inline int64_t abs(int64_t t)
@@ -55,7 +53,6 @@ inline int64_t abs(int64_t t)
     return t > 0 ? t : -t;
 }
 #endif
-#endif // !CROSSGEN_COMPILE
 #endif // FEATURE_CORECLR
 
 template <typename T> int signum(T val) 

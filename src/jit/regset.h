@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*****************************************************************************/
 
@@ -155,9 +154,35 @@ public: // TODO-Cleanup: Should be private, but GCInfo uses them
 #ifdef LEGACY_BACKEND
     regMaskTP           rsMaskUsed;            // currently 'used' registers mask
 #endif // LEGACY_BACKEND
-    regMaskTP           rsMaskVars;            // mask of registers currently allocated to variables
+
+    __declspec(property(get=GetMaskVars,put=SetMaskVars))
+    regMaskTP           rsMaskVars;             // mask of registers currently allocated to variables
+
+    regMaskTP GetMaskVars() const               // 'get' property function for rsMaskVars property
+    {
+        return _rsMaskVars;
+    }
+
+    void SetMaskVars(regMaskTP newMaskVars);    // 'put' property function for rsMaskVars property
+
+    void AddMaskVars(regMaskTP addMaskVars)     // union 'addMaskVars' with the rsMaskVars set
+    {
+        SetMaskVars(_rsMaskVars | addMaskVars);
+    }
+
+    void RemoveMaskVars(regMaskTP removeMaskVars)   // remove 'removeMaskVars' from the rsMaskVars set (like bitset DiffD)
+    {
+        SetMaskVars(_rsMaskVars & ~removeMaskVars);
+    }
+
+    void ClearMaskVars()                        // Like SetMaskVars(RBM_NONE), but without any debug output.
+    {
+        _rsMaskVars = RBM_NONE;
+    }
 
 private:
+
+    regMaskTP           _rsMaskVars;            // backing store for rsMaskVars property
 
 #ifdef LEGACY_BACKEND
     regMaskTP           rsMaskLock;            // currently 'locked' registers mask

@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information. 
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /***
 *memcpy_s.c - contains memcpy_s routine
@@ -21,6 +20,7 @@
 
 #include <string.h>
 #include <errno.h>
+#include <assert.h>
 #include "internal_securecrt.h"
 #include "mbusafecrt_internal.h"
 
@@ -75,6 +75,8 @@ errno_t __cdecl memcpy_s(
         return EINVAL;
     }
 
+    UINT_PTR x = (UINT_PTR)dst, y = (UINT_PTR)src;
+    assert((x + count <= y) || (y + count <= x));
     memcpy(dst, src, count);
     return 0;
 }

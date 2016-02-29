@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 // ===========================================================================
 // File: compile.cpp
 //
@@ -74,11 +73,6 @@
 #ifdef FEATURE_PERFMAP
 #include "perfmap.h"
 #endif
-
-#ifdef MDIL
-#include <mdil.h>
-#endif
-#include "tritonstress.h"
 
 #include "argdestination.h"
 
@@ -565,11 +559,6 @@ HRESULT CEECompileInfo::LoadAssemblyByPath(
             pDomain->ToCompilationDomain()->AddDependency(&spec, pAssemblyHolder);
         }
 
-#ifdef MDIL
-        if (GetAppDomain()->IsMDILCompilationDomain())
-            TritonStressStartup(LogToSvcLogger);
-#endif
-
         // Kind of a workaround - if we could have loaded this assembly via normal load,
 
         *pHandle = CORINFO_ASSEMBLY_HANDLE(pAssembly);
@@ -628,11 +617,6 @@ static HRESULT LoadAssemblyByIAssemblyNameWorker(
 
         pAssembly = spec.LoadAssembly(FILE_LOADED);
     }
-
-#ifdef MDIL
-    if (GetAppDomain()->IsMDILCompilationDomain())
-        TritonStressStartup(LogToSvcLogger);
-#endif
 
     //
     // Return the module handle
@@ -880,7 +864,13 @@ HRESULT CEECompileInfo::SetCachedSigningLevel(HANDLE hNI, HANDLE *pModules, COUN
         handles.Append(hFile);
     }
 
-    IfFailGo(SetCachedSigningLevel(handles.GetElements(), handles.GetCount(), 0, hNI));
+    if (!SetCachedSigningLevel(handles.GetElements(), handles.GetCount(), 0, hNI))
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        _ASSERTE(FAILED(hr));
+        goto ErrExit;
+    }
+
     for (COUNT_T i = 0; i < nModules; i++)
     {
         if (!SetCachedSigningLevel(handles.GetElements(), handles.GetCount(), 0, pModules[i]))
@@ -2543,12 +2533,12 @@ CORCOMPILE_FIXUP_BLOB_KIND CEECompileInfo::GetFieldBaseOffset(
 
     if (pMT->IsValueType())
     {
-        return (CORCOMPILE_FIXUP_BLOB_KIND)0;
+        return ENCODE_NONE;
     }
 
     if (pMT->GetParentMethodTable()->IsInheritanceChainLayoutFixedInCurrentVersionBubble())
     {
-        return (CORCOMPILE_FIXUP_BLOB_KIND)0;
+        return ENCODE_NONE;
     }
 
     if (pMT->HasLayout())
@@ -2652,6 +2642,13 @@ BOOL CEECompileInfo::AreAllClassesFullyLoaded(CORINFO_MODULE_HANDLE moduleHandle
 
 #endif // FEATURE_READYTORUN_COMPILER
 
+BOOL CEECompileInfo::HasCustomAttribute(CORINFO_METHOD_HANDLE method, LPCSTR customAttributeName)
+{
+    STANDARD_VM_CONTRACT;
+
+    MethodDesc * pMD = GetMethod(method);
+    return S_OK == pMD->GetMDImport()->GetCustomAttributeByName(pMD->GetMemberDef(), customAttributeName, NULL, NULL);
+}
 
 #define OMFConst_Read            0x0001
 #define OMFConst_Write           0x0002

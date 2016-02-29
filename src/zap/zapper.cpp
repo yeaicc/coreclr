@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 
 #include "common.h"
@@ -731,15 +730,14 @@ void Zapper::LoadAndInitializeJITForNgen(LPCWSTR pwzJitName, OUT HINSTANCE* phJi
     HRESULT hr = E_FAIL;
 
 #ifdef FEATURE_MERGE_JIT_AND_ENGINE
-    WCHAR CoreClrFolder[MAX_LONGPATH + 1];
+    PathString CoreClrFolder;
     extern HINSTANCE g_hThisInst;
-    if (WszGetModuleFileName(g_hThisInst, CoreClrFolder, MAX_LONGPATH))
+    if (WszGetModuleFileName(g_hThisInst, CoreClrFolder))
     {
-        WCHAR *filePtr = wcsrchr(CoreClrFolder, W('\\'));
-        if (filePtr)
+        if (SUCCEEDED(CopySystemDirectory(CoreClrFolder, CoreClrFolder)))
         {
-            filePtr[1] = W('\0');
-            wcscat_s(CoreClrFolder, MAX_LONGPATH, pwzJitName);
+            CoreClrFolder.Append(pwzJitName);
+
             *phJit = ::WszLoadLibrary(CoreClrFolder);
             if (*phJit == NULL)
             {
@@ -773,6 +771,13 @@ void Zapper::LoadAndInitializeJITForNgen(LPCWSTR pwzJitName, OUT HINSTANCE* phJi
     CoreClrCallbacks cccallbacks = GetClrCallbacks();
     (*sxsJitStartupFn) (cccallbacks);
 #endif
+
+    typedef void (__stdcall* pJitStartup)(ICorJitHost* host);
+    pJitStartup jitStartupFn = (pJitStartup)GetProcAddress(*phJit, "jitStartup");
+    if (jitStartupFn != nullptr)
+    {
+        jitStartupFn(JitHost::getJitHost());
+    }
 
     //get the appropriate compiler interface
     typedef ICorJitCompiler* (__stdcall* pGetJitFn)();
@@ -884,6 +889,7 @@ void Zapper::InitEE(BOOL fForceDebug, BOOL fForceProfile, BOOL fForceInstrument)
     //
 
 #ifdef FEATURE_MERGE_JIT_AND_ENGINE
+    jitStartup(JitHost::getJitHost());
     m_pJitCompiler = getJit();
 
     if (m_pJitCompiler == NULL)

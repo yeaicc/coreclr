@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -489,7 +488,9 @@ void                GCInfo::gcCountForHeader(UNALIGNED unsigned int * untrackedC
 
             count++;
         }
-        else if  (varDsc->lvType == TYP_STRUCT && varDsc->lvOnFrame)
+        else if  (varDsc->lvType == TYP_STRUCT &&
+                  varDsc->lvOnFrame            &&
+                  (varDsc->lvExactSize >= TARGET_POINTER_SIZE))
         {
             unsigned slots  = compiler->lvaLclSize(varNum) / sizeof(void*);
             BYTE *   gcPtrs = compiler->lvaGetGcLayout(varNum);
@@ -791,7 +792,7 @@ GCInfo::gcUpdateForRegVarMove(regMaskTP srcMask, regMaskTP dstMask, LclVarDsc *v
 
     if (srcMask != RBM_NONE)
     {
-        regSet->rsMaskVars &= ~(srcMask);
+        regSet->RemoveMaskVars(srcMask);
         if (isGCRef)
         {
             assert((gcRegByrefSetCur & srcMask) == 0);
@@ -813,7 +814,7 @@ GCInfo::gcUpdateForRegVarMove(regMaskTP srcMask, regMaskTP dstMask, LclVarDsc *v
     }
     if (dstMask != RBM_NONE)
     {
-        regSet->rsMaskVars |= dstMask;
+        regSet->AddMaskVars(dstMask);
         // If the source is a reg, then the gc sets have been set appropriately
         // Otherwise, we have to determine whether to set them
         if (srcMask == RBM_NONE)

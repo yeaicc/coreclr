@@ -789,7 +789,9 @@
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Casing.cs" />
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Collation.cs" />
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Locale.cs" />
+    <GlobalizationSources Include="$(CoreFxSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.ResultCode.cs" />
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.TimeZoneInfo.cs" />
+    <GlobalizationSources Include="$(CoreFxSourcesRoot)\Interop\Unix\System.Globalization.Native\Interop.Utils.cs" />
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\System\Globalization\CalendarData.Unix.cs" />
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\System\Globalization\CompareInfo.Unix.cs" />
     <GlobalizationSources Include="$(CoreFxSourcesRoot)\System\Globalization\CultureData.Unix.cs" />
@@ -817,6 +819,7 @@
     <ThreadingSources Include="$(BclSourcesRoot)\System\Threading\Overlapped.cs" />
     <ThreadingSources Include="$(BclSourcesRoot)\System\Threading\ParameterizedThreadStart.cs" />
     <ThreadingSources Include="$(BclSourcesRoot)\System\Threading\ReaderWriterLock.cs" />
+    <ThreadingSources Condition="'$(FeatureCoreClr)'=='true'" Include="$(BclSourcesRoot)\System\Threading\Semaphore.cs" />
     <ThreadingSources Include="$(BclSourcesRoot)\System\Threading\SemaphoreFullException.cs" />
     <ThreadingSources Include="$(BclSourcesRoot)\System\Threading\SynchronizationLockException.cs" />
     <ThreadingSources Include="$(BclSourcesRoot)\System\Threading\Thread.cs" />
@@ -989,6 +992,7 @@
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventDescriptor.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventProvider.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventSource.cs" />
+    <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventSource_CoreCLR.cs" />
     <DiagnosticsSources Condition="'$(FeatureXplatEventSource)' == 'true'" Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\XplatEventLogger.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\EventSourceException.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\FrameworkEventSource.cs" />
@@ -1011,7 +1015,7 @@
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\FieldMetadata.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\InvokeTypeInfo.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\NameInfo.cs" />
-    <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\PropertyAccessor.cs" />
+    <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\PropertyValue.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\PropertyAnalysis.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\SimpleEventTypes.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\SimpleTypeInfos.cs" />
@@ -1023,7 +1027,6 @@
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingEventTypes.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingMetadataCollector.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingTypeInfo.cs" />
-    <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TraceLoggingTypeInfo_T.cs" />
     <DiagnosticsSources Include="$(BclSourcesRoot)\System\Diagnostics\Eventing\TraceLogging\TypeAnalysis.cs" />
   </ItemGroup>
   <ItemGroup>

@@ -1,7 +1,6 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-//
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
 
 //
 // This file declares the types that constitute the interface between the
@@ -178,7 +177,15 @@ public:
     regNumber           genGetThisArgReg    (GenTreePtr     call);
 
 #ifdef _TARGET_XARCH_
-    bool                genAddrShouldUsePCRel(size_t addr);
+#ifdef _TARGET_AMD64_
+    // There are no reloc hints on x86
+    unsigned short     genAddrRelocTypeHint(size_t addr);
+#endif
+    bool                genDataIndirAddrCanBeEncodedAsPCRelOffset(size_t addr);
+    bool                genCodeIndirAddrCanBeEncodedAsPCRelOffset(size_t addr);
+    bool                genCodeIndirAddrCanBeEncodedAsZeroRelOffset(size_t addr);
+    bool                genCodeIndirAddrNeedsReloc(size_t addr);
+    bool                genCodeAddrNeedsReloc(size_t addr);
 #endif
 
 
@@ -284,8 +291,9 @@ public:
                                                  unsigned *     alignmentWB);
 
     void                genMarkTreeInReg        (GenTreePtr tree, regNumber reg);
+#if CPU_LONG_USES_REGPAIR
     void                genMarkTreeInRegPair    (GenTreePtr tree, regPairNo regPair);
-
+#endif
     // Methods to abstract target information
 
     bool                validImmForInstr        (instruction ins, ssize_t val, insFlags flags = INS_FLAGS_DONT_CARE);
