@@ -86,6 +86,7 @@ if(WIN32)
         uuid.lib
         user32.lib
         ${STATIC_MT_CRT_LIB}
+        ${STATIC_MT_VCRT_LIB}
     )
 else(WIN32)
     list(APPEND COREDAC_LIBRARIES
@@ -98,7 +99,4 @@ endif(WIN32)
 target_link_libraries(mscordaccore ${COREDAC_LIBRARIES})
 
 # add the install targets
-install (TARGETS mscordaccore DESTINATION .)
-if(WIN32)
-    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/mscordaccore.pdb DESTINATION PDB)
-endif(WIN32)
+install_clr(mscordaccore)

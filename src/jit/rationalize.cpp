@@ -16,7 +16,7 @@
 void dumpMethod()
 {
     if (VERBOSE)
-        GetTlsCompiler()->fgDispBasicBlocks(true);
+        JitTls::GetCompiler()->fgDispBasicBlocks(true);
 }
 
 void dumpTreeStack(Compiler *comp, ArrayStack<GenTree *> *stack)
@@ -324,13 +324,13 @@ Compiler::fgSpliceTreeBefore(BasicBlock* block, GenTreeStmt* insertionPoint, Gen
 }
 
 //------------------------------------------------------------------------------
-// fgMakeEmbeddedStmt: insert the given subtree as an embedded statement 
+// fgMakeEmbeddedStmt: insert the given subtree as an embedded statement
 //
 // Arguments:
 //    block - The block containing the parentStmt, into which the new embedded
 //            statement will go
 //    tree  - The tree that will be the gtStmtExpr of the new embedded statement
-//    parentStmt - The top-level statement that 'tree' is embedded in
+//    parentStmt - A statement (top-level or embedded) that 'tree' is fully contained in
 //
 // Return Value:
 //    A pointer to the new statement.
@@ -848,23 +848,18 @@ void Rationalizer::MorphAsgIntoStoreLcl(GenTreeStmt* stmt, GenTreePtr pTree)
     GenTreePtr lhs = pTree->gtGetOp1();
     GenTreePtr rhs = pTree->gtGetOp2();
 
-    assert(lhs->OperGet() == GT_LCL_VAR ||
-           lhs->OperGet() == GT_LCL_FLD);
+    genTreeOps lhsOper = lhs->OperGet();
+    genTreeOps storeOper;
 
+    assert(lhsOper == GT_LCL_VAR || lhsOper == GT_LCL_FLD);
+
+    storeOper = storeForm(lhsOper);
 #ifdef DEBUG
-    if (lhs->OperGet() == GT_LCL_VAR)
-    {
-        JITDUMP("rewriting GT_ASG(GT_LCL_VAR, X) to GT_STORE_LCL_VAR(X)\n");
-    }
-    else
-    {
-        assert(lhs->OperGet() == GT_LCL_FLD);
-        JITDUMP("rewriting GT_ASG(GT_LCL_FLD, X) to GT_STORE_LCL_FLD(X)\n");
-    }
+    JITDUMP("rewriting asg(%s, X) to %s(X)\n", GenTree::NodeName(lhsOper), GenTree::NodeName(storeOper));
 #endif // DEBUG
 
     GenTreeLclVarCommon* var = lhs->AsLclVarCommon();
-    pTree->SetOper(storeForm(var->OperGet()));
+    pTree->SetOper(storeOper);
     GenTreeLclVarCommon* dst = pTree->AsLclVarCommon();
     dst->SetLclNum(var->gtLclNum);
     dst->SetSsaNum(var->gtSsaNum);
@@ -939,7 +934,7 @@ void Compiler::fgFixupIfCallArg(ArrayStack<GenTree *> *parentStack,
     GenTree *parentCall = isNodeCallArg(parentStack);
     if (!parentCall) 
     {
-        DBEXEC(VERBOSE, dumpTreeStack(GetTlsCompiler(), parentStack));
+        DBEXEC(VERBOSE, dumpTreeStack(JitTls::GetCompiler(), parentStack));
         return;
     }
      
@@ -1538,10 +1533,10 @@ void Rationalizer::RewriteCopyBlk(GenTreePtr* ppTree, Compiler::fgWalkData* data
 #endif // FEATURE_SIMD
 }
 
-// Rewrite GT_LDOBJ of SIMD Vector as GT_IND(GT_LEA(ldobj.op1)) of a SIMD type.
+// Rewrite GT_OBJ of SIMD Vector as GT_IND(GT_LEA(obj.op1)) of a SIMD type.
 //
 // Arguments:
-//    ppTree      - A pointer-to-a-pointer for the GT_LDOBJ
+//    ppTree      - A pointer-to-a-pointer for the GT_OBJ
 //    fgWalkData  - A pointer to tree walk data providing the context
 //
 // Return Value:
@@ -1550,16 +1545,16 @@ void Rationalizer::RewriteCopyBlk(GenTreePtr* ppTree, Compiler::fgWalkData* data
 // TODO-Cleanup: Once SIMD types are plumbed through the frontend, this will no longer
 // be required.
 //
-void Rationalizer::RewriteLdObj(GenTreePtr* ppTree, Compiler::fgWalkData* data)
+void Rationalizer::RewriteObj(GenTreePtr* ppTree, Compiler::fgWalkData* data)
 {    
 #ifdef FEATURE_SIMD
     Compiler* comp = data->compiler;
-    GenTreeLdObj* ldObj = (*ppTree)->AsLdObj();
+    GenTreeObj* obj = (*ppTree)->AsObj();
 
-    // For UNIX struct passing, we can have LdObj nodes for arguments.
+    // For UNIX struct passing, we can have Obj nodes for arguments.
     // For other cases, we should never see a non-SIMD type here.
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
-    if (!varTypeIsSIMD(ldObj))
+    if (!varTypeIsSIMD(obj))
     {
         return;
     }
@@ -1567,49 +1562,49 @@ void Rationalizer::RewriteLdObj(GenTreePtr* ppTree, Compiler::fgWalkData* data)
     // Should come here only if featureSIMD is enabled
     noway_assert(comp->featureSIMD);
     // On  we should only call this with a SIMD type.
-    noway_assert(varTypeIsSIMD(ldObj));
-    var_types simdType = ldObj->TypeGet();
+    noway_assert(varTypeIsSIMD(obj));
+    var_types simdType = obj->TypeGet();
 
-    // If the operand of ldobj is a GT_ADDR(GT_LCL_VAR) and LclVar is known to be a SIMD type,
-    // replace ldobj by GT_LCL_VAR.
-    GenTree* srcAddr = ldObj->gtGetOp1();
+    // If the operand of obj is a GT_ADDR(GT_LCL_VAR) and LclVar is known to be a SIMD type,
+    // replace obj by GT_LCL_VAR.
+    GenTree* srcAddr = obj->gtGetOp1();
     if (srcAddr->OperGet() == GT_ADDR && comp->isSIMDTypeLocal(srcAddr->gtGetOp1()))
     {
         GenTree* src = srcAddr->gtGetOp1();
         comp->fgSnipInnerNode(srcAddr);
-        // It is possible for the ldobj to be the last node in the tree, if its result is
+        // It is possible for the obj to be the last node in the tree, if its result is
         // not actually stored anywhere and is not eliminated.
         // This can happen with an unused SIMD expression involving a localVar or temporary value,
         // where the SIMD expression is returning a non-SIMD value, and the expression is sufficiently
         // complex (e.g. a call to vector * scalar which is inlined but not an intrinsic).
-        // The ldobj of the localVar is not eliminated, because it involves an indirection,
-        // and therefore appears potentially unsafe to eliminate. However, when we transform the ldobj into
+        // The obj of the localVar is not eliminated, because it involves an indirection,
+        // and therefore appears potentially unsafe to eliminate. However, when we transform the obj into
         // a plain localVar during the Rationalizer, we need to correctly handle the case where it has
         // no parent.
         // This happens, for example, with this source code:
         //      Vector4.Dot(default(Vector4) * 2f, Vector4.One);
-        if (ldObj->gtNext == nullptr)
+        if (obj->gtNext == nullptr)
         {
             SplitData *tmpState = (SplitData *) data->pCallbackData;
-            comp->fgSnipNode(tmpState->root->AsStmt(), ldObj);
+            comp->fgSnipNode(tmpState->root->AsStmt(), obj);
         }
         else
         {
-            comp->fgSnipInnerNode(ldObj);
+            comp->fgSnipInnerNode(obj);
         }
-        comp->fgFixupIfCallArg(data->parentStack, ldObj, src);
+        comp->fgFixupIfCallArg(data->parentStack, obj, src);
         src->gtType = simdType;
 
         *ppTree = src;
     }
     else 
     {
-        ldObj->SetOper(GT_IND);
-        ldObj->gtType = simdType;
+        obj->SetOper(GT_IND);
+        obj->gtType = simdType;
     }
 #else
     // we should never reach without feature SIMD
-    assert(!"Unexpected Ldobj during rationalization\n");
+    assert(!"Unexpected obj during rationalization\n");
     unreached();
 #endif
 }
@@ -1979,8 +1974,8 @@ Compiler::fgWalkResult Rationalizer::SimpleTransformHelper(GenTree **ppTree, Com
             RewriteCopyBlk(ppTree, data);
             break;
 
-        case GT_LDOBJ:
-            RewriteLdObj(ppTree, data);
+        case GT_OBJ:
+            RewriteObj(ppTree, data);
             break;
 
         case GT_LCL_FLD:
@@ -2160,7 +2155,7 @@ void Rationalizer::ValidateStatement(Location loc)
 void Rationalizer::ValidateStatement(GenTree *tree, BasicBlock *block)
 {
     assert(tree->gtOper == GT_STMT);
-    DBEXEC(TRUE, GetTlsCompiler()->fgDebugCheckNodeLinks(block, tree));
+    DBEXEC(TRUE, JitTls::GetCompiler()->fgDebugCheckNodeLinks(block, tree));
 }
 
 // sanity checks that apply to all kinds of IR

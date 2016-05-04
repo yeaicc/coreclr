@@ -1,6 +1,7 @@
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set( GCINFO_SOURCES
+  arraylist.cpp
   gcinfoencoder.cpp
   dbggcinfoencoder.cpp
 )
@@ -21,5 +22,5 @@ endif(CLR_CMAKE_PLATFORM_UNIX)
 add_subdirectory(lib)
 add_subdirectory(crossgen)
 
-install (FILES gcinfoencoder.cpp
+_install (FILES gcinfoencoder.cpp
                DESTINATION gcinfo)

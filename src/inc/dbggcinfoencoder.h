@@ -21,10 +21,9 @@
 #include <wchar.h>
 #include <stdio.h>
 
-#include "utilcode.h"
 #include "corjit.h"
-#include "list.h"     // for SList
-#include "arraylist.h"
+#include "iallocator.h"
+#include "gcinfoarraylist.h"
 
 #include "stdmacros.h"
 #include "gcinfotypes.h"
@@ -121,22 +120,42 @@ public:
 
 private:
 
-    class MemoryBlockDesc
+    class MemoryBlockList;
+    class MemoryBlock
     {
-    public:
-        size_t* StartAddress;
-        SLink m_Link;
+        friend class MemoryBlockList;
+        MemoryBlock* m_next;
 
-        inline void Init()
+    public:
+        size_t Contents[];
+
+        inline MemoryBlock* Next()
         {
-            m_Link.m_pNext = NULL;
+            return m_next;
         }
+    };
+
+    class MemoryBlockList
+    {
+        MemoryBlock* m_head;
+        MemoryBlock* m_tail;
+
+    public:
+        MemoryBlockList();
+
+        inline MemoryBlock* Head()
+        {
+            return m_head;
+        }
+
+        MemoryBlock* AppendNew(IAllocator* allocator, size_t bytes);
+        void Dispose(IAllocator* allocator);
     };
 
     IJitAllocator* m_pAllocator;
     size_t m_BitCount;
     int m_FreeBitsInCurrentSlot;
-    SList<MemoryBlockDesc> m_MemoryBlocks;
+    MemoryBlockList m_MemoryBlocks;
     const static int m_MemoryBlockSize = 512;    // must be a multiple of the pointer size
     size_t* m_pCurrentSlot;            // bits are written through this pointer
     size_t* m_OutOfBlockSlot;        // sentinel value to determine when the block is full
@@ -343,14 +362,6 @@ private:
         bool BecomesLive;
     };
 
-    class LifetimeTransitionAllocator
-    {
-    public:
-
-        static void *Alloc (void *context, SIZE_T cb);
-        static void Free (void *context, void *pv);
-    };
-
     ICorJitInfo*                m_pCorJitInfo;
     CORINFO_METHOD_INFO*        m_pMethodInfo;
     IJitAllocator*              m_pAllocator;
@@ -367,7 +378,7 @@ private:
 #endif
     BitStreamWriter     m_FullyInterruptibleInfoWriter;
 
-    StructArrayList<LifetimeTransition, 64, 2, LifetimeTransitionAllocator> m_LifetimeTransitions;
+    GcInfoArrayList<LifetimeTransition, 64> m_LifetimeTransitions;
     LifetimeTransition *m_rgSortedTransitions;
 
     bool   m_IsVarArg;

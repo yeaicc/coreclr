@@ -1,5 +1,14 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
 #ifndef __XPLAT_H__
 #define __XPLAT_H__
+
+#ifdef _MSC_VER
+// Our tests don't care about secure CRT
+#define _CRT_SECURE_NO_WARNINGS 1
+#endif
 
 // common headers
 #include <stdio.h>
@@ -20,16 +29,21 @@
 //  include 
 #ifdef _WIN32
 	#include <windows.h>
-	#include <wchar.h>
 	#include <tchar.h>
 #else
 	#include "types.h"
 #endif
+#include <wchar.h>
 
 
 // dllexport
 #if defined _WIN32
 #define DLL_EXPORT __declspec(dllexport)
+
+#ifndef snprintf
+#define snprintf _snprintf
+#endif //snprintf
+
 #else //!_Win32
 #if __GNUC__ >= 4    
 #define DLL_EXPORT __attribute__ ((visibility ("default")))
@@ -39,15 +53,19 @@
 
 #endif //_WIN32
 
+#ifndef WINAPI
+#define WINAPI __stdcall
+#endif
 
-#define WINAPI   _cdecl
-#ifndef __stdcall
+#ifndef _MSC_VER
 #if __i386__
 #define __stdcall __attribute__((stdcall))
 #define _cdecl __attribute__((cdecl))
+#define __cdecl __attribute__((cdecl))
 #else
 #define __stdcall
 #define _cdecl
+#define __cdecl
 #endif
 #endif
 
@@ -89,13 +107,24 @@ typedef union tagCY {
 	long int64;
 } CY, CURRENCY;
 
+
+class IUnknown
+{
+public:
+  virtual int  QueryInterface(void* riid,void** ppvObject);
+  virtual unsigned long  AddRef();
+  virtual unsigned long  Release();
+};
+
 #define CoTaskMemAlloc(p) malloc(p)
 #define CoTaskMemFree(p) free(p)
 
 // function implementation
 size_t strncpy_s(char* strDest, size_t numberOfElements, const char *strSource, size_t count)
 {
-	return snprintf(strDest, count, "%s", strSource);
+    // NOTE: Need to pass count + 1 since strncpy_s does not count null,
+    // while snprintf does. 
+	return snprintf(strDest, count + 1, "%s", strSource);
 }
 
 size_t strcpy_s(char *dest, size_t n, char const *src)

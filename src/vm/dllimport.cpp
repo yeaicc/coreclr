@@ -1835,7 +1835,7 @@ void NDirectStubLinker::SetCallingConvention(CorPinvokeMap unmngCallConv, BOOL f
     LIMITED_METHOD_CONTRACT;
     ULONG uNativeCallingConv = 0;
 
-#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_)
+#if !defined(_TARGET_X86_)
     if (fIsVarArg)
     {
         // The JIT has to use a different calling convention for unmanaged vararg targets on 64-bit and ARM:
@@ -1843,7 +1843,7 @@ void NDirectStubLinker::SetCallingConvention(CorPinvokeMap unmngCallConv, BOOL f
         uNativeCallingConv = CORINFO_CALLCONV_NATIVEVARARG;
     }
     else
-#endif // _TARGET_AMD64_ || _TARGET_ARM_
+#endif // !_TARGET_X86_
     {
         switch (unmngCallConv)
         {
@@ -2584,15 +2584,7 @@ void NDirectStubLinker::DoNDirect(ILCodeStream *pcsEmit, DWORD dwStubFlags, Meth
 #endif // FEATURE_COMINTEROP
             {
                 EmitLoadStubContext(pcsEmit, dwStubFlags);
-                
-#ifdef MDIL
-                if (GetAppDomain()->IsMDILCompilationDomain())
-                {
-                    // GetNDirectTarget is understood by the compiler and generates the CALL_PINVOKE instruction
-                    pcsEmit->EmitCALL(pcsEmit->GetToken(MscorlibBinder::GetMethod(METHOD__STUBHELPERS__GET_NDIRECT_TARGET)), 1, 1);
-                }
-                else
-#endif // MDIL
+
                 {
                     // Perf: inline the helper for now
                     //pcsEmit->EmitCALL(METHOD__STUBHELPERS__GET_NDIRECT_TARGET, 1, 1);
@@ -7280,14 +7272,6 @@ VOID NDirect::NDirectLink(NDirectMethodDesc *pMD)
     // On the phone, we only allow platform assemblies to define pinvokes
     // unless the host has asked us otherwise.
     //
-#ifdef FEATURE_WINDOWSPHONE
-    if (!GetAppDomain()->EnablePInvokeAndClassicComInterop())
-    {
-        if (!pMD->GetModule()->GetFile()->GetAssembly()->IsProfileAssembly())
-            COMPlusThrow(kNotSupportedException, W("NotSupported_UserDllImport"));
-    }
-#endif //FEATURE_WINDOWS_PHONE
-
 
     if (pMD->IsClassConstructorTriggeredAtLinkTime())
     {

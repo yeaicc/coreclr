@@ -2,6 +2,7 @@
 # Set the RPATH of mscordbi so that it can find dependencies without needing to set LD_LIBRARY_PATH
 # For more information: http://www.cmake.org/Wiki/CMake_RPATH_handling.
 if(CORECLR_SET_RPATH)
+  set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
   if(CLR_CMAKE_PLATFORM_DARWIN)
     set(CMAKE_INSTALL_RPATH "@loader_path")
   else()
@@ -61,6 +62,7 @@ if(WIN32)
         user32.lib
         version.lib
         ${STATIC_MT_CRT_LIB}
+        ${STATIC_MT_VCRT_LIB}
     )
 
     target_link_libraries(mscordbi ${COREDBI_LIBRARIES})
@@ -88,7 +90,4 @@ elseif(CLR_CMAKE_PLATFORM_UNIX)
 endif(WIN32)
 
 # add the install targets
-install (TARGETS mscordbi DESTINATION .)
-if(WIN32)
-    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/mscordbi.pdb DESTINATION PDB)
-endif(WIN32)
+install_clr(mscordbi)

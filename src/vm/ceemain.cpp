@@ -803,8 +803,9 @@ do { \
 #define IfFailGoLog(EXPR) IfFailGotoLog(EXPR, ErrExit)
 #endif
 
+#if defined(FEATURE_MERGE_JIT_AND_ENGINE)
 void            jitOnDllProcessAttach();
-
+#endif // defined(FEATURE_MERGE_JIT_AND_ENGINE)
 
 void EEStartupHelper(COINITIEE fFlags)
 {
@@ -854,15 +855,9 @@ void EEStartupHelper(COINITIEE fFlags)
 #endif // !FEATURE_CORECLR && !CROSSGEN_COMPILE
         }
 
-#ifdef CROSSGEN_COMPILE
-//ARM64TODO: Enable when jit is brought in
- #if defined(_TARGET_ARM64_)
-        //_ASSERTE(!"ARM64:NYI");    
-        
- #else
+#if defined(CROSSGEN_COMPILE) && defined(FEATURE_MERGE_JIT_AND_ENGINE)
         jitOnDllProcessAttach();
- #endif // defined(_TARGET_ARM64_)
-#endif
+#endif // defined(CROSSGEN_COMPILE) && defined(FEATURE_MERGE_JIT_AND_ENGINE)
 
 #ifndef CROSSGEN_COMPILE
         // Initialize Numa and CPU group information
@@ -982,20 +977,15 @@ void EEStartupHelper(COINITIEE fFlags)
             ClrSleepEx(g_pConfig->StartupDelayMS(), FALSE);
         }
 #endif
-
+        
 #if USE_DISASSEMBLER
         if ((g_pConfig->GetGCStressLevel() & (EEConfig::GCSTRESS_INSTR_JIT | EEConfig::GCSTRESS_INSTR_NGEN)) != 0)
         {
             Disassembler::StaticInitialize();
             if (!Disassembler::IsAvailable())
             {
-#ifdef HAVE_GCCOVER
-#ifdef _DEBUG
-                printf("External disassembler is not available. Disabling GCStress for GCSTRESS_INSTR_JIT and GCSTRESS_INSTR_NGEN.\n");
-#endif // _DEBUG
-                g_pConfig->SetGCStressLevel(
-                    g_pConfig->GetGCStressLevel() & ~(EEConfig::GCSTRESS_INSTR_JIT | EEConfig::GCSTRESS_INSTR_NGEN));
-#endif // HAVE_GCCOVER
+                fprintf(stderr, "External disassembler is not available.\n");
+                IfFailGo(E_FAIL);
             }
         }
 #endif // USE_DISASSEMBLER
@@ -1444,11 +1434,11 @@ HRESULT EEStartup(COINITIEE fFlags)
     PAL_TRY(COINITIEE *, pfFlags, &fFlags)
     {
 #ifndef CROSSGEN_COMPILE
-#ifdef FEATURE_PAL
-        DacGlobals::Initialize();
-        InitializeJITNotificationTable();
-#endif
         InitializeClrNotifications();
+#ifdef FEATURE_PAL
+        InitializeJITNotificationTable();
+        DacGlobals::Initialize();
+#endif
 #endif // CROSSGEN_COMPILE
 
         EEStartupHelper(*pfFlags);
@@ -1974,12 +1964,6 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
 #endif // FEATURE_INTERPRETER
         
         FastInterlockExchange((LONG*)&g_fForbidEnterEE, TRUE);
-
-#if defined(DEBUGGING_SUPPORTED) && defined(FEATURE_PAL)
-        // Terminate the debugging services in the first phase for PAL based platforms
-        // because EEDllMain's DLL_PROCESS_DETACH is NOT going to be called.
-        TerminateDebugger();
-#endif // DEBUGGING_SUPPORTED && FEATURE_PAL
 
         if (g_fProcessDetach)
         {
@@ -3011,7 +2995,7 @@ static BOOL CacheCommandLine(__in LPWSTR pCmdLine, __in_opt LPWSTR* ArgvW)
 }
 
 //*****************************************************************************
-// This entry point is called from the native entry piont of the loaded
+// This entry point is called from the native entry point of the loaded
 // executable image.  The command line arguments and other entry point data
 // will be gathered here.  The entry point for the user image will be found
 // and handled accordingly.

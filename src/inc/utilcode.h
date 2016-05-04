@@ -1041,53 +1041,7 @@ inline int CountBits(int iNum)
     return (iBits);
 }
 
-//------------------------------------------------------------------------
-// BitPosition: Return the position of the single bit that is set in 'value'.
-//
-// Return Value:
-//    The position (0 is LSB) of bit that is set in 'value'
-//
-// Notes:
-//    'value' must have exactly one bit set.
-//    The algorithm is as follows:
-//    - PRIME is a prime bigger than sizeof(unsigned int), which is not of the
-//      form 2^n-1.
-//    - Taking the modulo of 'value' with this will produce a unique hash for all
-//      powers of 2 (which is what "value" is).
-//    - Entries in hashTable[] which are -1 should never be used. There
-//      should be PRIME-8*sizeof(value) entries which are -1 .
-//
-inline
-unsigned            BitPosition(unsigned value)
-{
-    _ASSERTE((value != 0) && ((value & (value-1)) == 0));
-#ifndef _TARGET_AMD64_
-    const unsigned PRIME = 37;
-
-    static const char hashTable[PRIME] =
-    {
-        -1,  0,  1, 26,  2, 23, 27, -1,  3, 16,
-        24, 30, 28, 11, -1, 13,  4,  7, 17, -1,
-        25, 22, 31, 15, 29, 10, 12,  6, -1, 21,
-        14,  9,  5, 20,  8, 19, 18
-    };
-
-    _ASSERTE(PRIME >= 8*sizeof(value));
-    _ASSERTE(sizeof(hashTable) == PRIME);
-
-
-    unsigned hash   = value % PRIME;
-    unsigned index  = hashTable[hash];
-    _ASSERTE(index != (unsigned char)-1);
-#else
-    // not enabled for x86 because BSF is extremely slow on Atom
-    // (15 clock cycles vs 1-3 on any other Intel CPU post-P4)
-    DWORD index;
-    BitScanForward(&index, value);
-#endif
-    return index;
-}
-
+#include "bitposition.h"
 
 // Used to remove trailing zeros from Decimal types.
 // NOTE: Assumes hi32 bits are empty (used for conversions from Cy->Dec)
@@ -1162,10 +1116,18 @@ void    SplitPathInterior(
     __out_opt LPCWSTR *pwszFileName, __out_opt size_t *pcchFileName,
     __out_opt LPCWSTR *pwszExt,      __out_opt size_t *pcchExt);
 
+#ifndef FEATURE_CORECLR
 void    MakePath(__out_ecount (MAX_LONGPATH) register WCHAR *path, 
                  __in LPCWSTR drive, 
                  __in LPCWSTR dir, 
                  __in LPCWSTR fname, 
+                 __in LPCWSTR ext);
+#endif
+
+void    MakePath(__out CQuickWSTR &path,
+                 __in LPCWSTR drive,
+                 __in LPCWSTR dir,
+                 __in LPCWSTR fname,
                  __in LPCWSTR ext);
 
 WCHAR * FullPath(__out_ecount (maxlen) WCHAR *UserBuf, const WCHAR *path, size_t maxlen);
@@ -1180,6 +1142,8 @@ void    SplitPath(__in SString const &path,
                   __inout_opt SString *dir,
                   __inout_opt SString *fname,
                   __inout_opt SString *ext);
+
+#if !defined(NO_CLRCONFIG)
 
 //*****************************************************************************
 //
@@ -1514,6 +1478,8 @@ public:
 private:
     LPWSTR m_wszString;
 };
+
+#endif // defined(NO_CLRCONFIG)
 
 #include "ostype.h"
 
@@ -4167,6 +4133,8 @@ public:
     }
 };
 
+#if !defined(NO_CLRCONFIG)
+
 /**************************************************************************/
 /* simple wrappers around the REGUTIL and MethodNameList routines that make
    the lookup lazy */
@@ -4272,6 +4240,8 @@ private:
 
     BYTE m_inited;
 };
+
+#endif // !defined(NO_CLRCONFIG)
 
 //*****************************************************************************
 // Convert a pointer to a string into a GUID.
@@ -4556,9 +4526,29 @@ void PutThumb2BlRel24(UINT16 * p, INT32 imm24);
 INT32 GetArm64Rel28(UINT32 * pCode);
 
 //*****************************************************************************
+//  Extract the PC-Relative page address from an adrp instruction
+//*****************************************************************************
+INT32 GetArm64Rel21(UINT32 * pCode);
+
+//*****************************************************************************
+//  Extract the page offset from an add instruction
+//*****************************************************************************
+INT32 GetArm64Rel12(UINT32 * pCode);
+
+//*****************************************************************************
 //  Deposit the PC-Relative offset 'imm28' into a b or bl instruction 
 //*****************************************************************************
 void PutArm64Rel28(UINT32 * pCode, INT32 imm28);
+
+//*****************************************************************************
+//  Deposit the PC-Relative page address 'imm21' into an adrp instruction
+//*****************************************************************************
+void PutArm64Rel21(UINT32 * pCode, INT32 imm21);
+
+//*****************************************************************************
+//  Deposit the page offset 'imm12' into an add instruction
+//*****************************************************************************
+void PutArm64Rel12(UINT32 * pCode, INT32 imm12);
 
 //*****************************************************************************
 // Returns whether the offset fits into bl instruction
@@ -4574,6 +4564,22 @@ inline bool FitsInThumb2BlRel24(INT32 imm24)
 inline bool FitsInRel28(INT32 val32)
 {
     return (val32 >= -0x08000000) && (val32 < 0x08000000);
+}
+
+//*****************************************************************************
+// Returns whether the offset fits into an Arm64 adrp instruction
+//*****************************************************************************
+inline bool FitsInRel21(INT32 val32)
+{
+    return (val32 >= 0) && (val32 <= 0x001FFFFF);
+}
+
+//*****************************************************************************
+// Returns whether the offset fits into an Arm64 add instruction
+//*****************************************************************************
+inline bool FitsInRel12(INT32 val32)
+{
+    return (val32 >= 0) && (val32 <= 0x00000FFF);
 }
 
 //*****************************************************************************
@@ -4695,7 +4701,7 @@ public:
 #endif // !FEATURE_PAL
 };
 
-#if !defined(DACCESS_COMPILE) && !defined(CLR_STANDALONE_BINDER)
+#if !defined(DACCESS_COMPILE)
 
 // check if current thread is a GC thread (concurrent or server)
 inline BOOL IsGCSpecialThread ()
@@ -4879,7 +4885,7 @@ inline BOOL IsStackWalkerThread()
     STATIC_CONTRACT_MODE_ANY;
     STATIC_CONTRACT_CANNOT_TAKE_LOCK;
 
-#if defined(DACCESS_COMPILE) || defined(CLR_STANDALONE_BINDER)
+#if defined(DACCESS_COMPILE)
     return FALSE;
 #else
     return ClrFlsGetValue (TlsIdx_StackWalkerWalkingThread) != NULL;
@@ -4894,13 +4900,13 @@ inline BOOL IsGCThread ()
     STATIC_CONTRACT_SUPPORTS_DAC;
     STATIC_CONTRACT_SO_TOLERANT;
 
-#if !defined(DACCESS_COMPILE) && !defined(CLR_STANDALONE_BINDER)
+#if !defined(DACCESS_COMPILE)
     return IsGCSpecialThread () || IsSuspendEEThread ();
 #else
     return FALSE;
 #endif
 }
-#ifndef CLR_STANDALONE_BINDER
+
 class ClrFlsThreadTypeSwitch
 {
 public:
@@ -4991,7 +4997,6 @@ private:
     PVOID m_PreviousValue;
     PredefinedTlsSlots m_slot;
 };
-#endif // !CLR_STANDALONE_BINDER
 
 //*********************************************************************************
 

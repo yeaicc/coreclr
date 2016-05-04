@@ -52,6 +52,9 @@ const UINT RESERVED_SEH_BIT = 0x800000;
 /* Internal variables definitions **********************************************/
 
 PHARDWARE_EXCEPTION_HANDLER g_hardwareExceptionHandler = NULL;
+// Function to check if an activation can be safely injected at a specified context
+PHARDWARE_EXCEPTION_SAFETY_CHECK_FUNCTION g_safeExceptionCheckFunction = NULL;
+
 PGET_GCMARKER_EXCEPTION_CODE g_getGcMarkerExceptionCode = NULL;
 
 /* Internal function definitions **********************************************/
@@ -124,9 +127,11 @@ Return value:
 VOID
 PALAPI 
 PAL_SetHardwareExceptionHandler(
-    IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler)
+    IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler,
+    IN PHARDWARE_EXCEPTION_SAFETY_CHECK_FUNCTION exceptionCheckFunction)
 {
     g_hardwareExceptionHandler = exceptionHandler;
+    g_safeExceptionCheckFunction = exceptionCheckFunction;
 }
 
 /*++
@@ -147,6 +152,48 @@ PAL_SetGetGcMarkerExceptionCode(
     IN PGET_GCMARKER_EXCEPTION_CODE getGcMarkerExceptionCode)
 {
     g_getGcMarkerExceptionCode = getGcMarkerExceptionCode;
+}
+
+EXTERN_C void ThrowExceptionFromContextInternal(CONTEXT* context, PAL_SEHException* ex);
+
+/*++
+Function:
+    PAL_ThrowExceptionFromContext
+
+    This function creates a stack frame right below the target frame, restores all callee
+    saved registers from the passed in context, sets the RSP to that frame and sets the
+    return address to the target frame's RIP.
+    Then it uses the ThrowExceptionHelper to throw the passed in exception from that context.
+
+Parameters:
+    CONTEXT* context - context from which the exception will be thrown
+    PAL_SEHException* ex - the exception to throw.
+--*/
+VOID
+PALAPI 
+PAL_ThrowExceptionFromContext(CONTEXT* context, PAL_SEHException* ex)
+{
+    // We need to make a copy of the exception off stack, since the "ex" is located in one of the stack
+    // frames that will become obsolete by the ThrowExceptionFromContextInternal and the ThrowExceptionHelper
+    // could overwrite the "ex" object by stack e.g. when allocating the low level exception object for "throw".
+    static __thread BYTE threadLocalExceptionStorage[sizeof(PAL_SEHException)];
+    ThrowExceptionFromContextInternal(context, new (threadLocalExceptionStorage) PAL_SEHException(*ex));
+}
+
+/*++
+Function:
+    ThrowExceptionHelper
+
+    Helper function to throw the passed in exception.
+    It is called from the assembler function ThrowExceptionFromContextInternal
+
+Parameters:
+    PAL_SEHException* ex - the exception to throw.
+--*/
+extern "C"
+void ThrowExceptionHelper(PAL_SEHException* ex)
+{
+    throw *ex;
 }
 
 /*++
@@ -170,17 +217,40 @@ SEHProcessException(PEXCEPTION_POINTERS pointers)
 
         if (g_hardwareExceptionHandler != NULL)
         {
-            g_hardwareExceptionHandler(&exception);
+            _ASSERTE(g_safeExceptionCheckFunction != NULL);
+            // Check if it is safe to handle the hardware exception (the exception happened in managed code
+            // or in a jitter helper or it is a debugger breakpoint)
+            if (g_safeExceptionCheckFunction(pointers->ContextRecord, pointers->ExceptionRecord))
+            {
+                if (pointers->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+                {
+                    // Check if the failed access has hit a stack guard page. In such case, it
+                    // was a stack probe that detected that there is not enough stack left.
+                    void* stackLimit = CPalThread::GetStackLimit();
+                    void* stackGuard = (void*)((size_t)stackLimit - getpagesize());
+                    void* violationAddr = (void*)pointers->ExceptionRecord->ExceptionInformation[1];
+                    if ((violationAddr >= stackGuard) && (violationAddr < stackLimit))
+                    {
+                        // The exception happened in the page right below the stack limit,
+                        // so it is a stack overflow
+                        write(STDERR_FILENO, StackOverflowMessage, sizeof(StackOverflowMessage) - 1);
+                        PROCAbort();
+                    }
+                }
+
+                // The following callback returns only in case the exception was a single step or 
+                // a breakpoint and it was not handled by the debugger.
+                g_hardwareExceptionHandler(&exception);
+            }
         }
 
         if (CatchHardwareExceptionHolder::IsEnabled())
         {
-            throw exception;
+            PAL_ThrowExceptionFromContext(&exception.ContextRecord, &exception);
         }
     }
 
-    TRACE("Unhandled hardware exception %08x at %p\n", 
-        pointers->ExceptionRecord->ExceptionCode, pointers->ExceptionRecord->ExceptionAddress);
+    // Unhandled hardware exception pointers->ExceptionRecord->ExceptionCode at pointers->ExceptionRecord->ExceptionAddress 
 }
 
 /*++
@@ -201,7 +271,7 @@ PAL_ERROR SEHEnable(CPalThread *pthrCurrent)
 {
 #if HAVE_MACH_EXCEPTIONS
     return pthrCurrent->EnableMachExceptions();
-#elif __LINUX__ || defined(__FreeBSD__) || defined(__NetBSD__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__)
     // TODO: This needs to be implemented. Cannot put an ASSERT here
     // because it will make other parts of PAL fail.
     return NO_ERROR;
@@ -230,7 +300,7 @@ PAL_ERROR SEHDisable(CPalThread *pthrCurrent)
     return pthrCurrent->DisableMachExceptions();
     // TODO: This needs to be implemented. Cannot put an ASSERT here
     // because it will make other parts of PAL fail.
-#elif __LINUX__ || defined(__FreeBSD__) || defined(__NetBSD__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__)
     return NO_ERROR;
 #else // HAVE_MACH_EXCEPTIONS
 #error not yet implemented

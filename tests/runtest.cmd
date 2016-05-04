@@ -26,8 +26,9 @@ set "__LogsDir=%__RootBinDir%\Logs"
 :: Default __Exclude to issues.targets
 set __Exclude0=%~dp0\issues.targets
 
-set __BuildSequential=
+set __Sequential=
 set __msbuildExtraArgs=
+set __LongGCTests=
 
 :Arg_Loop
 if "%1" == "" goto ArgsDone
@@ -53,7 +54,11 @@ if /i "%1" == "SkipWrapperGeneration" (set __SkipWrapperGeneration=true&shift&go
 if /i "%1" == "Exclude"             (set __Exclude=%2&shift&shift&goto Arg_Loop)
 if /i "%1" == "Exclude0"            (set __Exclude0=%2&shift&shift&goto Arg_Loop)
 if /i "%1" == "TestEnv"             (set __TestEnv=%2&shift&shift&goto Arg_Loop)
-if /i "%1" == "sequential"          (set __BuildSequential=1&shift&goto Arg_Loop)
+if /i "%1" == "sequential"          (set __Sequential=1&shift&goto Arg_Loop)
+if /i "%1" == "crossgen"            (set __DoCrossgen=1&shift&goto Arg_Loop)
+if /i "%1" == "longgctests"         (set __LongGCTests=1&shift&goto Arg_Loop)
+if /i "%1" == "GenerateLayoutOnly"  (set __GenerateLayoutOnly=1&set __SkipWrapperGeneration=true&shift&goto Arg_Loop)
+if /i "%1" == "PerfTests"           (set __PerfTests=true&set __SkipWrapperGeneration=true&shift&goto Arg_Loop)
 
 if /i not "%1" == "msbuildargs" goto SkipMsbuildArgs
 :: All the rest of the args will be collected and passed directly to msbuild.
@@ -65,6 +70,7 @@ goto CollectMsbuildArgs
 :SkipMsbuildArgs
 
 set CORE_ROOT=%1
+echo %__MsgPrefix%CORE_ROOT is initially set to: "%CORE_ROOT%"
 shift 
 :ArgsDone
 
@@ -102,7 +108,6 @@ if not exist %_msbuildexe% set _msbuildexe="%ProgramFiles(x86)%\MSBuild\14.0\Bin
 goto :CheckMSBuild14
 :MSBuild14
 set _msbuildexe="%ProgramFiles(x86)%\MSBuild\14.0\Bin\MSBuild.exe"
-set UseRoslynCompiler=true
 :CheckMSBuild14
 if not exist %_msbuildexe% set _msbuildexe="%ProgramFiles%\MSBuild\14.0\Bin\MSBuild.exe"
 if not exist %_msbuildexe% echo Error: Could not find MSBuild.exe.  Please see https://github.com/dotnet/coreclr/blob/master/Documentation/project-docs/developer-guide.md for build instructions. && exit /b 1
@@ -122,51 +127,13 @@ if not defined VSINSTALLDIR (
 ::       assembly. 
 set __msbuildCommonArgs=/nologo /nodeReuse:false %__msbuildExtraArgs%
 
-if not defined __BuildSequential (
+if not defined __Sequential (
     set __msbuildCommonArgs=%__msbuildCommonArgs% /maxcpucount
+) else (
+    set __msbuildCommonArgs=%__msbuildCommonArgs% /p:ParallelRun=false
 )
 
-if not defined CORE_ROOT (
-    set noCore_RootSet=true
-    set "CORE_ROOT=%__BinDir%"
-)
-
-::Check if the test Binaries are built
-if not exist %XunitTestBinBase% (
-    echo %__MsgPrefix%Error: Ensure the Test Binaries are built and are present at %XunitTestBinBase%.
-    echo %__MsgPrefix%Run "buildtest.cmd %__BuildArch% %__BuildType%" to build the tests first.
-    exit /b 1
-)
-
-if "%CORE_ROOT%" == "" (
-    echo %__MsgPrefix%Error: Ensure you have done a successful build of the Product and Run - runtest BuildArch BuildType {path to product binaries}.
-    exit /b 1
-)
-
-if not exist %CORE_ROOT%\coreclr.dll (
-    echo %__MsgPrefix%Error: Ensure you have done a successful build of the Product and %CORE_ROOT% contains runtime binaries.
-    exit /b 1
-)
-
-if defined __Exclude (if not exist %__Exclude% echo %__MsgPrefix%Error: Exclusion .targets file not found && exit /b 1)
-if defined __TestEnv (if not exist %__TestEnv% echo %__MsgPrefix%Error: Test Environment script not found && exit /b 1)
-
-REM These log files are created automatically by the test run process. Q: what do they depend on being set?
-set __TestRunHtmlLog=%__LogsDir%\TestRun_%__BuildOS%__%__BuildArch%__%__BuildType%.html
-set __TestRunXmlLog=%__LogsDir%\TestRun_%__BuildOS%__%__BuildArch%__%__BuildType%.xml
-
-echo %__MsgPrefix%CORE_ROOT that will be used is: %CORE_ROOT%
-echo %__MsgPrefix%Starting the test run ...
-
-if "%__SkipWrapperGeneration%"=="true" goto SkipWrapperGeneration
-
-set __BuildLogRootName=Tests_XunitWrapper
-call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:NoRun=true
-if errorlevel 1 exit /b 1
-
-:SkipWrapperGeneration
-
-if not "%noCore_RootSet%"=="true" goto SkipCoreRootSetup
+if defined CORE_ROOT goto SkipCoreRootSetup
 
 set "CORE_ROOT=%XunitTestBinBase%\Tests\Core_Root"
 echo %__MsgPrefix%Using Default CORE_ROOT as %CORE_ROOT%
@@ -177,14 +144,73 @@ xcopy /s "%__BinDir%" "%CORE_ROOT%"
 
 :SkipCoreRootSetup
 
+
+if defined __Exclude (if not exist %__Exclude% echo %__MsgPrefix%Error: Exclusion .targets file not found && exit /b 1)
+if defined __TestEnv (if not exist %__TestEnv% echo %__MsgPrefix%Error: Test Environment script not found && exit /b 1)
+
+REM These log files are created automatically by the test run process. Q: what do they depend on being set?
+set __TestRunHtmlLog=%__LogsDir%\TestRun_%__BuildOS%__%__BuildArch%__%__BuildType%.html
+set __TestRunXmlLog=%__LogsDir%\TestRun_%__BuildOS%__%__BuildArch%__%__BuildType%.xml
+
+if "%__PerfTests%"=="true" goto RunPerfTests
+if "%__SkipWrapperGeneration%"=="true" goto SkipWrapperGeneration
+
+set __BuildLogRootName=Tests_XunitWrapper
+call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:BuildWrappers=true
+if errorlevel 1 exit /b 1
+
+:SkipWrapperGeneration
+
+call :ResolveDependecies
+
+if not defined __DoCrossgen goto :SkipPrecompileFX
+call :PrecompileFX
+
+:SkipPrecompileFX
+
+if  defined __GenerateLayoutOnly (
+    exit /b 1
+)
+
+if not exist %CORE_ROOT%\coreclr.dll (
+    echo %__MsgPrefix%Error: Ensure you have done a successful build of the Product and %CORE_ROOT% contains runtime binaries.
+    exit /b 1
+)
+
+::Check if the test Binaries are built
+if not exist %XunitTestBinBase% (
+    echo %__MsgPrefix%Error: Ensure the Test Binaries are built and are present at %XunitTestBinBase%.
+    echo %__MsgPrefix%Run "buildtest.cmd %__BuildArch% %__BuildType%" to build the tests first.
+    exit /b 1
+)
+echo %__MsgPrefix%CORE_ROOT that will be used is: %CORE_ROOT%
+echo %__MsgPrefix%Starting the test run ...
+
 set __BuildLogRootName=TestRunResults
-call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:NoBuild=true /clp:showcommandline
+call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:Runtests=true /clp:showcommandline
 
 if errorlevel 1 (
     echo Test Run failed. Refer to the following:
     echo     Html report: %__TestRunHtmlLog%
     exit /b 1
 )
+
+if not defined __PerfTests goto :SkipRunPerfTests
+
+:RunPerfTests 
+echo %__MsgPrefix%CORE_ROOT that will be used is: %CORE_ROOT%  
+echo %__MsgPrefix%Starting the test run ...  
+
+set __BuildLogRootName=PerfTestRunResults  
+echo Running perf tests  
+call :msbuild "%__ProjectFilesDir%\runtest.proj" /t:RunPerfTests /clp:showcommandline  
+
+if errorlevel 1 (  
+   echo Test Run failed. Refer to the following:  
+   echo     Html report: %__TestRunHtmlLog%  
+)  
+
+:SkipRunPerfTests
 
 REM =========================================================================================
 REM ===
@@ -202,6 +228,32 @@ REM ===
 REM === Helper routines
 REM ===
 REM =========================================================================================
+
+REM Compile the managed assemblies in Core_ROOT before running the tests
+:PrecompileAssembly
+
+REM Skip mscorlib since it is already precompiled.
+if /I "%3" == "mscorlib.dll" exit /b 0
+if /I "%3" == "mscorlib.ni.dll" exit /b 0
+
+"%1\crossgen.exe" /Platform_Assemblies_Paths "%CORE_ROOT%" "%2" >nul 2>nul
+set /a __exitCode = %errorlevel%
+if "%__exitCode%" == "-2146230517" (
+    echo %2 is not a managed assembly.
+    exit /b 0
+)
+
+if %__exitCode% neq 0 (
+    echo Unable to precompile %2
+    exit /b 0
+)
+    
+echo Successfully precompiled %2
+exit /b 0
+
+:PrecompileFX
+for %%F in (%CORE_ROOT%\*.dll) do call :PrecompileAssembly "%CORE_ROOT%" "%%F" %%~nF%%~xF
+exit /b 0
 
 :msbuild
 @REM Subroutine to invoke msbuild. All arguments are passed to msbuild. The first argument should be the
@@ -242,6 +294,44 @@ if errorlevel 1 (
 
 exit /b 0
 
+:ResolveDependecies:
+
+if "%CORE_ROOT%" == "" (
+    echo %__MsgPrefix%Error: Ensure you have done a successful build of the Product and Run - runtest BuildArch BuildType {path to product binaries}.
+    exit /b 1
+)
+:: Pull down dependent packages needed for testing
+setlocal
+if defined __TestEnv call %__TestEnv%
+if defined COMPlus_GCStress set __Result=true
+endlocal & set __IsGCTest=%__Result%
+if "%__IsGCTest%"=="true" (
+    call tests\setup-runtime-dependencies.cmd /arch %__BuildArch% /outputdir %CORE_ROOT%
+    if errorlevel 1 (
+        echo Failed to donwload runtime packages
+        exit /b 1
+    )
+)
+
+:: Long GC tests take about 10 minutes per test on average, so
+:: they often bump up against the default 10 minute timeout.
+:: 20 minutes is more than enough time for a test to complete successfully.
+if defined __LongGCTests (
+    echo Running Long GC tests, extending timeout to 20 minutes
+    set __TestTimeout=1200000
+)
+
+set __BuildLogRootName=Tests_GenerateRuntimeLayout
+call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:GenerateRuntimeLayout=true 
+if errorlevel 1 (
+    echo Test Dependency Resolution Failed
+    exit /b 1
+)
+echo %__MsgPrefix% Created the runtime layout with all dependencies in %CORE_ROOT%
+exit /b 0
+
+
+
 :Usage
 echo.
 echo Usage:
@@ -257,6 +347,7 @@ echo                                Set to "" to disable default exclusion file.
 echo Exclude-  Optional parameter - this will exclude individual tests from running, specified by ExcludeList ItemGroup in an .targets file.
 echo TestEnv- Optional parameter - this will run a custom script to set custom test environment settings.
 echo VSVersion- Optional parameter - VS2013 or VS2015 ^(default: VS2015^)
+echo GenerateLayoutOnly - If specified will not run the tests and will only create the Runtime Dependency Layout
 echo CORE_ROOT The path to the runtime  
 exit /b 1
 

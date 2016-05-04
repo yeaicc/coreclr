@@ -250,16 +250,6 @@ class ZapInfo
                           BOOL fAllowThunk);
 
 public:
-#ifdef BINDER
-    void PublishCompiledMethod(mdToken methodDefToken, CORINFO_METHOD_HANDLE methodHandle)
-    {
-        m_currentMethodToken = methodDefToken;
-        m_currentMethodHandle = methodHandle;
-        
-        PublishCompiledMethod();
-    }
-#endif
-
     ZapInfo(ZapImage * pImage, mdMethodDef md, CORINFO_METHOD_HANDLE handle, CORINFO_MODULE_HANDLE module, unsigned methodProfilingDataFlags);
     ~ZapInfo();
 
@@ -560,6 +550,12 @@ public:
             CORINFO_CONST_LOOKUP *   pLookup
             );
 
+    void getReadyToRunDelegateCtorHelper(
+            CORINFO_RESOLVED_TOKEN * pTargetMethod,
+            CORINFO_CLASS_HANDLE     delegateType,
+            CORINFO_CONST_LOOKUP *   pLookup
+            );
+
     CorInfoInitClassResult initClass(
             CORINFO_FIELD_HANDLE    field,
             CORINFO_METHOD_HANDLE   method,
@@ -591,6 +587,7 @@ public:
     // ICorModuleInfo
 
     void resolveToken(CORINFO_RESOLVED_TOKEN * pResolvedToken);
+    bool tryResolveToken(CORINFO_RESOLVED_TOKEN * pResolvedToken);
 
     void findSig(CORINFO_MODULE_HANDLE module, unsigned sigTOK,
                  CORINFO_CONTEXT_HANDLE context,

@@ -14,6 +14,12 @@
 #include "common.h"
 #include "gcenv.h"
 
+#ifndef FEATURE_PAL
+#include <Psapi.h>
+#endif
+
+#define MAX_PTR ((uint8_t*)(~(ptrdiff_t)0))
+
 // Initialize the interface implementation
 // Return:
 //  true if it has succeeded, false if it has failed
@@ -33,7 +39,7 @@ void GCToOSInterface::Shutdown()
 // current platform. It is indended for logging purposes only.
 // Return:
 //  Numeric id of the current thread or 0 if the 
-uint32_t GCToOSInterface::GetCurrentThreadIdForLogging()
+uint64_t GCToOSInterface::GetCurrentThreadIdForLogging()
 {
     LIMITED_METHOD_CONTRACT;
     return ::GetCurrentThreadId();
@@ -77,7 +83,7 @@ bool GCToOSInterface::SetCurrentThreadIdealAffinity(GCThreadAffinity* affinity)
         if (GetThreadIdealProcessorEx(GetCurrentThread(), &proc))
         {
             proc.Number = (BYTE)affinity->Processor;
-            success = !!SetThreadIdealProcessorEx(GetCurrentThread(), &proc, NULL);
+            success = !!SetThreadIdealProcessorEx(GetCurrentThread(), &proc, &proc);
         }        
     }
 #endif
@@ -317,7 +323,7 @@ bool GCToOSInterface::GetCurrentProcessAffinityMask(uintptr_t* processMask, uint
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_CORECLR
+#ifndef FEATURE_PAL
     return !!::GetProcessAffinityMask(GetCurrentProcess(), (PDWORD_PTR)processMask, (PDWORD_PTR)systemMask);
 #else
     return false;
@@ -332,6 +338,178 @@ uint32_t GCToOSInterface::GetCurrentProcessCpuCount()
     LIMITED_METHOD_CONTRACT;
 
     return ::GetCurrentProcessCpuCount();
+}
+
+#ifndef FEATURE_PAL
+typedef BOOL (WINAPI *PGET_PROCESS_MEMORY_INFO)(HANDLE handle, PROCESS_MEMORY_COUNTERS* memCounters, uint32_t cb);
+static PGET_PROCESS_MEMORY_INFO GCGetProcessMemoryInfo = 0;
+
+typedef BOOL (WINAPI *PIS_PROCESS_IN_JOB)(HANDLE processHandle, HANDLE jobHandle, BOOL* result);
+typedef BOOL (WINAPI *PQUERY_INFORMATION_JOB_OBJECT)(HANDLE jobHandle, JOBOBJECTINFOCLASS jobObjectInfoClass, void* lpJobObjectInfo, DWORD cbJobObjectInfoLength, LPDWORD lpReturnLength);
+#endif 
+
+#if defined(FEATURE_CORECLR) && !defined(FEATURE_PAL)
+// For coresys we need to look for an API in some apiset dll on win8 if we can't find it  
+// in the traditional dll.
+HINSTANCE LoadDllForAPI(WCHAR* dllTraditional, WCHAR* dllApiSet)
+{
+    HINSTANCE hinst = WszLoadLibrary(dllTraditional);
+
+    if (!hinst)
+    {
+        if(RunningOnWin8())
+            hinst = WszLoadLibrary(dllApiSet);
+    }
+
+    return hinst;
+}
+#endif
+
+// If the process's memory is restricted (ie, beyond what's available on the machine), return that limit.
+// Return:
+//  0 if it has failed for some reason, the real value if it has succeeded
+// Remarks:
+//  If a process runs with a restricted memory limit, and we are successful at getting 
+//  that limit, it returns the limit. If there's no limit specified, or there's an error 
+//  at getting that limit, it returns 0.
+uint64_t GCToOSInterface::GetRestrictedPhysicalMemoryLimit()
+{
+    LIMITED_METHOD_CONTRACT;
+
+#ifdef FEATURE_PAL
+    return 0;
+#else
+    size_t job_physical_memory_limit = (size_t)MAX_PTR;
+    BOOL in_job_p = FALSE;
+#ifdef FEATURE_CORECLR
+    HINSTANCE hinstApiSetPsapiOrKernel32 = 0;
+    // these 2 modules will need to be freed no matter what as we only use them locally in this method.
+    HINSTANCE hinstApiSetJob1OrKernel32 = 0;
+    HINSTANCE hinstApiSetJob2OrKernel32 = 0;
+#else
+    HINSTANCE hinstPsapi = 0;
+#endif
+
+    PIS_PROCESS_IN_JOB GCIsProcessInJob = 0;
+    PQUERY_INFORMATION_JOB_OBJECT GCQueryInformationJobObject = 0;
+
+#ifdef FEATURE_CORECLR
+    hinstApiSetJob1OrKernel32 = LoadDllForAPI(L"kernel32.dll", L"api-ms-win-core-job-l1-1-0.dll");
+    if (!hinstApiSetJob1OrKernel32)
+        goto exit;
+
+    GCIsProcessInJob = (PIS_PROCESS_IN_JOB)GetProcAddress(hinstApiSetJob1OrKernel32, "IsProcessInJob");
+    if (!GCIsProcessInJob)
+        goto exit;
+#else
+    GCIsProcessInJob = &(::IsProcessInJob);
+#endif
+
+    if (!GCIsProcessInJob(GetCurrentProcess(), NULL, &in_job_p))
+        goto exit;
+
+    if (in_job_p)
+    {
+#ifdef FEATURE_CORECLR
+        hinstApiSetPsapiOrKernel32 = LoadDllForAPI(L"kernel32.dll", L"api-ms-win-core-psapi-l1-1-0");
+        if (!hinstApiSetPsapiOrKernel32)
+            goto exit;
+
+        GCGetProcessMemoryInfo = (PGET_PROCESS_MEMORY_INFO)GetProcAddress(hinstApiSetPsapiOrKernel32, "K32GetProcessMemoryInfo");
+#else
+        // We need a way to get the working set in a job object and GetProcessMemoryInfo 
+        // is the way to get that. According to MSDN, we should use GetProcessMemoryInfo In order to 
+        // compensate for the incompatibility that psapi.dll introduced we are getting this dynamically.
+        hinstPsapi = WszLoadLibrary(L"psapi.dll");
+        if (!hinstPsapi)
+            return 0;
+        GCGetProcessMemoryInfo = (PGET_PROCESS_MEMORY_INFO)GetProcAddress(hinstPsapi, "GetProcessMemoryInfo");
+#endif
+
+        if (!GCGetProcessMemoryInfo)
+            goto exit;
+
+#ifdef FEATURE_CORECLR
+        hinstApiSetJob2OrKernel32 = LoadDllForAPI(L"kernel32.dll", L"api-ms-win-core-job-l2-1-0");
+        if (!hinstApiSetJob2OrKernel32)
+            goto exit;
+
+        GCQueryInformationJobObject = (PQUERY_INFORMATION_JOB_OBJECT)GetProcAddress(hinstApiSetJob2OrKernel32, "QueryInformationJobObject");
+#else
+        GCQueryInformationJobObject = &(::QueryInformationJobObject);
+#endif 
+
+        if (!GCQueryInformationJobObject)
+            goto exit;
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit_info;
+        if (GCQueryInformationJobObject (NULL, JobObjectExtendedLimitInformation, &limit_info, 
+            sizeof(limit_info), NULL))
+        {
+            size_t job_memory_limit = (size_t)MAX_PTR;
+            size_t job_process_memory_limit = (size_t)MAX_PTR;
+            size_t job_workingset_limit = (size_t)MAX_PTR;
+
+            // Notes on the NT job object:
+            //
+            // You can specific a bigger process commit or working set limit than 
+            // job limit which is pointless so we use the smallest of all 3 as
+            // to calculate our "physical memory load" or "available physical memory"
+            // when running inside a job object, ie, we treat this as the amount of physical memory
+            // our process is allowed to use.
+            // 
+            // The commit limit is already reflected by default when you run in a 
+            // job but the physical memory load is not.
+            //
+            if ((limit_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) != 0)
+                job_memory_limit = limit_info.JobMemoryLimit;
+            if ((limit_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) != 0)
+                job_process_memory_limit = limit_info.ProcessMemoryLimit;
+            if ((limit_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_WORKINGSET) != 0)
+                job_workingset_limit = limit_info.BasicLimitInformation.MaximumWorkingSetSize;
+
+            job_physical_memory_limit = min (job_memory_limit, job_process_memory_limit);
+            job_physical_memory_limit = min (job_physical_memory_limit, job_workingset_limit);
+        }
+    }
+
+exit:
+#ifdef FEATURE_CORECLR
+    if (hinstApiSetJob1OrKernel32)
+        FreeLibrary(hinstApiSetJob1OrKernel32);
+    if (hinstApiSetJob2OrKernel32)
+        FreeLibrary(hinstApiSetJob2OrKernel32);
+#endif
+
+    if (job_physical_memory_limit == (size_t)MAX_PTR)
+    {
+        job_physical_memory_limit = 0;
+
+#ifdef FEATURE_CORECLR
+        FreeLibrary(hinstApiSetPsapiOrKernel32);
+#else
+        FreeLibrary(hinstPsapi);
+#endif
+    }
+
+    return job_physical_memory_limit;
+#endif
+}
+
+// Get the current physical memory this process is using.
+// Return:
+//  0 if it has failed, the real value if it has succeeded
+size_t GCToOSInterface::GetCurrentPhysicalMemory()
+{
+    LIMITED_METHOD_CONTRACT;
+
+#ifndef FEATURE_PAL
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GCGetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        return pmc.WorkingSetSize;
+#endif 
+
+    return 0;
 }
 
 // Get global memory status
@@ -458,24 +636,24 @@ bool GCToOSInterface::CreateThread(GCThreadFunction function, void* param, GCThr
 
     SetThreadPriority(gc_thread, /* THREAD_PRIORITY_ABOVE_NORMAL );*/ THREAD_PRIORITY_HIGHEST );
 
-#ifndef FEATURE_CORECLR
-    if (affinity->Group != -1)
+#ifndef FEATURE_PAL
+    if (affinity->Group != GCThreadAffinity::None)
     {
-        _ASSERTE(affinity->Processor != -1);
+        _ASSERTE(affinity->Processor != GCThreadAffinity::None);
         GROUP_AFFINITY ga;
         ga.Group = (WORD)affinity->Group;
         ga.Reserved[0] = 0; // reserve must be filled with zero
         ga.Reserved[1] = 0; // otherwise call may fail
         ga.Reserved[2] = 0;
-        ga.Mask = 1 << affinity->Processor;
+        ga.Mask = (size_t)1 << affinity->Processor;
 
         CPUGroupInfo::SetThreadGroupAffinity(gc_thread, &ga, NULL);
     }
-    else if (affinity->Processor != -1)
+    else if (affinity->Processor != GCThreadAffinity::None)
     {
-        SetThreadAffinityMask(gc_thread, 1 << affinity->Processor);
+        SetThreadAffinityMask(gc_thread, (DWORD_PTR)1 << affinity->Processor);
     }
-#endif // !FEATURE_CORECLR
+#endif // !FEATURE_PAL
 
     ResumeThread(gc_thread);
     CloseHandle(gc_thread);

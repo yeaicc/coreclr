@@ -9315,7 +9315,7 @@ void NativeImageDumper::DumpReadyToRun()
     if (pRuntimeFunctionsDir != NULL)
     {
         m_pRuntimeFunctions = dac_cast<PTR_RUNTIME_FUNCTION>(m_decoder.GetDirectoryData(pRuntimeFunctionsDir));
-        m_nRuntimeFunctions = pRuntimeFunctionsDir->Size / sizeof(RUNTIME_FUNCTION);
+        m_nRuntimeFunctions = pRuntimeFunctionsDir->Size / sizeof(T_RUNTIME_FUNCTION);
     }
     else
     {
@@ -9324,7 +9324,7 @@ void NativeImageDumper::DumpReadyToRun()
 
     IMAGE_DATA_DIRECTORY * pEntryPointsDir = FindReadyToRunSection(READYTORUN_SECTION_METHODDEF_ENTRYPOINTS);
     if (pEntryPointsDir != NULL)
-        m_methodDefEntryPoints = NativeFormat::NativeArray(&m_nativeReader, pEntryPointsDir->VirtualAddress);
+        m_methodDefEntryPoints = NativeFormat::NativeArray((TADDR)&m_nativeReader, pEntryPointsDir->VirtualAddress);
 
     DisplayStartCategory("NativeInfo", NATIVE_INFO);
 

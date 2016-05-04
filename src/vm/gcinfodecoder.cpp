@@ -374,7 +374,7 @@ bool GcInfoDecoder::IsSafePoint(UINT32 codeOffset)
     if(m_NumSafePoints == 0)
         return false;
 
-#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_)
+#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
     // Safepoints are encoded with a -1 adjustment
     codeOffset--;
 #endif
@@ -394,7 +394,7 @@ UINT32 GcInfoDecoder::FindSafePoint(UINT32 breakOffset)
     const UINT32 numBitsPerOffset = CeilOfLog2(NORMALIZE_CODE_OFFSET(m_CodeLength));
     UINT32 result = m_NumSafePoints;
 
-#if defined(_TARGET_ARM_)
+#if defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
     // Safepoints are encoded with a -1 adjustment
     // but normalizing them masks off the low order bit
     // Thus only bother looking if the address is odd
@@ -440,6 +440,12 @@ void GcInfoDecoder::EnumerateSafePoints(EnumerateSafePointsCallback *pCallback, 
     {
         UINT32 normOffset = (UINT32)m_Reader.Read(numBitsPerOffset);
         UINT32 offset = DENORMALIZE_CODE_OFFSET(normOffset) + 2;
+
+#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
+        // Safepoints are encoded with a -1 adjustment
+        offset--;
+#endif
+
         pCallback(offset, hCallback);
     }
 }
@@ -1169,7 +1175,7 @@ void GcSlotDecoder::DecodeSlotTable(BitStreamReader& reader)
         m_SlotArray[0].Slot.RegisterNumber = regNum;
         m_SlotArray[0].Flags = flags;
 
-        UINT32 loopEnd = min(m_NumRegisters, MAX_PREDECODED_SLOTS);
+        UINT32 loopEnd = _min(m_NumRegisters, MAX_PREDECODED_SLOTS);
         for(i++; i < loopEnd; i++)
         {
             if(flags)
@@ -1203,7 +1209,7 @@ void GcSlotDecoder::DecodeSlotTable(BitStreamReader& reader)
         m_SlotArray[i].Slot.Stack.Base = spBase;
         m_SlotArray[i].Flags = flags;
 
-        UINT32 loopEnd = min(m_NumRegisters + numStackSlots, MAX_PREDECODED_SLOTS);
+        UINT32 loopEnd = _min(m_NumRegisters + numStackSlots, MAX_PREDECODED_SLOTS);
         for(i++; i < loopEnd; i++)
         {
             spBase = (GcStackSlotBase) reader.Read(2);
@@ -1240,7 +1246,7 @@ void GcSlotDecoder::DecodeSlotTable(BitStreamReader& reader)
         m_SlotArray[i].Slot.Stack.Base = spBase;
         m_SlotArray[i].Flags = flags;
 
-        UINT32 loopEnd = min(m_NumSlots, MAX_PREDECODED_SLOTS);
+        UINT32 loopEnd = _min(m_NumSlots, MAX_PREDECODED_SLOTS);
         for(i++; i < loopEnd; i++)
         {
             spBase = (GcStackSlotBase) reader.Read(2);
@@ -1539,8 +1545,7 @@ void GcInfoDecoder::ReportRegisterToGC(  // AMD64
     LOG((LF_GCROOTS, LL_INFO1000, "Reporting " FMT_REG, regNum ));
 
     OBJECTREF* pObjRef = GetRegisterSlot( regNum, pRD );
-
-#ifdef FEATURE_PAL
+#if defined(FEATURE_PAL) && !defined(SOS_TARGET_AMD64) 
     // On PAL, we don't always have the context pointers available due to
     // a limitation of an unwinding library. In such case, the context
     // pointers for some nonvolatile registers are NULL.
@@ -1560,7 +1565,7 @@ void GcInfoDecoder::ReportRegisterToGC(  // AMD64
 
         gcFlags |= GC_CALL_PINNED;
     }
-#endif // FEATURE_PAL
+#endif // FEATURE_PAL && !SOS_TARGET_AMD64
 
 #ifdef _DEBUG
     if(IsScratchRegister(regNum, pRD))
@@ -1899,8 +1904,7 @@ int GcInfoDecoder::GetStackReg(int spBase)
 #elif defined(_TARGET_ARM_)
     int esp = 13;
 #elif defined(_TARGET_ARM64_)
-    _ASSERTE("ARM64:NYI");
-    int esp = 30;
+    int esp = 31;
 #endif
 
     if( GC_SP_REL == spBase )

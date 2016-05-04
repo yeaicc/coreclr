@@ -139,7 +139,7 @@ public:
 
     void                rsClearRegsModified();
 
-    void                rsSetRegsModified(regMaskTP mask DEBUG_ARG(bool suppressDump = false));
+    void                rsSetRegsModified(regMaskTP mask DEBUGARG(bool suppressDump = false));
 
     void                rsRemoveRegsModified(regMaskTP mask);
 
@@ -314,10 +314,10 @@ public:
 #ifdef DEBUG
     /*****************************************************************************
         *  Should we stress register tracking logic ?
-        *  This is set via COMPLUS_JitStressRegs.
+        *  This is set via COMPlus_JitStressRegs.
         *  The following values are ordered, such that any value greater than RS_xx
         *  implies RS_xx.
-        *  LSRA defines a different set of values, but uses the same COMPLUS_JitStressRegs
+        *  LSRA defines a different set of values, but uses the same COMPlus_JitStressRegs
         *  value, with the same notion of relative ordering.
         *  1 = rsPickReg() picks 'bad' registers.
         *  2 = codegen spills at safe points. This is still flaky

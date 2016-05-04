@@ -77,7 +77,7 @@ private:
     GenTree* LowerVirtualVtableCall   (GenTreeCall* call);
     GenTree* LowerVirtualStubCall     (GenTreeCall* call);
     void     LowerArgsForCall         (GenTreeCall* call);
-    GenTree* NewPutArg                (GenTreeCall* call, GenTreePtr arg, fgArgTabEntryPtr fp, var_types type);
+    GenTree* NewPutArg                (GenTreeCall* call, GenTreePtr arg, fgArgTabEntryPtr info, var_types type);
     void     LowerArg                 (GenTreeCall* call, GenTreePtr *ppTree);
     void     InsertPInvokeCallProlog  (GenTreeCall* call);
     void     InsertPInvokeCallEpilog  (GenTreeCall* call);
@@ -151,7 +151,9 @@ private:
 #ifdef FEATURE_SIMD
     void TreeNodeInfoInitSIMD(GenTree* tree, LinearScan* lsra);
 #endif // FEATURE_SIMD
-
+#ifdef _TARGET_ARM64_
+    void TreeNodeInfoInitPutArgStk(GenTree* argNode, fgArgTabEntryPtr info);
+#endif // _TARGET_ARM64_
 #if defined(_TARGET_XARCH_)
     void TreeNodeInfoInitSimple(GenTree* tree, TreeNodeInfo* info, unsigned kind);
 #endif // defined(_TARGET_XARCH_)

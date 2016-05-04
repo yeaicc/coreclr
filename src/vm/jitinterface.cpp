@@ -817,14 +817,14 @@ BOOL CEEInfo::isValidToken (
 {
     CONTRACTL {
         SO_TOLERANT;
-        THROWS;
-        GC_TRIGGERS;
-        MODE_PREEMPTIVE;
+        NOTHROW;
+        GC_NOTRIGGER;
+        MODE_ANY;
     } CONTRACTL_END;
 
     BOOL result = FALSE;
 
-    JIT_TO_EE_TRANSITION();
+    JIT_TO_EE_TRANSITION_LEAF();
 
     if (IsDynamicScope(module))
     {
@@ -837,7 +837,7 @@ BOOL CEEInfo::isValidToken (
         result = ((Module *)module)->GetMDImport()->IsValidToken(metaTOK);
     }
 
-    EE_TO_JIT_TRANSITION();
+    EE_TO_JIT_TRANSITION_LEAF();
 
     return result;
 }
@@ -1292,6 +1292,121 @@ void CEEInfo::resolveToken(/* IN, OUT */ CORINFO_RESOLVED_TOKEN * pResolvedToken
 }
 
 /*********************************************************************/
+struct TryResolveTokenFilterParam
+{
+    CEEInfo* m_this;
+    CORINFO_RESOLVED_TOKEN* m_resolvedToken;
+    EXCEPTION_POINTERS m_exceptionPointers;
+    bool m_success;
+};
+
+bool isValidTokenForTryResolveToken(CEEInfo* info, CORINFO_RESOLVED_TOKEN* resolvedToken)
+{
+    CONTRACTL {
+        NOTHROW;
+        GC_NOTRIGGER;
+        SO_TOLERANT;
+        MODE_ANY;
+    } CONTRACTL_END;
+
+    if (!info->isValidToken(resolvedToken->tokenScope, resolvedToken->token))
+    {
+        return false;
+    }
+
+    CorInfoTokenKind tokenType = resolvedToken->tokenType;
+    switch (TypeFromToken(resolvedToken->token))
+    {
+    case mdtModuleRef:
+    case mdtTypeDef:
+    case mdtTypeRef:
+    case mdtTypeSpec:
+        if ((tokenType & CORINFO_TOKENKIND_Class) == 0)
+            return false;
+        break;
+
+    case mdtMethodDef:
+    case mdtMethodSpec:
+        if ((tokenType & CORINFO_TOKENKIND_Method) == 0)
+            return false;
+        break;
+
+    case mdtFieldDef:
+        if ((tokenType & CORINFO_TOKENKIND_Field) == 0)
+            return false;
+        break;
+
+    case mdtMemberRef:
+        if ((tokenType & (CORINFO_TOKENKIND_Method | CORINFO_TOKENKIND_Field)) == 0)
+            return false;
+        break;
+
+    default:
+        return false;
+    }
+
+    return true;
+}
+
+LONG EEFilterException(struct _EXCEPTION_POINTERS* exceptionPointers, void* unused);
+
+LONG TryResolveTokenFilter(struct _EXCEPTION_POINTERS* exceptionPointers, void* theParam)
+{
+    CONTRACTL {
+        NOTHROW;
+        GC_NOTRIGGER;
+        SO_TOLERANT;
+        MODE_ANY;
+    } CONTRACTL_END;
+
+    // Backward compatibility: Convert bad image format exceptions thrown while resolving tokens
+    // to simple true/false successes. This is done for backward compatibility only. Ideally,
+    // we would always treat bad tokens in the IL  stream as fatal errors.
+    if (exceptionPointers->ExceptionRecord->ExceptionCode == EXCEPTION_COMPLUS)
+    {
+        auto* param = reinterpret_cast<TryResolveTokenFilterParam*>(theParam);
+        if (!isValidTokenForTryResolveToken(param->m_this, param->m_resolvedToken))
+        {
+            param->m_exceptionPointers = *exceptionPointers;
+            return EEFilterException(exceptionPointers, nullptr);
+        }
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+bool CEEInfo::tryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
+{
+    // No dynamic contract here because SEH is used
+    STATIC_CONTRACT_SO_TOLERANT;
+    STATIC_CONTRACT_THROWS;
+    STATIC_CONTRACT_GC_TRIGGERS;
+    STATIC_CONTRACT_MODE_PREEMPTIVE;
+
+    TryResolveTokenFilterParam param;
+    param.m_this = this;
+    param.m_resolvedToken = resolvedToken;
+    param.m_success = true;
+
+    PAL_TRY(TryResolveTokenFilterParam*, pParam, &param)
+    {
+        pParam->m_this->resolveToken(pParam->m_resolvedToken);
+    }
+    PAL_EXCEPT_FILTER(TryResolveTokenFilter)
+    {
+        if (param.m_exceptionPointers.ExceptionRecord->ExceptionCode == EXCEPTION_COMPLUS)
+        {
+            HandleException(&param.m_exceptionPointers);
+        }
+
+        param.m_success = false;
+    }
+    PAL_ENDTRY
+
+    return param.m_success;
+}
+
+/*********************************************************************/
 // We have a few frequently used constants in mscorlib that are defined as 
 // readonly static fields for historic reasons. Check for them here and 
 // allow them to be treated as actual constants by the JIT.
@@ -1453,43 +1568,6 @@ static CorInfoHelpFunc getInstanceFieldHelper(FieldDesc * pField, CORINFO_ACCESS
     return (CorInfoHelpFunc)helper;
 }
 
-#ifdef FEATURE_LEGACYNETCF
-void CheckValidTypeOnNetCF(MethodTable * pMT)
-{
-    STANDARD_VM_CONTRACT;
-
-    // Do this quirk for application assemblies only
-    if (pMT->GetAssembly()->GetManifestFile()->IsProfileAssembly())
-        return;
-
-    if (pMT->GetClass()->IsTypeValidOnNetCF())
-        return;
-
-    DWORD dwStaticsSizeOnNetCF = 0;
-
-    //
-    // NetCF had 64k limit on total size of statics per class. This limit
-    // is easy to reach by initialized data in C#. Apps took dependency
-    // on type load exceptions being thrown in this case.
-    //
-    ApproxFieldDescIterator fieldIterator(pMT, ApproxFieldDescIterator::STATIC_FIELDS);
-    for (FieldDesc *pFD = fieldIterator.Next(); pFD != NULL; pFD = fieldIterator.Next())
-    {
-        DWORD fldSize = pFD->LoadSize();
-
-        // Simulate NetCF behaviour that caused size to wrap around
-        dwStaticsSizeOnNetCF += (UINT16)fldSize;
-
-        if (dwStaticsSizeOnNetCF > 0xFFFF)
-            COMPlusThrow(kTypeLoadException);
-    }
-
-    // Cache the result of the check
-    pMT->GetClass()->SetTypeValidOnNetCF();
-}
-#endif // FEATURE_LEGACYNETCF
-
-
 /*********************************************************************/
 void CEEInfo::getFieldInfo (CORINFO_RESOLVED_TOKEN * pResolvedToken,
                             CORINFO_METHOD_HANDLE  callerHandle,
@@ -1520,11 +1598,6 @@ void CEEInfo::getFieldInfo (CORINFO_RESOLVED_TOKEN * pResolvedToken,
     pResult->offset = pField->GetOffset();
     if (pField->IsStatic())
     {
-#ifdef FEATURE_LEGACYNETCF
-        if (pFieldMT->GetDomain()->GetAppDomainCompatMode() == BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8)
-            CheckValidTypeOnNetCF(pFieldMT);
-#endif
-
         fieldFlags |= CORINFO_FLG_FIELD_STATIC;
 
         if (pField->IsRVA())
@@ -3943,18 +4016,6 @@ CorInfoInitClassResult CEEInfo::initClass(
 
     if (pFD == NULL)
     {
-#ifdef FEATURE_LEGACYNETCF
-        // For methods, NetCF always triggers static constructor as side-effect of JITing, essentially ignoring before field init.
-        if (pTypeToInitMT->GetDomain()->GetAppDomainCompatMode() == BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8)
-        {
-            // This quirk assumes that RunCCTorAsIfNGenImageExists() is TRUE. It would need to be replicated in more places 
-            // if it was not the case.
-            _ASSERTE(pTypeToInitMT->RunCCTorAsIfNGenImageExists());
-
-            fIgnoreBeforeFieldInit = true;
-        }
-#endif
-
         if (!fIgnoreBeforeFieldInit && pTypeToInitMT->GetClass()->IsBeforeFieldInit())
         {
             // We can wait for field accesses to run .cctor
@@ -6146,6 +6207,17 @@ void CEEInfo::getReadyToRunHelper(
 }
 
 /***********************************************************************/
+void CEEInfo::getReadyToRunDelegateCtorHelper(
+        CORINFO_RESOLVED_TOKEN * pTargetMethod,
+        CORINFO_CLASS_HANDLE     delegateType,
+        CORINFO_CONST_LOOKUP *   pLookup
+        )
+{
+    LIMITED_METHOD_CONTRACT;
+    UNREACHABLE();      // only called during NGen
+}
+
+/***********************************************************************/
 // see code:Nullable#NullableVerification
 
 CORINFO_CLASS_HANDLE  CEEInfo::getTypeForBox(CORINFO_CLASS_HANDLE  cls)
@@ -7304,20 +7376,6 @@ CorInfoInline CEEInfo::canInline (CORINFO_METHOD_HANDLE hCaller,
     {
         Module *    pCalleeModule   = pCallee->GetModule();
 
-#ifdef FEATURE_LEGACYNETCF
-        if (m_pMethodBeingCompiled->GetDomain()->GetAppDomainCompatMode() == BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8)
-        {
-            // NetCF did not allow cross-assembly inlining (except for mscorlib)
-            // and leaf methods
-            Assembly *  pCalleeAssembly = pCalleeModule->GetAssembly();
-            Assembly *  pOrigCallerAssembly = pOrigCallerModule->GetAssembly();
-            if ((pCalleeAssembly != pOrigCallerAssembly) && !pCalleeAssembly->IsSystem())
-            {
-                dwRestrictions |= INLINE_RESPECT_BOUNDARY;
-            }
-        }
-#endif // FEATURE_LEGACYNETCF
-
 #ifdef FEATURE_PREJIT
         Assembly *  pCalleeAssembly = pCalleeModule->GetAssembly();
 
@@ -7739,15 +7797,6 @@ CorInfoInstantiationVerification
         goto exit;
     }
 
-#ifdef FEATURE_CORECLR
-    //Skip verification of all methods in profile assemblies.  We will ensure that they are all verifiable.
-    if (pMethod->GetModule()->GetFile()->GetAssembly()->IsProfileAssembly())
-    {
-        result = INSTVER_GENERIC_PASSED_VERIFICATION;
-        goto exit;
-    }
-#endif
-
     result = pMethod->IsVerifiable() ? INSTVER_GENERIC_PASSED_VERIFICATION
                                      : INSTVER_GENERIC_FAILED_VERIFICATION;
 
@@ -7945,17 +7994,6 @@ bool CEEInfo::canTailCall (CORINFO_METHOD_HANDLE hCaller,
 
     _ASSERTE((pExactCallee == NULL) || pExactCallee->GetModule());
     _ASSERTE((pExactCallee == NULL) || pExactCallee->GetModule()->GetClassLoader());
-
-#ifdef FEATURE_LEGACYNETCF
-    // NetCF did not implement tail calls
-    if (m_pMethodBeingCompiled->GetDomain()->GetAppDomainCompatMode() == BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8)
-    {
-
-        result = false;
-        szFailReason = "Windows Phone OS 7 compatibility";
-        goto exit;
-    }
-#endif // FEATURE_LEGACYNETCF
 
     // If the caller is the static constructor (.cctor) of a class which has a ComImport base class
     // somewhere up the class hierarchy, then we cannot make the call into a tailcall.  See
@@ -9732,7 +9770,7 @@ ULONG CEEInfo::GetErrorMessage(__inout_ecount(bufferLength) LPWSTR buffer, ULONG
 // It is fatal to throw an exception while running a SEH filter clause
 // so our contract is NOTHROW, NOTRIGGER.
 //
-int CEEInfo::FilterException(struct _EXCEPTION_POINTERS *pExceptionPointers)
+LONG EEFilterException(struct _EXCEPTION_POINTERS *pExceptionPointers, void *unused)
 {
     CONTRACTL {
         SO_TOLERANT;
@@ -9818,6 +9856,12 @@ int CEEInfo::FilterException(struct _EXCEPTION_POINTERS *pExceptionPointers)
     EE_TO_JIT_TRANSITION_LEAF();
 
     return result;
+}
+
+int CEEInfo::FilterException(struct _EXCEPTION_POINTERS *pExceptionPointers)
+{
+    WRAPPER_NO_CONTRACT;
+    return EEFilterException(pExceptionPointers, nullptr);
 }
 
 // This code is called if FilterException chose to handle the exception.
@@ -10455,7 +10499,7 @@ void CEEJitInfo::reserveUnwindInfo(BOOL isFunclet, BOOL isColdCode, ULONG unwind
     _ASSERTE_MSG(m_theUnwindBlock == NULL,
         "reserveUnwindInfo() can only be called before allocMem(), but allocMem() has already been called. "
         "This may indicate the JIT has hit a NO_WAY assert after calling allocMem(), and is re-JITting. "
-        "Set COMPLUS_JitBreakOnBadCode=1 and rerun to get the real error.");
+        "Set COMPlus_JitBreakOnBadCode=1 and rerun to get the real error.");
 
     ULONG currentSize  = unwindSize;
 
@@ -10555,7 +10599,7 @@ void CEEJitInfo::allocUnwindInfo (
         _ASSERTE(m_usedUnwindInfos > 0);
     }
 
-    PRUNTIME_FUNCTION pRuntimeFunction = m_CodeHeader->GetUnwindInfo(m_usedUnwindInfos);
+    PT_RUNTIME_FUNCTION pRuntimeFunction = m_CodeHeader->GetUnwindInfo(m_usedUnwindInfos);
     m_usedUnwindInfos++;
 
     // Make sure that the RUNTIME_FUNCTION is aligned on a DWORD sized boundary
@@ -10640,7 +10684,7 @@ void CEEJitInfo::allocUnwindInfo (
 
         for (ULONG iUnwindInfo = 0; iUnwindInfo < m_usedUnwindInfos - 1; iUnwindInfo++)
         {
-            PRUNTIME_FUNCTION pOtherFunction = m_CodeHeader->GetUnwindInfo(iUnwindInfo);
+            PT_RUNTIME_FUNCTION pOtherFunction = m_CodeHeader->GetUnwindInfo(iUnwindInfo);
             _ASSERTE((   RUNTIME_FUNCTION__BeginAddress(pOtherFunction) >= RUNTIME_FUNCTION__EndAddress(pRuntimeFunction, baseAddress)
                      || RUNTIME_FUNCTION__EndAddress(pOtherFunction, baseAddress) <= RUNTIME_FUNCTION__BeginAddress(pRuntimeFunction)));
         }
@@ -10839,6 +10883,32 @@ void CEEJitInfo::recordRelocation(void * location,
             PutArm64Rel28((UINT32*) fixupLocation, (INT32)delta);
         }
         break;
+
+    case IMAGE_REL_ARM64_PAGEBASE_REL21:
+        {
+            _ASSERTE(slot == 0);
+            _ASSERTE(addlDelta == 0);
+
+            // Write the 21 bits pc-relative page address into location.
+            INT64 targetPage = (INT64)target & 0xFFFFFFFFFFFFF000LL;
+            INT64 lcoationPage = (INT64)location & 0xFFFFFFFFFFFFF000LL;
+            INT64 relPage = (INT64)(targetPage - lcoationPage);
+            INT32 imm21 = (INT32)(relPage >> 12) & 0x1FFFFF;
+            PutArm64Rel21((UINT32 *)location, imm21);
+        }
+        break;
+
+    case IMAGE_REL_ARM64_PAGEOFFSET_12A:
+        {
+            _ASSERTE(slot == 0);
+            _ASSERTE(addlDelta == 0);
+
+            // Write the 12 bits page offset into location.
+            INT32 imm12 = (INT32)target & 0xFFFLL;
+            PutArm64Rel12((UINT32 *)location, imm12);
+        }
+        break;
+
 #endif // _TARGET_ARM64_
 
     default:
@@ -11383,9 +11453,9 @@ void CEEJitInfo::getEHinfo(
 }
 #endif // CROSSGEN_COMPILE
 
-#ifdef CROSSGEN_COMPILE
+#if defined(CROSSGEN_COMPILE)
 EXTERN_C ICorJitCompiler* __stdcall getJit();
-#endif
+#endif // defined(CROSSGEN_COMPILE)
 
 #ifdef FEATURE_INTERPRETER
 static CorJitResult CompileMethodWithEtwWrapper(EEJitManager *jitMgr,
@@ -11441,16 +11511,16 @@ CorJitResult invokeCompileMethodHelper(EEJitManager *jitMgr,
 
     BEGIN_SO_TOLERANT_CODE(GetThread());
 
-#ifdef CROSSGEN_COMPILE
+#if defined(CROSSGEN_COMPILE) && !defined(FEATURE_CORECLR)
     ret = getJit()->compileMethod( comp,
                                    info,
                                    flags,
                                    nativeEntry,
                                    nativeSizeOfCode);
 
-#else // CROSSGEN_COMPILE
+#else // defined(CROSSGEN_COMPILE) && !defined(FEATURE_CORECLR)
 
-#ifdef ALLOW_SXS_JIT
+#if defined(ALLOW_SXS_JIT) && !defined(CROSSGEN_COMPILE)
     if (FAILED(ret) && jitMgr->m_alternateJit
 #ifdef FEATURE_STACK_SAMPLING
         && (!samplingEnabled || (flags2 & CORJIT_FLG2_SAMPLING_JIT_BACKGROUND))
@@ -11480,7 +11550,7 @@ CorJitResult invokeCompileMethodHelper(EEJitManager *jitMgr,
             ret = CORJIT_SKIPPED;
         }
     }
-#endif // ALLOW_SXS_JIT
+#endif // defined(ALLOW_SXS_JIT) && !defined(CROSSGEN_COMPILE)
 
 #ifdef FEATURE_INTERPRETER
     static ConfigDWORD s_InterpreterFallback;
@@ -11527,6 +11597,7 @@ CorJitResult invokeCompileMethodHelper(EEJitManager *jitMgr,
     }
 #endif // FEATURE_INTERPRETER
 
+#if !defined(CROSSGEN_COMPILE)
     // Cleanup any internal data structures allocated 
     // such as IL code after a successfull JIT compile
     // If the JIT fails we keep the IL around and will
@@ -11543,8 +11614,9 @@ CorJitResult invokeCompileMethodHelper(EEJitManager *jitMgr,
         comp->MethodCompileComplete(info->ftn);
 #endif // FEATURE_INTERPRETER
     }
-
-#endif // CROSSGEN_COMPILE
+#endif // !defined(CROSSGEN_COMPILE)
+    
+#endif // defined(CROSSGEN_COMPILE) && !defined(FEATURE_CORECLR)
 
     END_SO_TOLERANT_CODE;
 
@@ -11735,14 +11807,6 @@ CorJitResult CallCompileMethodWithSEHWrapper(EEJitManager *jitMgr,
              flags |= CORJIT_FLG_FRAMED;
          }
     }
-
-#ifdef FEATURE_LEGACYNETCF
-    // for "AppDomainCompatSwitch" == "WindowsPhone_3.7.0.0" or "AppDomainCompatSwitch" == "WindowsPhone_3.8.0.0"
-    // This is when we need to generate code that more closely resembles
-    // what the WinPhone 7.0/7.1/7.5 NetCF JIT used to generate.
-    if (ftn->GetDomain()->GetAppDomainCompatMode() == BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8)
-        flags |= CORJIT_FLG_NETCF_QUIRKS;
-#endif // FEATURE_LEGACYNETCF
 
     return flags;
 }
@@ -12559,9 +12623,7 @@ void Module::LoadHelperTable()
 
 #if defined(_TARGET_AMD64_)
                 *curEntry = X86_INSTR_JMP_REL32;
-                *(INT32 *)(curEntry + 1) = rel32UsingJumpStub((INT32 *)(curEntry + 1), pfnHelper, NULL, GetLoaderAllocator());
-#elif defined (_TARGET_ARM64_)
-                _ASSERTE(!"ARM64:NYI");      
+                *(INT32 *)(curEntry + 1) = rel32UsingJumpStub((INT32 *)(curEntry + 1), pfnHelper, NULL, GetLoaderAllocator());   
 #else // all other platforms
                 emitJump(curEntry, (LPVOID)pfnHelper);
                 _ASSERTE(HELPER_TABLE_ENTRY_LEN >= JUMP_ALLOCATE_SIZE);
@@ -13767,7 +13829,7 @@ LPVOID                EECodeInfo::findNextFunclet (LPVOID pvFuncletStart, SIZE_T
 
     while (cbCode > 0)
     {
-        PRUNTIME_FUNCTION   pFunctionEntry;
+        PT_RUNTIME_FUNCTION   pFunctionEntry;
         ULONGLONG           uImageBase;
 #ifdef FEATURE_PAL
         EECodeInfo codeInfo;
@@ -13779,7 +13841,7 @@ LPVOID                EECodeInfo::findNextFunclet (LPVOID pvFuncletStart, SIZE_T
         // This is GCStress debug only - use the slow OS APIs to enumerate funclets
         //
 
-        pFunctionEntry = (PRUNTIME_FUNCTION) RtlLookupFunctionEntry((ULONGLONG)pvFuncletStart,
+        pFunctionEntry = (PT_RUNTIME_FUNCTION) RtlLookupFunctionEntry((ULONGLONG)pvFuncletStart,
                               &uImageBase
                               AMD64_ARG(NULL)
                               );

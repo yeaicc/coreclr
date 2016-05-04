@@ -1290,9 +1290,8 @@ public:
         }
 
         // Obtain the bias value and reinterpret as decimal.
-        static ConfigDWORD fJitStressBiasedCSE;
         unsigned bias = ReinterpretHexAsDecimal(
-                            fJitStressBiasedCSE.val(CLRConfig::INTERNAL_JitStressBiasedCSE));
+                            JitConfig.JitStressBiasedCSE());
 
         // Invalid value, check if JitStress is ON.
         if (bias > 100)
@@ -2129,7 +2128,7 @@ bool                Compiler::optIsCSEcandidate(GenTreePtr tree)
     var_types   type = tree->TypeGet();
     genTreeOps  oper = tree->OperGet();
 
-    // TODO-1stClassStructs: Enable CSE for TYP_SIMD (depends on either transforming
+    // TODO-1stClassStructs: Enable CSE for struct types (depends on either transforming
     // to use regular assignments, or handling copyObj.
     if (varTypeIsStruct(type) || type == TYP_VOID)
         return false;
@@ -2284,10 +2283,9 @@ bool                Compiler::optConfigDisableCSE(bool lexicalCSE)
         return true;        // valnum CSE phase is disabled
 #endif
 
-    // Next check if COMPLUS_JitNoCSE is set and applies to this method
+    // Next check if COMPlus_JitNoCSE is set and applies to this method
     //
-    static ConfigDWORD fJitNoCSE;
-    unsigned jitNoCSE = fJitNoCSE.val(CLRConfig::INTERNAL_JitNoCSE);
+    unsigned jitNoCSE = JitConfig.JitNoCSE();
 
     if (jitNoCSE > 0)
     {
@@ -2327,8 +2325,7 @@ bool                Compiler::optConfigDisableCSE2()
 {
     static unsigned totalCSEcount = 0;
 
-    static ConfigDWORD fNoCSE2;
-    unsigned jitNoCSE2 = fNoCSE2.val(CLRConfig::INTERNAL_JitNoCSE2);
+    unsigned jitNoCSE2 = JitConfig.JitNoCSE2();
 
     totalCSEcount++;
 

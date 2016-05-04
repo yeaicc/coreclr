@@ -221,7 +221,11 @@ namespace System.IO
                 // is generally the right thing to do.
                 if (stream != null) {
                     // Note: flush on the underlying stream can throw (ex., low disk space)
+#if FEATURE_CORECLR
+                    if (disposing)
+#else
                     if (disposing || (LeaveOpen && stream is __ConsoleStream))
+#endif
                     {
                         CheckAsyncTaskInProgress();
 
@@ -276,7 +280,7 @@ namespace System.IO
                 __Error.WriterClosed();
 
             // Perf boost for Flush on non-dirty writers.
-            if (charPos==0 && ((!flushStream && !flushEncoder) || CompatibilitySwitches.IsAppEarlierThanWindowsPhone8))
+            if (charPos==0 && (!flushStream && !flushEncoder))
                 return;
 
             if (!haveWrittenPreamble) {

@@ -32,10 +32,9 @@ unsigned fatal_NYI;
 void DECLSPEC_NORETURN fatal(int errCode)
 {
 #ifdef DEBUG
-    if (errCode != CORJIT_SKIPPED) // Don't stop on NYI: use COMPLUS_AltJitAssertOnNYI for that.
+    if (errCode != CORJIT_SKIPPED) // Don't stop on NYI: use COMPlus_AltJitAssertOnNYI for that.
     {
-        static ConfigDWORD fDebugBreakOnVerificationFailure;
-        if (fDebugBreakOnVerificationFailure.val(CLRConfig::INTERNAL_DebugBreakOnVerificationFailure))
+        if (JitConfig.DebugBreakOnVerificationFailure())
         {
             DebugBreak();
         }
@@ -90,8 +89,7 @@ void DECLSPEC_NORETURN noWayAssertBody()
     // have the assert code to fall back on here.
     // The debug path goes through this function also, to do the call to 'fatal'.
     // This kind of noway is hit for unreached().
-    static ConfigDWORD fJitEnableNoWayAssert;
-    if (fJitEnableNoWayAssert.val(CLRConfig::INTERNAL_JitEnableNoWayAssert))
+    if (JitConfig.JitEnableNoWayAssert())
     {
         DebugBreak();
     }
@@ -107,8 +105,8 @@ inline static bool ShouldThrowOnNoway(
 #endif
 )
 {
-    return GetTlsCompiler() == NULL ||
-        GetTlsCompiler()->compShouldThrowOnNoway(
+    return JitTls::GetCompiler() == NULL ||
+        JitTls::GetCompiler()->compShouldThrowOnNoway(
 #ifdef FEATURE_TRACELOGGING
             filename, line
 #endif
@@ -139,7 +137,7 @@ void notYetImplemented(const char * msg, const char * filename, unsigned line)
 {
 #if FUNC_INFO_LOGGING
 #ifdef DEBUG
-    LogEnv* env = LogEnv::cur();
+    LogEnv* env = JitTls::GetLogEnv();
     if (env != NULL)
     {
         const Compiler* const pCompiler = env->compiler;
@@ -172,9 +170,7 @@ void notYetImplemented(const char * msg, const char * filename, unsigned line)
 #endif // !DEBUG
 #endif // FUNC_INFO_LOGGING
 
-    static ConfigDWORD fAltJitAssertOnNYI;
-
-    DWORD value = fAltJitAssertOnNYI.val(CLRConfig::INTERNAL_AltJitAssertOnNYI);
+    DWORD value = JitConfig.AltJitAssertOnNYI();
 
     // 0 means just silently skip
     // If we are in retail builds, assume ignore
@@ -237,8 +233,7 @@ LONG __JITfilter(PEXCEPTION_POINTERS pExceptionPointers, LPVOID lpvParam)
 
 DWORD getBreakOnBadCode()
 {
-    static ConfigDWORD fBreakOnBadCode;
-    return fBreakOnBadCode.val_DontUse_(CLRConfig::INTERNAL_JitBreakOnBadCode, false);
+    return JitConfig.JitBreakOnBadCode();
 }
 
 /*****************************************************************************/
@@ -247,14 +242,13 @@ void debugError(const char* msg, const char* file, unsigned line)
     const char* tail = strrchr(file, '\\');
     if (tail) file = tail+1;
 
-    LogEnv* env = LogEnv::cur();
+    LogEnv* env = JitTls::GetLogEnv();
 
     logf(LL_ERROR, "COMPILATION FAILED: file: %s:%d compiling method %s reason %s\n", file, line, env->compiler->info.compFullName, msg);
 
-    static ConfigDWORD fJitRequired;
     // We now only assert when user explicitly set ComPlus_JitRequired=1
     // If ComPlus_JitRequired is 0 or is not set, we will not assert.
-    if (fJitRequired.val(CLRConfig::INTERNAL_JITRequired) == 1 || getBreakOnBadCode())
+    if (JitConfig.JitRequired() == 1 || getBreakOnBadCode())
     {
             // Don't assert if verification is done.
         if (!env->compiler->tiVerificationNeeded || getBreakOnBadCode())
@@ -266,23 +260,9 @@ void debugError(const char* msg, const char* file, unsigned line)
 
 
 /*****************************************************************************/
-LogEnv* LogEnv::cur()
-{
-    return (LogEnv*) ClrFlsGetValue(TlsIdx_JitLogEnv);
-}
-
-LogEnv::LogEnv(ICorJitInfo* aCompHnd) : compHnd(aCompHnd), compiler(0) 
-{
-    next = (LogEnv*) ClrFlsGetValue(TlsIdx_JitLogEnv);
-    ClrFlsSetValue(TlsIdx_JitLogEnv, this);
-}
-
-LogEnv::~LogEnv()
-{
-    ClrFlsSetValue(TlsIdx_JitLogEnv, next);   // pop me off the environment stack
-}
-
-void LogEnv::cleanup()
+LogEnv::LogEnv(ICorJitInfo* aCompHnd)
+    : compHnd(aCompHnd)
+    , compiler(nullptr)
 {
 }
 
@@ -291,7 +271,7 @@ extern  "C"
 void  __cdecl   assertAbort(const char *why, const char *file, unsigned line)
 {
     const char* msg = why;
-    LogEnv* env = LogEnv::cur();
+    LogEnv* env = JitTls::GetLogEnv();
     const int BUFF_SIZE = 8192;
     char *buff = (char*)alloca(BUFF_SIZE);
     if (env->compiler) {
@@ -316,27 +296,24 @@ void  __cdecl   assertAbort(const char *why, const char *file, unsigned line)
 
 #ifdef ALT_JIT
     // If we hit an assert, and we got here, it's either because the user hit "ignore" on the
-    // dialog pop-up, or they set COMPLUS_ContinueOnAssert=1 to not emit a pop-up, but just continue.
+    // dialog pop-up, or they set COMPlus_ContinueOnAssert=1 to not emit a pop-up, but just continue.
     // If we're an altjit, we have two options: (1) silently continue, as a normal JIT would, probably
     // leading to additional asserts, or (2) tell the VM that the AltJit wants to skip this function,
-    // thus falling back to the fallback JIT. Setting COMPLUS_AltJitSkipOnAssert=1 chooses this "skip"
+    // thus falling back to the fallback JIT. Setting COMPlus_AltJitSkipOnAssert=1 chooses this "skip"
     // to the fallback JIT behavior. This is useful when doing ASM diffs, where we only want to see
     // the first assert for any function, but we don't want to kill the whole ngen process on the
-    // first assert (which would happen if you used COMPLUS_NoGuiOnAssert=1 for example).
-    static ConfigDWORD fAltJitSkipOnAssert;
-    if (fAltJitSkipOnAssert.val(CLRConfig::INTERNAL_AltJitSkipOnAssert) != 0)
+    // first assert (which would happen if you used COMPlus_NoGuiOnAssert=1 for example).
+    if (JitConfig.AltJitSkipOnAssert() != 0)
     {
         fatal(CORJIT_SKIPPED);
     }
 #elif defined(_TARGET_ARM64_)
     // TODO-ARM64-NYI: remove this after the JIT no longer asserts during startup
     //
-    // When we are bringing up the new Arm64 JIT we set COMPLUS_ContinueOnAssert=1 
+    // When we are bringing up the new Arm64 JIT we set COMPlus_ContinueOnAssert=1 
     // We only want to hit one assert then we will fall back to the interpreter.
     //
-    static ConfigDWORD s_InterpreterFallback;
-
-    bool interpreterFallback = (s_InterpreterFallback.val(CLRConfig::INTERNAL_InterpreterFallback) != 0);
+    bool interpreterFallback = (JitConfig.InterpreterFallback() != 0);
 
     if (interpreterFallback)
     {
@@ -348,7 +325,7 @@ void  __cdecl   assertAbort(const char *why, const char *file, unsigned line)
 /*********************************************************************/
 BOOL vlogf(unsigned level, const char* fmt, va_list args) 
 {
-    return(LogEnv::cur()->compHnd->logMsg(level, fmt, args));
+    return JitTls::GetLogEnv()->compHnd->logMsg(level, fmt, args);
 } 
 
 int logf_stdout(const char* fmt, va_list args)
@@ -360,8 +337,7 @@ int logf_stdout(const char* fmt, va_list args)
     char buffer[BUFF_SIZE];
     int written = _vsnprintf_s(&buffer[0], BUFF_SIZE, _TRUNCATE, fmt, args);
 
-    static ConfigDWORD fJitDumpToDebugger;
-    if (fJitDumpToDebugger.val(CLRConfig::INTERNAL_JitDumpToDebugger))
+    if (JitConfig.JitDumpToDebugger())
     {
         OutputDebugStringA(buffer);
     }
@@ -536,8 +512,7 @@ void DECLSPEC_NORETURN badCode3(const char* msg, const char* msg2, int arg,
 void noWayAssertAbortHelper(const char * cond, const char * file, unsigned line)
 {
     // Show the assert UI.
-    static ConfigDWORD fJitEnableNoWayAssert;
-    if (fJitEnableNoWayAssert.val(CLRConfig::INTERNAL_JitEnableNoWayAssert))
+    if (JitConfig.JitEnableNoWayAssert())
     {
         assertAbort(cond, file, line);
     }

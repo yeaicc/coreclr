@@ -37,8 +37,7 @@ flowList* ShuffleHelper(unsigned hash, flowList* res)
 unsigned SsaStressHashHelper()
 {
     // hash = 0: turned off, hash = 1: use method hash, hash = *: use custom hash.
-    static ConfigDWORD fJitSsaStress;
-    unsigned hash = fJitSsaStress.val(CLRConfig::INTERNAL_JitSsaStress);
+    unsigned hash = JitConfig.JitSsaStress();
 
     if (hash == 0)
     {
@@ -46,7 +45,7 @@ unsigned SsaStressHashHelper()
     }
     if (hash == 1)
     {
-        return GetTlsCompiler()->info.compMethodHash();
+        return JitTls::GetCompiler()->info.compMethodHash();
     }
     return ((hash >> 16) == 0) ? ((hash << 16) | hash) : hash;
 }
@@ -56,7 +55,7 @@ EHSuccessorIter::EHSuccessorIter(Compiler* comp, BasicBlock* block) :
     m_comp(comp),
     m_block(block),
     m_curRegSucc(NULL),
-    m_curTry(comp->ehGetBlockTryDsc(block)),
+    m_curTry(comp->ehGetBlockExnFlowDsc(block)),
     m_remainingRegSuccs(block->NumSucc(comp))
 {
     // If "block" is a "leave helper" block (the empty BBJ_ALWAYS block that pairs with a
@@ -94,7 +93,7 @@ void EHSuccessorIter::FindNextRegSuccTry()
 
             // If the try region started by "m_curRegSucc" (represented by newTryIndex) contains m_block,
             // we've already yielded its handler, as one of the EH handler successors of m_block itself.
-            if (m_comp->bbInTryRegions(newTryIndex, m_block))
+            if (m_comp->bbInExnFlowRegions(newTryIndex, m_block))
                 continue;
 
             // Otherwise, consider this try.
@@ -163,18 +162,19 @@ flowList* Compiler::BlockPredsWithEH(BasicBlock* blk)
 #endif // MEASURE_BLOCK_SIZE
         }
 
-        // Now add all blocks within the try (except for second blocks of BBJ_CALLFINALLY/BBJ_ALWAYS pairs;
+        // Now add all blocks handled by this handler (except for second blocks of BBJ_CALLFINALLY/BBJ_ALWAYS pairs;
         // these cannot cause transfer to the handler...)
         BasicBlock* prevBB = NULL;
 
         // TODO-Throughput: It would be nice if we could iterate just over the blocks in the try, via
         // something like:
         //   for (BasicBlock* bb = ehblk->ebdTryBeg; bb != ehblk->ebdTryLast->bbNext; bb = bb->bbNext)
+        //     (plus adding in any filter blocks outside the try whose exceptions are handled here).
         // That doesn't work, however: funclets have caused us to sometimes split the body of a try into
         // more than one sequence of contiguous blocks.  We need to find a better way to do this.
         for (BasicBlock* bb = fgFirstBB; bb != NULL; prevBB = bb, bb = bb->bbNext)
         {
-            if (bbInTryRegions(tryIndex, bb) && (prevBB == NULL || !prevBB->isBBCallAlwaysPair()))
+            if (bbInExnFlowRegions(tryIndex, bb) && (prevBB == NULL || !prevBB->isBBCallAlwaysPair()))
             {
                 res = new (this, CMK_FlowList) flowList(bb, res);
 

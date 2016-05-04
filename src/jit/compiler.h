@@ -59,6 +59,10 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 #include "simd.h"
 
+// This is only used locally in the JIT to indicate that 
+// a verification block should be inserted 
+#define SEH_VERIFICATION_EXCEPTION 0xe0564552   // VER
+
 /*****************************************************************************
  *                  Forward declarations
  */
@@ -275,9 +279,8 @@ public:
     unsigned char       lvOverlappingFields :1;  // True when we have a struct with possibly overlapping fields
     unsigned char       lvContainsHoles     :1;  // True when we have a promoted struct that contains holes
     unsigned char       lvCustomLayout      :1;  // True when this struct has "CustomLayout"
-#if FEATURE_MULTIREG_ARGS_OR_RET
-    unsigned char       lvIsMultiRegArgOrRet:1; // Is this argument variable holding a value passed or returned in multiple registers?
-#endif
+    unsigned char       lvIsMultiRegArgOrRet:1; // Is this a struct that would be passed or returned in multiple registers?
+
 #ifdef _TARGET_ARM_
     // TODO-Cleanup: Can this be subsumed by the above?
     unsigned char       lvIsHfaRegArg:1;        // Is this argument variable holding a HFA register argument.
@@ -596,6 +599,20 @@ public:
                (lvType == TYP_BLK) ||
                (lvPromoted && lvUnusedStruct));
         return (unsigned)(roundUp(lvExactSize, sizeof(void*)));
+    }
+
+    bool                lvIsMultiregStruct()
+    {
+#if FEATURE_MULTIREG_ARGS_OR_RET
+#ifdef _TARGET_ARM64_
+        if ((TypeGet() == TYP_STRUCT) &&
+            (lvSize()  == 2 * TARGET_POINTER_SIZE))
+        {
+            return true;
+        }
+#endif  // _TARGET_ARM64_
+#endif  // FEATURE_MULTIREG_ARGS_OR_RET
+        return false;
     }
 
 #if defined(DEBUGGING_SUPPORT) || defined(DEBUG)
@@ -1221,7 +1238,7 @@ struct TestLabelAndNum
     TestLabelAndNum() : m_tl(TestLabel(0)), m_num(0) {}
 };
 
-typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, TestLabelAndNum, DefaultSimplerHashBehavior> NodeToTestDataMap;
+typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, TestLabelAndNum, JitSimplerHashBehavior> NodeToTestDataMap;
 
 
 //XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -1380,6 +1397,7 @@ public:
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
     bool                            IsRegisterPassable(CORINFO_CLASS_HANDLE hClass);
     bool                            IsRegisterPassable(GenTreePtr tree);
+    bool                            IsMultiRegReturnedType(CORINFO_CLASS_HANDLE hClass);
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
 
     //-------------------------------------------------------------------------
@@ -1472,6 +1490,7 @@ public:
     bool                bbInCatchHandlerILRange (BasicBlock * blk);
     bool                bbInFilterILRange       (BasicBlock * blk);
     bool                bbInTryRegions          (unsigned regionIndex, BasicBlock * blk);
+    bool                bbInExnFlowRegions      (unsigned regionIndex, BasicBlock * blk);
     bool                bbInHandlerRegions      (unsigned regionIndex, BasicBlock * blk);
     bool                bbInCatchHandlerRegions (BasicBlock * tryBlk, BasicBlock * hndBlk);
     unsigned short      bbFindInnermostCommonTryRegion (BasicBlock  * bbOne, BasicBlock  * bbTwo);
@@ -1511,9 +1530,14 @@ public:
     // Return the EH descriptor for the most nested filter or handler region this BasicBlock is a member of (or nullptr if this block is not in a filter or handler region).
     EHblkDsc*           ehGetBlockHndDsc(BasicBlock* block);
 
+    // Return the EH descriptor for the most nested region that may handle exceptions raised in this BasicBlock (or nullptr if this block's exceptions propagate to caller).
+    EHblkDsc*           ehGetBlockExnFlowDsc(BasicBlock* block);
+
     EHblkDsc*           ehIsBlockTryLast(BasicBlock* block);
     EHblkDsc*           ehIsBlockHndLast(BasicBlock* block);
     bool                ehIsBlockEHLast(BasicBlock* block);
+
+    bool                ehBlockHasExnFlowDsc(BasicBlock* block);
 
     // Return the region index of the most nested EH region this block is in.
     unsigned            ehGetMostNestedRegionIndex(BasicBlock* block, bool* inTryRegion);
@@ -1584,7 +1608,7 @@ public:
     flowList*           BlockPredsWithEH(BasicBlock* blk);
 
     // This table is useful for memoization of the method above.
-    typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, flowList*, DefaultSimplerHashBehavior> BlockToFlowListMap;
+    typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, flowList*, JitSimplerHashBehavior> BlockToFlowListMap;
     BlockToFlowListMap* m_blockToEHPreds;
     BlockToFlowListMap* GetBlockToEHPreds()
     {
@@ -1753,7 +1777,7 @@ protected:
                                              GenTreePtr src, GenTreePtr size,
                                              bool volatil);
 public:
-    GenTreeLdObj*           gtNewLdObjNode  (CORINFO_CLASS_HANDLE structHnd, GenTreePtr addr);
+    GenTreeObj*             gtNewObjNode    (CORINFO_CLASS_HANDLE structHnd, GenTreePtr addr);
 
     GenTreeBlkOp*           gtNewCpObjNode  (GenTreePtr dst, GenTreePtr src,
                                              CORINFO_CLASS_HANDLE structHnd, bool volatil);
@@ -1830,7 +1854,7 @@ public:
 
     GenTreePtr              gtNewAssignNode (GenTreePtr     dst,
                                              GenTreePtr     src
-                                             DEBUG_ARG(bool isPhiDefn = false));
+                                             DEBUGARG(bool isPhiDefn = false));
 
     GenTreePtr              gtNewTempAssign (unsigned       tmp,
                                              GenTreePtr     val);
@@ -2011,11 +2035,13 @@ public:
     void                    gtGetArgMsg     (GenTreePtr             call,
                                              GenTreePtr             arg,
                                              unsigned               argNum,
+                                             int                    listCount,
                                              char*                  bufp,
                                              unsigned               bufLength);
     void                    gtGetLateArgMsg (GenTreePtr             call,
                                              GenTreePtr             arg,
                                              int                    argNum,
+                                             int                    listCount,
                                              char*                  bufp,
                                              unsigned               bufLength);
     void                    gtDispArgList   (GenTreePtr              tree, 
@@ -2185,7 +2211,7 @@ public :
 #endif
     };
 #endif
-    void                lvaSetVarDoNotEnregister(unsigned varNum DEBUG_ARG(DoNotEnregisterReason reason));     
+    void                lvaSetVarDoNotEnregister(unsigned varNum DEBUGARG(DoNotEnregisterReason reason));     
 
     unsigned            lvaVarargsHandleArg;
 #ifdef _TARGET_X86_
@@ -2393,8 +2419,6 @@ public :
     void                lvaRecursiveDecRefCounts(GenTreePtr tree);
     void                lvaRecursiveIncRefCounts(GenTreePtr tree);
 
-    void                lvaAdjustRefCnts    ();
-
 #ifdef  DEBUG
     struct lvaStressLclFldArgs
     {
@@ -2507,13 +2531,15 @@ public :
     unsigned             lvaPSPSym;           // variable representing the PSPSym
 #endif
 
-    InlineInfo         * impInlineInfo;      
-
-    // Get the maximum IL size allowed for an inline
-    unsigned             getImpInlineSize() const { return impInlineSize; }
+    InlineInfo*          impInlineInfo;
+    InlineStrategy*      m_inlineStrategy;
 
     // The Compiler* that is the root of the inlining tree of which "this" is a member.
     Compiler*            impInlineRoot();
+
+#if defined(DEBUG) || defined(INLINE_DATA)
+    unsigned __int64     getInlineCycleCount() { return m_compCycles; }
+#endif // defined(DEBUG) || defined(INLINE_DATA)
 
     bool                 fgNoStructPromotion;        // Set to TRUE to turn off struct promotion for this method.
     bool                 fgNoStructParamPromotion;   // Set to TRUE to turn off struct promotion for parameters this method.
@@ -2655,10 +2681,11 @@ protected :
 
     bool                impMethodInfo_hasRetBuffArg(CORINFO_METHOD_INFO * methInfo);
 
-    GenTreePtr          impFixupStructReturn(GenTreePtr           call,
-                                             CORINFO_CLASS_HANDLE retClsHnd);
+    GenTreePtr          impFixupCallStructReturn(GenTreePtr           call,
+                                                 CORINFO_CLASS_HANDLE retClsHnd);
+
     GenTreePtr          impFixupStructReturnType(GenTreePtr       op,
-                                             CORINFO_CLASS_HANDLE retClsHnd);
+                                                 CORINFO_CLASS_HANDLE retClsHnd);
 
 #ifdef DEBUG
     var_types           impImportJitTestLabelMark(int numArgs);
@@ -3062,27 +3089,10 @@ private:
     regNumber           getCallArgIntRegister       (regNumber floatReg);
     regNumber           getCallArgFloatRegister     (regNumber intReg);
 #endif // FEATURE_VARARG
-    //--------------------------- Inlining-------------------------------------
 
-#if defined(DEBUG) || MEASURE_INLINING
+#if defined(DEBUG)
     static unsigned jitTotalMethodCompiled;
-    static unsigned jitTotalMethodInlined;
-    static unsigned jitTotalInlineCandidates;
-    static unsigned jitTotalInlineCandidatesWithNonNullReturn;
-    static unsigned jitTotalNumLocals;
-    static unsigned jitTotalInlineReturnFromALocal;
-    static unsigned jitInlineInitVarsFailureCount;
-    static unsigned jitCheckCanInlineCallCount;
-    static unsigned jitCheckCanInlineFailureCount;
-
-    static unsigned jitInlineGetMethodInfoCallCount;
-    static unsigned jitInlineInitClassCallCount;
-    static unsigned jitInlineCanInlineCallCount;
-
-    static unsigned jitIciStmtIsTheLastInBB;
-    static unsigned jitInlineeContainsOnlyOneBB;
-
-#endif // defined(DEBUG) || MEASURE_INLINING
+#endif
 
 #ifdef DEBUG
     static LONG     jitNestingLevel;
@@ -3090,17 +3100,10 @@ private:
 
     bool                seenConditionalJump;
 
-    unsigned            impInlineSize; // max IL size for inlining
-
     static BOOL         impIsAddressInLocal(GenTreePtr tree, GenTreePtr * lclVarTreeOut);
 
-    int                 impEstimateCallsiteNativeSize (CORINFO_METHOD_INFO *  methInfo);
-
-    void                impCanInlineNative(int              callsiteNativeEstimate, 
-                                           int              calleeNativeSizeEstimate,
-                                           InlineHints      inlineHints,
-                                           InlineInfo*      pInlineInfo,
-                                           InlineResult*    inlineResult);
+    void                impMakeDiscretionaryInlineObservations(InlineInfo*   pInlineInfo,
+                                                               InlineResult* inlineResult);
 
     // STATIC inlining decision based on the IL code. 
     void                impCanInlineIL(CORINFO_METHOD_HANDLE  fncHandle,
@@ -3538,7 +3541,7 @@ public :
     // "x", and a def of a new SSA name for "x".  The tree only has one local variable for "x", so it has to choose whether
     // to treat that as the use or def.  It chooses the "use", and thus the old SSA name.  This map allows us to record/recover
     // the "def" SSA number, given the lcl var node for "x" in such a tree.
-    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, unsigned, DefaultSimplerHashBehavior> NodeToUnsignedMap;
+    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, unsigned, JitSimplerHashBehavior> NodeToUnsignedMap;
     NodeToUnsignedMap*  m_opAsgnVarDefSsaNums;
     NodeToUnsignedMap*  GetOpAsgnVarDefSsaNums()
     {
@@ -3600,7 +3603,7 @@ public :
         {}
 
     };
-    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, IndirectAssignmentAnnotation*, DefaultSimplerHashBehavior> NodeToIndirAssignMap;
+    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, IndirectAssignmentAnnotation*, JitSimplerHashBehavior> NodeToIndirAssignMap;
     NodeToIndirAssignMap* m_indirAssignMap;
     NodeToIndirAssignMap* GetIndirAssignMap()
     {
@@ -3924,7 +3927,7 @@ public:
         void UpdateTarget(IAllocator* alloc, BasicBlock* switchBlk, BasicBlock* from, BasicBlock* to);
     };
 
-    typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, SwitchUniqueSuccSet, DefaultSimplerHashBehavior> BlockToSwitchDescMap;
+    typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, SwitchUniqueSuccSet, JitSimplerHashBehavior> BlockToSwitchDescMap;
 
     private:
     // Maps BasicBlock*'s that end in switch statements to SwitchUniqueSuccSets that allow
@@ -4324,8 +4327,7 @@ protected :
     unsigned            fgStressBBProf()
     {
 #ifdef DEBUG
-        static ConfigDWORD fJitStressBBProf;
-        unsigned result = fJitStressBBProf.val(CLRConfig::INTERNAL_JitStressBBProf);
+        unsigned result = JitConfig.JitStressBBProf();
         if (result == 0)
         {
             if (compStressCompile(STRESS_BB_PROFILE, 15))
@@ -4566,7 +4568,7 @@ private:
 #endif
     void                fgMorphTreeDone     (GenTreePtr     tree,
                                              GenTreePtr     oldTree = NULL
-                                             DEBUG_ARG(int morphNum = 0));
+                                             DEBUGARG(int morphNum = 0));
 
     GenTreePtr          fgMorphStmt;
     
@@ -4684,7 +4686,6 @@ private:
     bool                gtIsActiveCSE_Candidate(GenTreePtr tree);
 
 #ifdef DEBUG
-    unsigned            fgInlinedCount; // Number of successful inline expansion of this method.
     bool                fgPrintInlinedMethods;
 #endif
     
@@ -4735,7 +4736,7 @@ protected:
     void                optHoistLoopCode();
 
     // To represent sets of VN's that have already been hoisted in outer loops.
-    typedef SimplerHashTable<ValueNum, SmallPrimitiveKeyFuncs<ValueNum>, bool, DefaultSimplerHashBehavior> VNToBoolMap;
+    typedef SimplerHashTable<ValueNum, SmallPrimitiveKeyFuncs<ValueNum>, bool, JitSimplerHashBehavior> VNToBoolMap;
     typedef VNToBoolMap VNSet;
 
     struct LoopHoistContext
@@ -4954,11 +4955,11 @@ public:
         int                 lpLoopVarFPCount;           // The register count for the FP LclVars that are read/written inside this loop
         int                 lpVarInOutFPCount;          // The register count for the FP LclVars that are alive inside or accross this loop
 
-        typedef SimplerHashTable<CORINFO_FIELD_HANDLE, PtrKeyFuncs<struct CORINFO_FIELD_STRUCT_>, bool, DefaultSimplerHashBehavior> FieldHandleSet;
+        typedef SimplerHashTable<CORINFO_FIELD_HANDLE, PtrKeyFuncs<struct CORINFO_FIELD_STRUCT_>, bool, JitSimplerHashBehavior> FieldHandleSet;
         FieldHandleSet*     lpFieldsModified;           // This has entries (mappings to "true") for all static field and object instance fields modified
                                                         // in the loop.
         
-        typedef SimplerHashTable<CORINFO_CLASS_HANDLE, PtrKeyFuncs<struct CORINFO_CLASS_STRUCT_>, bool, DefaultSimplerHashBehavior> ClassHandleSet;
+        typedef SimplerHashTable<CORINFO_CLASS_HANDLE, PtrKeyFuncs<struct CORINFO_CLASS_STRUCT_>, bool, JitSimplerHashBehavior> ClassHandleSet;
         ClassHandleSet*     lpArrayElemTypesModified;   // Bits set indicate the set of sz array element types such that arrays of that type are modified
                                                         // in the loop.
 
@@ -5393,7 +5394,7 @@ protected :
 public:
     // VN based copy propagation.
     typedef ArrayStack<GenTreePtr> GenTreePtrStack;
-    typedef SimplerHashTable<unsigned, SmallPrimitiveKeyFuncs<unsigned>, GenTreePtrStack*, DefaultSimplerHashBehavior> LclNumToGenTreePtrStack;
+    typedef SimplerHashTable<unsigned, SmallPrimitiveKeyFuncs<unsigned>, GenTreePtrStack*, JitSimplerHashBehavior> LclNumToGenTreePtrStack;
 
     // Kill set to track variables with intervening definitions.
     VARSET_TP optCopyPropKillSet;
@@ -5724,7 +5725,7 @@ public :
         return optAssertionCount;
     }
     ASSERT_TP* bbJtrueAssertionOut;
-    typedef SimplerHashTable<ValueNum, SmallPrimitiveKeyFuncs<ValueNum>, ASSERT_TP, DefaultSimplerHashBehavior> ValueNumToAssertsMap;
+    typedef SimplerHashTable<ValueNum, SmallPrimitiveKeyFuncs<ValueNum>, ASSERT_TP, JitSimplerHashBehavior> ValueNumToAssertsMap;
     ValueNumToAssertsMap* optValueNumToAsserts;
 
     static const AssertionIndex NO_ASSERTION_INDEX = 0;
@@ -6017,6 +6018,11 @@ private:
                                              GenTreePtr     lenCSE);
 
     void                rpPredictRefAssign  (unsigned       lclNum);
+
+    regMaskTP           rpPredictBlkAsgRegUse(GenTreePtr    tree,
+                                              rpPredictReg  predictReg,
+                                              regMaskTP     lockedRegs,
+                                              regMaskTP     rsvdRegs);
 
     regMaskTP           rpPredictTreeRegUse (GenTreePtr     tree,
                                              rpPredictReg   predictReg,
@@ -6448,6 +6454,8 @@ public :
                                                                                 /*OUT*/ SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR* structPassInRegDescPtr);
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
 
+    bool eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken);
+
     // Utility functions
 
 #if defined(DEBUG)
@@ -6560,7 +6568,7 @@ public :
     // whose return type is other than TYP_VOID. 2) GT_CALL node is a frequently used
     // structure and IL offset is needed only when generating debuggable code. Therefore
     // it is desirable to avoid memory size penalty in retail scenarios.
-    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, IL_OFFSETX, DefaultSimplerHashBehavior> CallSiteILOffsetTable;
+    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, IL_OFFSETX, JitSimplerHashBehavior> CallSiteILOffsetTable;
     CallSiteILOffsetTable *  genCallSite2ILOffsetMap;
 #endif // DEBUGGING_SUPPORT
 
@@ -6665,10 +6673,10 @@ public :
                                                             regMaskTP* pArgSkippedRegMask);
 #endif // _TARGET_ARM_
 
-    // If "tree" is a indirection (GT_IND, or GT_LDOBJ) whose arg is an ADDR, whose arg is a LCL_VAR, return that LCL_VAR node, else NULL.
+    // If "tree" is a indirection (GT_IND, or GT_OBJ) whose arg is an ADDR, whose arg is a LCL_VAR, return that LCL_VAR node, else NULL.
     GenTreePtr          fgIsIndirOfAddrOfLocal(GenTreePtr tree);
 
-    // This is indexed by GT_LDOBJ nodes that are address of promoted struct variables, which
+    // This is indexed by GT_OBJ nodes that are address of promoted struct variables, which
     // have been annotated with the GTF_VAR_DEATH flag.  If such a node is *not* mapped in this
     // table, one may assume that all the (tracked) field vars die at this point.  Otherwise,
     // the node maps to a pointer to a VARSET_TP, containing set bits for each of the tracked field
@@ -6861,25 +6869,48 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
     CORINFO_CLASS_HANDLE    SIMDVectorHandle;
 
     // Get the handle for a SIMD type.
-    // For the purposes of type handles, we treat all Vector<T> as Vector<float> in the JIT,
-    // as the actual instantiation type doesn't impact this code (that is always captured,
-    // where semantically meaningful, in the "baseType" of SIMD nodes or lclVars.
-    CORINFO_CLASS_HANDLE    getStructHandleForSIMDType(var_types type)
+    CORINFO_CLASS_HANDLE    gtGetStructHandleForSIMD(var_types simdType, var_types simdBaseType)
     {
-        noway_assert(varTypeIsSIMD(type));
-        CORINFO_CLASS_HANDLE structHnd;
-        switch (type)
+        if (simdBaseType == TYP_FLOAT)
         {
-            case TYP_SIMD8:     structHnd = SIMDVector2Handle;                 break;
-            case TYP_SIMD12:    structHnd = SIMDVector3Handle;                 break;
-            case TYP_SIMD16:    structHnd = SIMDVector4Handle;                 break;
-#ifdef FEATURE_AVX_SUPPORT
-            case TYP_SIMD32:    structHnd = SIMDFloatHandle;                   break;
-#endif // FEATURE_AVX_SUPPORT
-            default:            unreached();
+            switch(simdType)
+            {
+            case TYP_SIMD8:
+                return SIMDVector2Handle;
+            case TYP_SIMD12:
+                return SIMDVector3Handle;
+            case TYP_SIMD16:
+                if ((getSIMDVectorType() == TYP_SIMD32) ||
+                    (SIMDVector4Handle != NO_CLASS_HANDLE))
+                {
+                    return SIMDVector4Handle;
+                }
+                break;
+            case TYP_SIMD32:
+                break;
+            default:
+                unreached();
+            }
         }
-        return structHnd;    
+        assert(simdType == getSIMDVectorType());
+        switch(simdBaseType)
+        {
+        case TYP_FLOAT:     return SIMDFloatHandle;
+        case TYP_DOUBLE:    return SIMDDoubleHandle;
+        case TYP_INT:       return SIMDIntHandle;
+        case TYP_CHAR:      return SIMDUShortHandle;
+        case TYP_USHORT:    return SIMDUShortHandle;
+        case TYP_UBYTE:     return SIMDUByteHandle;
+        case TYP_SHORT:     return SIMDShortHandle;
+        case TYP_BYTE:      return SIMDByteHandle;
+        case TYP_LONG:      return SIMDLongHandle;
+        case TYP_UINT:      return SIMDUIntHandle;
+        case TYP_ULONG:     return SIMDULongHandle;
+        default:            assert(!"Didn't find a class handle for simdType");
+        }
+        return NO_CLASS_HANDLE;
     }
+
     // SIMD Methods
     CORINFO_METHOD_HANDLE   SIMDVectorFloat_set_Item;
     CORINFO_METHOD_HANDLE   SIMDVectorFloat_get_Length;
@@ -7320,6 +7351,8 @@ public :
 #endif // !LEGACY_BACKEND
     bool                compRationalIRForm;
 
+    bool                compUsesThrowHelper;            // There is a call to a THOROW_HELPER for the compiled method.
+
     bool                compGeneratingProlog;
     bool                compGeneratingEpilog;
     bool                compNeedsGSSecurityCookie;      // There is an unsafe buffer (or localloc) on the stack.
@@ -7510,7 +7543,7 @@ public :
         bool                disAsm2;        // Display native code after it is generated using external disassembler
         bool                dspOrder;       // Display names of each of the methods that we ngen/jit
         bool                dspUnwind;      // Display the unwind info output
-        bool                dspDiffable;    // Makes the Jit Dump 'diff-able' (currently uses same COMPLUS_* flag as disDiffable)
+        bool                dspDiffable;    // Makes the Jit Dump 'diff-able' (currently uses same COMPlus_* flag as disDiffable)
         bool                compLargeBranches; // Force using large conditional branches
         bool                dspGCtbls;      // Display the GC tables
 #endif
@@ -7545,11 +7578,18 @@ public :
         bool               compTailCallLoopOpt;
 #endif
 
+#ifdef ARM_SOFTFP
+        static const bool compUseSoftFP = true;
+#else // !ARM_SOFTFP
+        static const bool compUseSoftFP = false;
+#endif
+
         GCPollType compGCPollType;
     }
         opts;
 
 #ifdef ALT_JIT
+    static bool s_pAltJitExcludeAssembliesListInitialized;
     static AssemblyNamesList2* s_pAltJitExcludeAssembliesList;
 #endif // ALT_JIT
 
@@ -7598,7 +7638,7 @@ public :
         /* hide/trivialize other areas */                                                       \
                                                                                                 \
         STRESS_MODE(REGS) STRESS_MODE(DBL_ALN) STRESS_MODE(LCL_FLDS) STRESS_MODE(UNROLL_LOOPS)  \
-        STRESS_MODE(MAKE_CSE) STRESS_MODE(INLINE) STRESS_MODE(CLONE_EXPR)                       \
+        STRESS_MODE(MAKE_CSE) STRESS_MODE(LEGACY_INLINE) STRESS_MODE(CLONE_EXPR)                \
         STRESS_MODE(USE_FCOMI) STRESS_MODE(USE_CMOV) STRESS_MODE(FOLD)                          \
         STRESS_MODE(BB_PROFILE) STRESS_MODE(OPT_BOOLS_GC) STRESS_MODE(REMORPH_TREES)            \
         STRESS_MODE(64RSLT_MUL) STRESS_MODE(DO_WHILE_LOOPS) STRESS_MODE(MIN_OPTS)               \
@@ -7609,6 +7649,7 @@ public :
         STRESS_MODE(UNSAFE_BUFFER_CHECKS)                                                       \
         STRESS_MODE(NULL_OBJECT_CHECK)                                                          \
         STRESS_MODE(PINVOKE_RESTORE_ESP)                                                        \
+        STRESS_MODE(RANDOM_INLINE)                                                              \
                                                                                                 \
         STRESS_MODE(GENERIC_VARN) STRESS_MODE(COUNT_VARN)                                       \
                                                                                                 \
@@ -7639,11 +7680,24 @@ public :
     bool                compStressCompile(compStressArea    stressArea,
                                           unsigned          weightPercentage);
 
+#ifdef DEBUG
+
+    bool                compInlineStress()
+    {
+        return compStressCompile(STRESS_LEGACY_INLINE, 50);
+    }
+
+    bool                compRandomInlineStress()
+    {
+        return compStressCompile(STRESS_RANDOM_INLINE, 50);
+    }
+
+#endif // DEBUG
+
     bool                compTailCallStress()
     {
 #ifdef DEBUG
-        static ConfigDWORD fTailcallStress;
-        return (fTailcallStress.val(CLRConfig::INTERNAL_TailcallStress) !=0
+        return (JitConfig.TailcallStress() !=0
                || compStressCompile(STRESS_TAILCALL, 5)
                );
 #else
@@ -7667,6 +7721,10 @@ public :
 #endif
     }
 
+#ifdef DEBUG
+    CLRRandom*      inlRNG;
+#endif
+
     //--------------------- Info about the procedure --------------------------
 
     struct Info
@@ -7686,10 +7744,12 @@ public :
         const char*     compFullName;
 #endif // defined(DEBUG) || defined(LATE_DISASM)
 
-#ifdef DEBUG
-        unsigned        compMethodHashPrivate;
-        unsigned        compMethodHash();
-#endif
+#if defined(DEBUG) || defined(INLINE_DATA)
+        // Method hash is logcally const, but computed
+        // on first demand.
+        mutable unsigned compMethodHashPrivate;
+        unsigned         compMethodHash() const;
+#endif // defined(DEBUG) || defined(INLINE_DATA)
 
 #ifdef PSEUDORANDOM_NOP_INSERTION
         // things for pseudorandom nop insertion
@@ -7720,8 +7780,8 @@ public :
         bool            compPublishStubParam: 1;   // EAX captured in prolog will be available through an instrinsic
         bool            compRetBuffDefStack:  1;   // The ret buff argument definitely points into the stack.
 
-        var_types       compRetType;
-        var_types       compRetNativeType;
+        var_types       compRetType;                // Return type of the method as declared in IL
+        var_types       compRetNativeType;          // Normalized return type as per target arch ABI
         unsigned        compILargsCount;            // Number of arguments (incl. implicit but not hidden)
         unsigned        compArgsCount;              // Number of arguments (incl. implicit and     hidden)
         unsigned        compRetBuffArg;             // position of hidden return param var (0, 1) (BAD_VAR_NUM means not present);
@@ -7888,7 +7948,7 @@ public :
     // In case of Amd64 this doesn't include float regs saved on stack.
     unsigned            compCalleeRegsPushed;
 
-#if defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND)
+#if defined(_TARGET_XARCH_) && !FEATURE_STACK_FP_X87
     // Mask of callee saved float regs on stack.
     regMaskTP           compCalleeFPRegsSavedMask;
 #endif
@@ -7929,7 +7989,7 @@ public :
 #ifdef DEBUG
     // Components used by the compiler may write unit test suites, and
     // have them run within this method.  They will be run only once per process, and only
-    // in debug.  (Perhaps should be under the control of a COMPLUS flag.)
+    // in debug.  (Perhaps should be under the control of a COMPlus_ flag.)
     // These should fail by asserting.
     void                compDoComponentUnitTestsOnce();
 #endif // DEBUG
@@ -8090,7 +8150,7 @@ public :
     // Max value of scope count for which we would use linear search; for larger values we would use hashtable lookup.
     static const unsigned MAX_LINEAR_FIND_LCL_SCOPELIST = 32;
 
-    typedef SimplerHashTable<unsigned, SmallPrimitiveKeyFuncs<unsigned>, VarScopeMapInfo*, DefaultSimplerHashBehavior> VarNumToScopeDscMap;
+    typedef SimplerHashTable<unsigned, SmallPrimitiveKeyFuncs<unsigned>, VarScopeMapInfo*, JitSimplerHashBehavior> VarNumToScopeDscMap;
 
     // Map to keep variables' scope indexed by varNum containing it's scope dscs at the index.
     VarNumToScopeDscMap*  compVarScopeMap;
@@ -8319,10 +8379,6 @@ public:
     // be used to call a member function.
     BOOL            verTrackObjCtorInitState;
 
-    // Argument of ICorJitInfo::resolveToken. It is used to determine the handling
-    // of ICorJitInfo::resolveToken failure during verification.
-    CORINFO_RESOLVED_TOKEN * verResolveTokenInProgress;
-
     void            verInitBBEntryState(BasicBlock* block,
                                         EntryState* currentState);
 
@@ -8547,21 +8603,11 @@ public:
     static fgWalkPreFn      gsMarkPtrsAndAssignGroups;  // Shadow param analysis tree-walk
     static fgWalkPreFn      gsReplaceShadowParams;      // Shadow param replacement tree-walk
 
-#define ALWAYS_INLINE_SIZE               16         // Method with <= ALWAYS_INLINE_SIZE IL bytes will always be inlined.
-#define DEFAULT_MAX_INLINE_SIZE         100         // Method with >  DEFAULT_MAX_INLINE_SIZE IL bytes will never be inlined.
+#define DEFAULT_MAX_INLINE_SIZE         100         // Methods with >  DEFAULT_MAX_INLINE_SIZE IL bytes will never be inlined.
                                                     // This can be overwritten by setting complus_JITInlineSize env variable.
-#define IMPLEMENTATION_MAX_INLINE_SIZE  _UI16_MAX   // Maximum method size supported by this implementation 
+
+#define DEFAULT_MAX_INLINE_DEPTH         20         // Methods at more than this level deep will not be inlined
                                          
-#define NATIVE_SIZE_INVALID  (-10000)                
-
-    static bool             s_compInSamplingMode;
-    bool                    compIsMethodForLRSampling;  // Is this the method suitable as a sample for the linear regression?
-    int                     compNativeSizeEstimate;     // The estimated native size of this method.
-    InlineHints             compInlineeHints;           // Inlining hints from the inline candidate.
-
-#ifdef DEBUG   
-    CodeSeqSM               fgCodeSeqSm;                // The code sequence state machine used in the inliner.
-#endif    
 private:
 #ifdef FEATURE_JIT_METHOD_PERF
     JitTimer*                     pCompJitTimer;           // Timer data structure (by phases) for current compilation.
@@ -8572,18 +8618,21 @@ private:
 #endif
     inline    void                EndPhase(Phases phase);  // Indicate the end of the given phase.
 
-#ifdef FEATURE_CLRSQM
+#if defined(DEBUG) || defined(INLINE_DATA) || defined(FEATURE_CLRSQM)
     // These variables are associated with maintaining SQM data about compile time.
     unsigned __int64             m_compCyclesAtEndOfInlining;          // The thread-virtualized cycle count at the end of the inlining phase in the current compilation.
+    unsigned __int64             m_compCycles;                         // Net cycle count for current compilation
     DWORD                        m_compTickCountAtEndOfInlining;       // The result of GetTickCount() (# ms since some epoch marker) at the end of the inlining phase in the current compilation.
+#endif // defined(DEBUG) || defined(INLINE_DATA) || defined(FEATURE_CLRSQM)
 
     // Records the SQM-relevant (cycles and tick count).  Should be called after inlining is complete.
     // (We do this after inlining because this marks the last point at which the JIT is likely to cause
     // type-loading and class initialization).
-    void                    RecordSqmStateAtEndOfInlining();
+    void                    RecordStateAtEndOfInlining();
     // Assumes being called at the end of compilation.  Update the SQM state.
-    void                    RecordSqmStateAtEndOfCompilation();
+    void                    RecordStateAtEndOfCompilation();
 
+#ifdef FEATURE_CLRSQM
     // Does anything SQM related necessary at process shutdown time.
     static void             ProcessShutdownSQMWork(ICorStaticInfo* statInfo);
 #endif // FEATURE_CLRSQM
@@ -8632,7 +8681,7 @@ public:
         return compRoot->m_nodeTestData;
     }
 
-    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, int, DefaultSimplerHashBehavior> NodeToIntMap;
+    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, int, JitSimplerHashBehavior> NodeToIntMap;
     
     // Returns the set (i.e., the domain of the result map) of nodes that are keys in m_nodeTestData, and
     // currently occur in the AST graph.
@@ -8668,7 +8717,7 @@ public:
         return compRoot->m_fieldSeqStore;
     }
 
-    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, FieldSeqNode*, DefaultSimplerHashBehavior> NodeToFieldSeqMap;
+    typedef SimplerHashTable<GenTreePtr, PtrKeyFuncs<GenTree>, FieldSeqNode*, JitSimplerHashBehavior> NodeToFieldSeqMap;
 
     // Some nodes of "TYP_BYREF" or "TYP_I_IMPL" actually represent the address of a field within a struct, but since the offset of
     // the field is zero, there's no "GT_ADD" node.  We normally attach a field sequence to the constant that is
@@ -8701,7 +8750,7 @@ public:
     void fgAddFieldSeqForZeroOffset(GenTreePtr op1, FieldSeqNode* fieldSeq);
 
 
-    typedef SimplerHashTable<const GenTree*, PtrKeyFuncs<GenTree>, ArrayInfo, DefaultSimplerHashBehavior> NodeToArrayInfoMap;
+    typedef SimplerHashTable<const GenTree*, PtrKeyFuncs<GenTree>, ArrayInfo, JitSimplerHashBehavior> NodeToArrayInfoMap;
     NodeToArrayInfoMap* m_arrayInfoMap;
 
     NodeToArrayInfoMap* GetArrayInfoMap()
@@ -8761,11 +8810,20 @@ public:
 
     static HelperCallProperties s_helperCallProperties;
 
-#if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
+#ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
     static var_types GetTypeFromClassificationAndSizes(SystemVClassificationType classType, int size);
-    var_types getEightByteType(const SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR& structDesc, unsigned slotNum);
+    static var_types GetEightByteType(const SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR& structDesc, unsigned slotNum);
+    static void      GetStructTypeOffset(const SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR& structDesc,
+                                         var_types* type0,
+                                         var_types* type1,
+                                         unsigned __int8* offset0,
+                                         unsigned __int8* offset1);
     void fgMorphSystemVStructArgs(GenTreeCall* call, bool hasStructArgument);
 #endif // defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
+
+    void          fgMorphMultiregStructArgs(GenTreeCall* call);
+    GenTreePtr    fgMorphMultiregStructArg (GenTreePtr   arg, fgArgTabEntryPtr fgEntryPtr);
+
 }; // end of class Compiler
 
 // Inline methods of CompAllocator.
@@ -8855,8 +8913,8 @@ extern  size_t     gcPtrMapNSize;
  */
 
 #if COUNT_BASIC_BLOCKS
-extern  histo       bbCntTable;
-extern  histo       bbOneBBSizeTable;
+extern  Histogram   bbCntTable;
+extern  Histogram   bbOneBBSizeTable;
 #endif
 
 
@@ -8883,8 +8941,8 @@ extern unsigned    constIterLoopCount;          // counts the # of loops with a 
 extern bool        hasMethodLoops;              // flag to keep track if we already counted a method as having loops
 extern unsigned    loopsThisMethod;             // counts the number of loops in the current method
 extern bool        loopOverflowThisMethod;      // True if we exceeded the max # of loops in the method.
-extern histo       loopCountTable;              // Histogram of loop counts
-extern histo       loopExitCountTable;          // Histogram of loop exit counts
+extern Histogram   loopCountTable;              // Histogram of loop counts
+extern Histogram   loopExitCountTable;          // Histogram of loop exit counts
 
 #endif // COUNT_LOOPS
 
@@ -8922,8 +8980,8 @@ struct NodeSizeStats
 };
 extern NodeSizeStats genNodeSizeStats;          // Total node size stats
 extern NodeSizeStats genNodeSizeStatsPerFunc;   // Per-function node size stats
-extern histo genTreeNcntHist;
-extern histo genTreeNsizHist;
+extern Histogram genTreeNcntHist;
+extern Histogram genTreeNsizHist;
 #endif // MEASURE_NODE_SIZE
 
 /*****************************************************************************

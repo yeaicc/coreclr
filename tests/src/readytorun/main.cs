@@ -40,6 +40,15 @@ class InheritingFromGrowingBase : GrowingBase
     public int x;
 }
 
+
+static class OpenClosedDelegateExtension
+{
+    public static string OpenClosedDelegateTarget(this string x, string foo)
+    {
+        return x + ", " + foo;
+    }
+}
+
 class Program
 {
     static void TestVirtualMethodCalls()
@@ -249,6 +258,47 @@ class Program
         new MyClass().GetType().ToString();
     }
 
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static void TestStaticBaseCSE()
+    {
+        // There should be just one call to CORINFO_HELP_READYTORUN_STATIC_BASE
+        // in the generated code.
+        s++;
+        s++;
+        Assert.AreEqual(s, 2);
+        s = 0;
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static void TestIsInstCSE()
+    {
+        // There should be just one call to CORINFO_HELP_READYTORUN_ISINSTANCEOF
+        // in the generated code.
+        object o1 = (s < 1) ? (object)"foo" : (object)1;
+        Assert.AreEqual(o1 is string, true);
+        Assert.AreEqual(o1 is string, true);
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static void TestCastClassCSE()
+    {
+        // There should be just one call to CORINFO_HELP_READYTORUN_CHKCAST
+        // in the generated code.
+        object o1 = (s < 1) ? (object)"foo" : (object)1;
+        string str1 = (string)o1;
+        string str2 = (string)o1;
+        Assert.AreEqual(str1, str2);
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static void TestRangeCheckElimination()
+    {
+        // Range checks for array accesses should be eliminated by the compiler.
+        int[] array = new int[5];
+        array[2] = 2;
+        Assert.AreEqual(array[2], 2);
+    }
+
 #if CORECLR
     class MyLoadContext : AssemblyLoadContext
     {
@@ -294,6 +344,18 @@ class Program
         Assert.AreEqual(o.ChildByte, (byte)67);
     }
 
+    static void TestOpenClosedDelegate()
+    {
+        // This test is verifying the the fixups for open vs. closed delegate created against the same target
+        // method are encoded correctly.
+
+        Func<string, string, object> idOpen = OpenClosedDelegateExtension.OpenClosedDelegateTarget;
+        Assert.AreEqual(idOpen("World", "foo"), "World, foo");
+
+        Func<string, object> idClosed = "World".OpenClosedDelegateTarget;
+        Assert.AreEqual(idClosed("hey"), "World, hey");
+    }
+
     static void RunAllTests()
     {
         TestVirtualMethodCalls();
@@ -331,6 +393,16 @@ class Program
 #endif
 
         TestFieldLayoutNGenMixAndMatch();
+
+        TestStaticBaseCSE();
+
+        TestIsInstCSE();
+
+        TestCastClassCSE();
+
+        TestRangeCheckElimination();
+
+        TestOpenClosedDelegate();
     }
 
     static int Main()
@@ -353,4 +425,6 @@ class Program
     }
 
     static bool LLILCJitEnabled;
+
+    static int s;
 }

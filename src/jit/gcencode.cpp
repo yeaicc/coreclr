@@ -1171,7 +1171,7 @@ size_t              GCInfo::gcInfoBlockHdrSave(BYTE*      dest,
     header->gsCookieOffset = INVALID_GS_COOKIE_OFFSET;
     if (compiler->getNeedsGSSecurityCookie())
     {
-        _ASSERTE(compiler->lvaGSSecurityCookie != BAD_VAR_NUM);
+        assert(compiler->lvaGSSecurityCookie != BAD_VAR_NUM);
         int stkOffs = compiler->lvaTable[compiler->lvaGSSecurityCookie].lvStkOffs;
         header->gsCookieOffset = compiler->isFramePointerUsed() ? -stkOffs : stkOffs;
         assert(header->gsCookieOffset != INVALID_GS_COOKIE_OFFSET);
@@ -3282,8 +3282,8 @@ void                GCInfo::gcFindPtrsInFrame(const void* infoBlock,
 #include "simplerhash.h"
 
 // Do explicit instantiation.
-template class SimplerHashTable<RegSlotIdKey, RegSlotIdKey, GcSlotId, DefaultSimplerHashBehavior>;
-template class SimplerHashTable<StackSlotIdKey, StackSlotIdKey, GcSlotId, DefaultSimplerHashBehavior>;
+template class SimplerHashTable<RegSlotIdKey, RegSlotIdKey, GcSlotId, JitSimplerHashBehavior>;
+template class SimplerHashTable<StackSlotIdKey, StackSlotIdKey, GcSlotId, JitSimplerHashBehavior>;
 
 #ifdef DEBUG
 
@@ -3325,13 +3325,12 @@ class GcInfoEncoderWithLogging
 {
     GcInfoEncoder* m_gcInfoEncoder;
     bool m_doLogging;
-    static ConfigDWORD s_fJitGCInfoLogging;
     
 public:
 
     GcInfoEncoderWithLogging(GcInfoEncoder* gcInfoEncoder, bool verbose) : 
       m_gcInfoEncoder(gcInfoEncoder), 
-      m_doLogging(verbose || s_fJitGCInfoLogging.val(CLRConfig::INTERNAL_JitGCInfoLogging) != 0) 
+      m_doLogging(verbose || JitConfig.JitGCInfoLogging() != 0) 
     {}
 
     GcSlotId GetStackSlotId( INT32 spOffset, GcSlotFlags flags, GcStackSlotBase spBase = GC_CALLER_SP_REL )
@@ -3483,8 +3482,6 @@ public:
     }
 
 };
-
-ConfigDWORD GcInfoEncoderWithLogging::s_fJitGCInfoLogging;
 
 #define GCENCODER_WITH_LOGGING(withLog, realEncoder) \
     GcInfoEncoderWithLogging withLog ## Var(realEncoder, compiler->verbose || compiler->opts.dspGCtbls); \
@@ -4187,7 +4184,7 @@ void                GCInfo::gcInfoRecordGCRegStateChange(GcInfoEncoder* gcInfoEn
     while (regMask)
     {
         // Get hold of the next register bit.
-        unsigned tmpMask = genFindLowestReg(regMask); assert(tmpMask);
+        regMaskTP tmpMask = genFindLowestReg(regMask); assert(tmpMask);
 
         // Remember the new state of this register.
         if (pPtrRegs != NULL)

@@ -8,7 +8,7 @@ set(CORECONSOLE_SOURCES
     coreconsole.cpp 
 )
 
-add_executable(coreconsole
+_add_executable(coreconsole
     ${CORECONSOLE_SOURCES}
 )
 
@@ -30,4 +30,4 @@ add_dependencies(coreconsole
     coreclr
 )
 
-install (TARGETS coreconsole DESTINATION .)
+install_clr(coreconsole)

@@ -62,10 +62,6 @@ IXCLRDataProcess *g_clrData = NULL;
 ISOSDacInterface *g_sos = NULL;
 ICorDebugProcess *g_pCorDebugProcess = NULL;
 
-#ifdef FEATURE_PAL
-PFN_CLRDataCreateInstance g_pCLRDataCreateInstance = NULL;
-#endif // FEATURE_PAL
-
 #ifndef IfFailRet
 #define IfFailRet(EXPR) do { Status = (EXPR); if(FAILED(Status)) { return (Status); } } while (0)
 #endif
@@ -4156,13 +4152,15 @@ void ResetGlobals(void)
 
 HRESULT LoadClrDebugDll(void)
 {
+    HRESULT hr = S_OK;
 #ifdef FEATURE_PAL
-    if (g_pCLRDataCreateInstance == NULL)
+    static IXCLRDataProcess* s_clrDataProcess = NULL;
+    if (s_clrDataProcess == NULL)
     {
         int err = PAL_InitializeDLL();
         if(err != 0)
         {
-            return E_FAIL;
+            return CORDBG_E_UNSUPPORTED;
         }
         char dacModulePath[MAX_LONGPATH];
         strcpy_s(dacModulePath, _countof(dacModulePath), g_ExtServices->GetCoreClrDirectory());
@@ -4171,22 +4169,29 @@ HRESULT LoadClrDebugDll(void)
         HMODULE hdac = LoadLibraryA(dacModulePath);
         if (hdac == NULL)
         {
-            return E_FAIL;
+            return CORDBG_E_MISSING_DEBUGGER_EXPORTS;
         }
-        g_pCLRDataCreateInstance = (PFN_CLRDataCreateInstance)GetProcAddress(hdac, "CLRDataCreateInstance");
-        if (g_pCLRDataCreateInstance == NULL)
+        PFN_CLRDataCreateInstance pCLRDataCreateInstance = (PFN_CLRDataCreateInstance)GetProcAddress(hdac, "CLRDataCreateInstance");
+        if (pCLRDataCreateInstance == NULL)
         {
             FreeLibrary(hdac);
-            return E_FAIL;
+            return CORDBG_E_MISSING_DEBUGGER_EXPORTS;
         }
+        ICLRDataTarget *target = new DataTarget();
+        hr = pCLRDataCreateInstance(__uuidof(IXCLRDataProcess), target, (void**)&s_clrDataProcess);
+        if (FAILED(hr))
+        {
+            s_clrDataProcess = NULL;
+            return hr;
+        }
+        ULONG32 flags = 0;
+        s_clrDataProcess->GetOtherNotificationFlags(&flags);
+        flags |= (CLRDATA_NOTIFY_ON_MODULE_LOAD | CLRDATA_NOTIFY_ON_MODULE_UNLOAD | CLRDATA_NOTIFY_ON_EXCEPTION);
+        s_clrDataProcess->SetOtherNotificationFlags(flags);
     }
-    ICLRDataTarget *target = new DataTarget();
-    HRESULT hr = g_pCLRDataCreateInstance(__uuidof(IXCLRDataProcess), target, reinterpret_cast<void**>(&g_clrData));
-    if (FAILED(hr))
-    {
-        g_clrData = NULL;
-        return hr;
-    }
+    g_clrData = s_clrDataProcess;
+    g_clrData->AddRef();
+    g_clrData->Flush();
 #else
     WDBGEXTS_CLR_DATA_INTERFACE Query;
 
@@ -4198,13 +4203,12 @@ HRESULT LoadClrDebugDll(void)
 
     g_clrData = (IXCLRDataProcess*)Query.Iface;
 #endif
-
-    if (FAILED(g_clrData->QueryInterface(__uuidof(ISOSDacInterface), (void**)&g_sos)))
+    hr = g_clrData->QueryInterface(__uuidof(ISOSDacInterface), (void**)&g_sos);
+    if (FAILED(hr))
     {
         g_sos = NULL;
-        return E_FAIL;
+        return hr;
     }
-
     return S_OK;
 }
 
@@ -4544,6 +4548,8 @@ public:
             *pPlatform = CORDB_PLATFORM_POSIX_X86;
         else if(platformKind == IMAGE_FILE_MACHINE_AMD64)
             *pPlatform = CORDB_PLATFORM_POSIX_AMD64;
+        else if(platformKind == IMAGE_FILE_MACHINE_ARMNT)
+            *pPlatform = CORDB_PLATFORM_POSIX_ARM;
         else
             return E_FAIL;
 #else
@@ -4553,6 +4559,8 @@ public:
             *pPlatform = CORDB_PLATFORM_WINDOWS_AMD64;
         else if(platformKind == IMAGE_FILE_MACHINE_ARMNT)
             *pPlatform = CORDB_PLATFORM_WINDOWS_ARM;
+        else if(platformKind == IMAGE_FILE_MACHINE_ARM64)
+            *pPlatform = CORDB_PLATFORM_WINDOWS_ARM64;
         else
             return E_FAIL;        
 #endif        
@@ -4767,18 +4775,6 @@ HRESULT InitCorDebugInterface()
 
         // this is a very heavy handed way of reseting
         UninitCorDebugInterface();
-    }
-
-    // Ensure that CLR and DAC are already loaded
-    if ((hr = CheckEEDll()) != S_OK)
-    {
-        EENotLoadedMessage(hr);
-        return hr;
-    }
-    if ((hr = LoadClrDebugDll()) != S_OK)
-    {
-        DACMessage(hr);
-        return hr;
     }
 
     // SOS now has a statically linked version of the loader code that is normally found in mscoree/mscoreei.dll
@@ -5285,27 +5281,6 @@ void WhitespaceOut(int count)
         g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, FixedIndentString);
 }
 
-HRESULT 
-OutputVaList(
-    ULONG mask,
-    PCSTR format,
-    va_list args)
-{
-#ifdef FEATURE_PAL
-    char str[4096];
-
-    // Try and format our string into a fixed buffer first and see if it fits
-    int length = _vsnprintf(str, sizeof(str), format, args);
-    if (length > 0)
-    {
-        return g_ExtControl->Output(mask, "%s", str);
-    }
-    return E_FAIL;
-#else
-    return g_ExtControl->OutputVaList(mask, format, args);
-#endif // FEATURE_PAL
-}
-
 void DMLOut(PCSTR format, ...)
 {
     if (Output::IsOutputSuppressed())
@@ -5314,7 +5289,7 @@ void DMLOut(PCSTR format, ...)
     va_list args;
     va_start(args, format);
     ExtOutIndent();
-    
+
 #ifndef FEATURE_PAL
     if (IsDMLEnabled() && !Output::IsDMLExposed())
     {
@@ -5323,7 +5298,7 @@ void DMLOut(PCSTR format, ...)
     else
 #endif
     {
-        OutputVaList(DEBUG_OUTPUT_NORMAL, format, args);
+        g_ExtControl->OutputVaList(DEBUG_OUTPUT_NORMAL, format, args);
     }
 
     va_end(args);
@@ -5353,7 +5328,7 @@ void ExtOut(PCSTR Format, ...)
     
     va_start(Args, Format);
     ExtOutIndent();
-    OutputVaList(DEBUG_OUTPUT_NORMAL, Format, Args);
+    g_ExtControl->OutputVaList(DEBUG_OUTPUT_NORMAL, Format, Args);
     va_end(Args);
 }
 
@@ -5365,7 +5340,7 @@ void ExtWarn(PCSTR Format, ...)
     va_list Args;
     
     va_start(Args, Format);
-    OutputVaList(DEBUG_OUTPUT_WARNING, Format, Args);
+    g_ExtControl->OutputVaList(DEBUG_OUTPUT_WARNING, Format, Args);
     va_end(Args);
 }
 
@@ -5374,7 +5349,7 @@ void ExtErr(PCSTR Format, ...)
     va_list Args;
     
     va_start(Args, Format);
-    OutputVaList(DEBUG_OUTPUT_ERROR, Format, Args);
+    g_ExtControl->OutputVaList(DEBUG_OUTPUT_ERROR, Format, Args);
     va_end(Args);
 }
 
@@ -5385,10 +5360,10 @@ void ExtDbgOut(PCSTR Format, ...)
     if (Output::g_bDbgOutput)
     {
         va_list Args;
-    
+
         va_start(Args, Format);
         ExtOutIndent();
-        OutputVaList(DEBUG_OUTPUT_NORMAL, Format, Args);
+        g_ExtControl->OutputVaList(DEBUG_OUTPUT_NORMAL, Format, Args);
         va_end(Args);
     }
 #endif

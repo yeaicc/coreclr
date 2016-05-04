@@ -345,14 +345,9 @@ void ZapImage::OutputCode(CodeType codeType)
 
             ZapNode * pUnwindData = pUnwindInfo->GetUnwindData();
 
-#if defined(BINDER) && defined(TARGET_THUMB2)
-            if (pUnwindData != NULL)
-#endif
+            if (!pUnwindData->IsPlaced())
             {
-                if (!pUnwindData->IsPlaced())
-                {
-                    pUnwindDataSection->Place(pUnwindData);
-                }
+                pUnwindDataSection->Place(pUnwindData);
             }
         }
 
@@ -468,10 +463,8 @@ void ZapImage::OutputCodeInfo(CodeType codeType)
         }
 #endif // REDHAWK
 
-#ifndef BINDER // in the binder, shift this to an earlier phase because of phase ordering problem (FlushPrecodesAndMethodDescs needs this)
         if (pMethod->m_pFixupList != NULL && !IsReadyToRunCompilation())
             pMethod->m_pFixupInfo = m_pImportTable->PlaceFixups(pMethod->m_pFixupList);
-#endif
     }
 
     EndRegion(regionKind);
@@ -1170,32 +1163,18 @@ void ZapCodeMethodDescs::Save(ZapWriter * pZapWriter)
 
 void ZapMethodEntryPoint::Resolve(ZapImage * pImage)
 {
-#ifdef CLR_STANDALONE_BINDER
-    if (m_pEntryPoint != NULL)
+    DWORD rvaValue = pImage->m_pPreloader->MapMethodEntryPoint(GetHandle());
+#ifdef _DEBUG
+    if (rvaValue == NULL)
     {
-        if (m_pEntryPoint->GetType() == ZapNodeType_InnerPtr)
-        {
-            ZapInnerPtr *pInnerPtr = (ZapInnerPtr *)m_pEntryPoint;
-            pInnerPtr->Resolve();
-        }
-        SetRVA(m_pEntryPoint->GetRVA());
+        mdMethodDef token;
+        pImage->GetCompileInfo()->GetMethodDef(GetHandle(), &token);
+        pImage->Error(token, S_OK, W("MapMethodEntryPoint failed"));
     }
     else
 #endif
     {
-        DWORD rvaValue = pImage->m_pPreloader->MapMethodEntryPoint(GetHandle());
-#ifdef _DEBUG
-        if (rvaValue == NULL)
-        {
-            mdMethodDef token;
-            pImage->GetCompileInfo()->GetMethodDef(GetHandle(), &token);
-            pImage->Error(token, S_OK, W("MapMethodEntryPoint failed"));
-        }
-        else
-#endif
-        {
-            SetRVA(rvaValue);
-        }
+        SetRVA(rvaValue);
     }
 }
 
@@ -1239,11 +1218,9 @@ ZapNode * ZapMethodEntryPointTable::CanDirectCall(ZapMethodEntryPoint * pMethodE
     if (m_pImage->canIntraModuleDirectCall(caller, callee, &reason, pMethodEntryPoint->GetAccessFlags()))
     {
         ZapNode * pCode = m_pImage->GetCompiledMethod(callee)->GetCode();
-#ifndef BINDER
 #ifdef _TARGET_ARM_
         pCode = m_pImage->GetInnerPtr(pCode, THUMB_CODE);
 #endif // _TARGET_ARM_
-#endif // BINDER
         return pCode;
     }
     else
@@ -1286,10 +1263,10 @@ ZapGCInfo * ZapGCInfo::NewGCInfo(ZapWriter * pWriter, PVOID pGCInfo, SIZE_T cbGC
     memcpy(pZapGCInfo->GetGCInfo(), pGCInfo, cbGCInfo);
     memcpy(pZapGCInfo->GetUnwindInfo(), pUnwindInfo, cbUnwindInfo);
 
-#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_)
+#if !defined(_TARGET_X86_)
     // Make sure the personality routine thunk is created
     pZapGCInfo->GetPersonalityRoutine(ZapImage::GetImage(pWriter));
-#endif // defined(_TARGET_AMD64_) || defined(_TARGET_ARM_)
+#endif // !defined(_TARGET_X86_)
     return pZapGCInfo;
 }
 #else
@@ -1314,9 +1291,9 @@ ZapGCInfo * ZapGCInfoTable::GetGCInfo(PVOID pBlob, SIZE_T cbBlob)
 
 void ZapUnwindInfo::Save(ZapWriter * pZapWriter)
 {
-    RUNTIME_FUNCTION runtimeFunction;
+    T_RUNTIME_FUNCTION runtimeFunction;
 
-#if defined(_TARGET_ARM_)
+#if defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
     RUNTIME_FUNCTION__SetBeginAddress(&runtimeFunction, GetStartAddress());
     runtimeFunction.UnwindData = m_pUnwindData->GetRVA();
 #elif defined(_TARGET_AMD64_)
@@ -1411,7 +1388,7 @@ void ZapUnwindData::Save(ZapWriter * pZapWriter)
 #endif //REDHAWK
 }
 
-#elif defined(_TARGET_ARM_)
+#elif defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
 
 UINT ZapUnwindData::GetAlignment()
 {
@@ -1449,27 +1426,20 @@ void ZapUnwindData::Save(ZapWriter * pZapWriter)
         pZapWriter->WritePad(dwPad);
 
     ULONG personalityRoutine = GetPersonalityRoutine(pImage)->GetRVA();
-#ifdef BINDER
-    _ASSERTE((personalityRoutine & THUMB_CODE) == 0);
-    personalityRoutine |= THUMB_CODE;
-#endif
     pZapWriter->Write(&personalityRoutine, sizeof(personalityRoutine));
 }
 
 #else
-
 UINT ZapUnwindData::GetAlignment()
 {
     PORTABILITY_ASSERT("ZapUnwindData::GetAlignment");
     return sizeof(ULONG);
 }
-
 DWORD ZapUnwindData::GetSize()
 {
     PORTABILITY_ASSERT("ZapUnwindData::GetSize");
     return -1;
 }
-
 void ZapUnwindData::Save(ZapWriter * pZapWriter)
 {
     PORTABILITY_ASSERT("ZapUnwindData::Save");
@@ -1502,10 +1472,10 @@ ZapUnwindData * ZapUnwindData::NewUnwindData(ZapWriter * pWriter, PVOID pData, S
 
     memcpy((void*)(pZapUnwindData + 1), pData, cbSize);
 
-#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_)
+#if !defined(_TARGET_X86_)
     // Make sure the personality routine thunk is created
     pZapUnwindData->GetPersonalityRoutine(ZapImage::GetImage(pWriter));
-#endif // defined(_TARGET_AMD64_) || defined(_TARGET_ARM_)
+#endif // !defined(_TARGET_X86_)
 
     return pZapUnwindData;
 }
@@ -1648,22 +1618,6 @@ void ZapDebugInfoTable::LabelledEntry::Save(ZapWriter * pZapWriter)
 
     pZapWriter->Write(&entry, sizeof(entry));
 }
-
-#ifdef MDIL
-const MdilDebugInfoTable::DebugInfo *MdilDebugInfoTable::GetDebugInfo(COUNT_T offset, COUNT_T cbBlob, const SArray<BYTE> *pBuf)
-{
-    DebugInfo info(offset, cbBlob, pBuf);
-    DebugInfo *pNode = m_blobs.Lookup(&info);
-    if (pNode != NULL)
-    {
-        return pNode;
-    }
-
-    pNode = new (m_pImage->GetHeap()) DebugInfo(offset, cbBlob, pBuf);
-    m_blobs.Add(pNode);
-    return pNode;
-}
-#endif // MDIL
 
 //
 // ZapProfileData
@@ -1982,6 +1936,18 @@ DWORD ZapLazyHelperThunk::SaveWorker(ZapWriter * pZapWriter)
     if (pImage != NULL)
         pImage->WriteReloc(buffer, (int)(p - buffer), m_pTarget, 0, IMAGE_REL_BASED_THUMB_BRANCH24);
     p += 4;
+#elif defined(_TARGET_ARM64_)
+    // ldr x1, [PC+8]
+    *(DWORD *)(p) =0x58000041;
+    p += 4;
+    // b JIT_StrCns
+    *(DWORD *)(p) = 0x14000000;
+    if (pImage != NULL)
+        pImage->WriteReloc(buffer, (int)(p - buffer), m_pTarget, 0, IMAGE_REL_ARM64_BRANCH26);
+    p += 4;
+    if (pImage != NULL)
+        pImage->WriteReloc(buffer, (int)(p - buffer), m_pArg, 0, IMAGE_REL_BASED_PTR);
+    p += 8;
 #else
     PORTABILITY_ASSERT("ZapLazyHelperThunk::Save");
 #endif

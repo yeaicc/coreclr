@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
 // Note: Exception messages call ToString instead of Name to avoid MissingMetadataException when just outputting basic info
 
 using System;
@@ -15,6 +17,18 @@ namespace CoreFXTestLibrary
     /// </summary>
     public static class Assert
     {
+                    
+
+         public static void ErrorWriteLine(string message)
+         {       
+             throw new Exception(message);
+         }
+
+         public static void ErrorWriteLine(string message,Exception ex)
+         {       
+             throw new Exception(message,ex);
+         }
+         
         /// <summary>
         ///     Asserts that the given delegate throws an <see cref="ArgumentNullException"/> with the given parameter name.
         /// </summary>

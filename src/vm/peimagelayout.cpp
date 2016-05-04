@@ -93,6 +93,40 @@ PEImageLayout* PEImageLayout::Map(HANDLE hFile, PEImage* pOwner)
 }
 
 #ifdef FEATURE_PREJIT
+
+#ifdef FEATURE_PAL
+DWORD SectionCharacteristicsToPageProtection(UINT characteristics)
+{
+    _ASSERTE((characteristics & VAL32(IMAGE_SCN_MEM_READ)) != 0);
+    DWORD pageProtection;
+
+    if ((characteristics & VAL32(IMAGE_SCN_MEM_WRITE)) != 0)
+    {
+        if ((characteristics & VAL32(IMAGE_SCN_MEM_EXECUTE)) != 0)
+        {
+            pageProtection = PAGE_EXECUTE_READWRITE;
+        }
+        else
+        {
+            pageProtection = PAGE_READWRITE;
+        }
+    }
+    else
+    {
+        if ((characteristics & VAL32(IMAGE_SCN_MEM_EXECUTE)) != 0)
+        {
+            pageProtection = PAGE_EXECUTE_READ;
+        }
+        else
+        {
+            pageProtection = PAGE_READONLY;
+        }
+    }
+
+    return pageProtection;
+}
+#endif // FEATURE_PAL
+
 //To force base relocation on Vista (which uses ASLR), unmask IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
 //(0x40) for OptionalHeader.DllCharacteristics
 void PEImageLayout::ApplyBaseRelocations()
@@ -154,9 +188,21 @@ void PEImageLayout::ApplyBaseRelocations()
             // Unprotect the section if it is not writable
             if (((pSection->Characteristics & VAL32(IMAGE_SCN_MEM_WRITE)) == 0))
             {
+                DWORD dwNewProtection = PAGE_READWRITE;
+#ifdef FEATURE_PAL
+                if (((pSection->Characteristics & VAL32(IMAGE_SCN_MEM_EXECUTE)) != 0))
+                {
+                    // On SELinux, we cannot change protection that doesn't have execute access rights
+                    // to one that has it, so we need to set the protection to RWX instead of RW
+                    dwNewProtection = PAGE_EXECUTE_READWRITE;
+                }
+#endif // FEATURE_PAL
                 if (!ClrVirtualProtect(pWriteableRegion, cbWriteableRegion,
-                                       PAGE_READWRITE, &dwOldProtection))
+                                       dwNewProtection, &dwOldProtection))
                     ThrowLastError();
+#ifdef FEATURE_PAL
+                dwOldProtection = SectionCharacteristicsToPageProtection(pSection->Characteristics);
+#endif // FEATURE_PAL
             }
         }
 
@@ -693,30 +739,6 @@ StreamImageLayout::StreamImageLayout(IStream* pIStream,PEImage* pOwner)
     Init(m_FileView,(COUNT_T)cbRead);
 }
 #endif // FEATURE_FUSION
-
-#ifdef MDIL
-BOOL PEImageLayout::GetILSizeFromMDILCLRCtlData(DWORD* pdwActualILSize)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_NOTRIGGER;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    IMAGE_SECTION_HEADER* pMDILSection = FindSection(".mdil");
-    if (pMDILSection)
-    {
-        TADDR pMDILSectionStart = GetRvaData(VAL32(pMDILSection->VirtualAddress));
-        MDILHeader* mdilHeader = (MDILHeader*)pMDILSectionStart;
-        ClrCtlData* pClrCtlData = (ClrCtlData*)(pMDILSectionStart + mdilHeader->hdrSize);
-        *pdwActualILSize = pClrCtlData->ilImageSize;
-        return TRUE;
-    }
-    return FALSE;
-}
-#endif // MDIL
 
 #endif // !DACESS_COMPILE
 

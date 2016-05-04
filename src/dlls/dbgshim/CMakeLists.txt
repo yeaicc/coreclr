@@ -44,6 +44,7 @@ if(WIN32)
     list(APPEND DBGSHIM_LIBRARIES
         kernel32.lib
         ${STATIC_MT_CRT_LIB}
+        ${STATIC_MT_VCRT_LIB}
         uuid.lib
         user32.lib
         advapi32.lib
@@ -63,7 +64,4 @@ endif(WIN32)
 target_link_libraries(dbgshim ${DBGSHIM_LIBRARIES})
 
 # add the install targets
-install (TARGETS dbgshim DESTINATION .)
-if(WIN32)
-    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/dbgshim.pdb DESTINATION PDB)
-endif(WIN32)
+install_clr(dbgshim)

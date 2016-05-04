@@ -307,6 +307,7 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                         GenTreeLclVarCommon* lclVarPtr = tree->gtOp.gtOp1->AsLclVarCommon();
                         LclVarDsc* varDsc = &(compiler->lvaTable[lclVarPtr->gtLclNum]);
                         assert(varDsc->lvIsMultiRegArgOrRet);
+                        varDsc->lvDoNotEnregister = true;
 
                         // If this is a two eightbyte return, make the var
                         // contained by the return expression. The code gen will put
@@ -948,12 +949,12 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
                     // If the node is TYP_STRUCT and it is put on stack with
                     // putarg_stk operation, we consume and produce no registers.
-                    // In this case the embedded LdObj node should not produce 
+                    // In this case the embedded Obj node should not produce 
                     // registers too since it is contained.
                     // Note that if it is a SIMD type the argument will be in a register.
                     if (argNode->TypeGet() == TYP_STRUCT)
                     {
-                        assert(argNode->gtOp.gtOp1 != nullptr && argNode->gtOp.gtOp1->OperGet() == GT_LDOBJ);
+                        assert(argNode->gtOp.gtOp1 != nullptr && argNode->gtOp.gtOp1->OperGet() == GT_OBJ);
                         argNode->gtOp.gtOp1->gtLsraInfo.dstCount = 0;
                         argNode->gtLsraInfo.srcCount = 0;
                     }
@@ -1001,9 +1002,9 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                     {
                         originalSize = 2 * TARGET_POINTER_SIZE;
                     }
-                    else if (argNode->gtOper == GT_LDOBJ)
+                    else if (argNode->gtOper == GT_OBJ)
                     {
-                        noway_assert(!"GT_LDOBJ not supported for amd64");
+                        noway_assert(!"GT_OBJ not supported for amd64");
                     }
 #ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
                     else if (argNode->gtOper == GT_PUTARG_REG)
@@ -1200,8 +1201,8 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
         }
         break;
 #ifdef _TARGET_X86_
-        case GT_LDOBJ:
-            NYI_X86("GT_LDOBJ");
+        case GT_OBJ:
+            NYI_X86("GT_OBJ");
 #endif //_TARGET_X86_
 
         case GT_INITBLK:
@@ -1226,7 +1227,7 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
             GenTreePtr   src = tree->gtOp.gtOp1;
             GenTreePtr   srcAddr = nullptr;
 
-            if ((src->OperGet() == GT_LDOBJ) || (src->OperGet() == GT_IND))
+            if ((src->OperGet() == GT_OBJ) || (src->OperGet() == GT_IND))
             {
                 srcAddr = src->gtOp.gtOp1;
             }
@@ -1317,7 +1318,7 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                 putArgStkTree->gtPutArgStkKind = GenTreePutArgStk::PutArgStkKindRepInstr;
             }
             
-            // Always mark the LDOBJ and ADDR as contained trees by the putarg_stk. The codegen will deal with this tree.
+            // Always mark the OBJ and ADDR as contained trees by the putarg_stk. The codegen will deal with this tree.
             MakeSrcContained(putArgStkTree, src);
             
             // Balance up the inc above.
@@ -1341,19 +1342,11 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
             //     Size?                    Init Memory?         # temp regs
             //      0                            -                  0
             //      const and <=6 ptr words      -                  0
+            //      const and >6 ptr words       Yes                0
             //      const and <PageSize          No                 0
-            //      >6 ptr words                 Yes                hasPspSym ? 1 : 0
-            //      Non-const                    Yes                hasPspSym ? 1 : 0
+            //      const and >=PageSize         No                 2
+            //      Non-const                    Yes                0
             //      Non-const                    No                 2            
-            //
-            // PSPSym - If the method has PSPSym increment internalIntCount by 1.
-            //
-            bool hasPspSym;           
-#if FEATURE_EH_FUNCLETS
-            hasPspSym = (compiler->lvaPSPSym != BAD_VAR_NUM);
-#else
-            hasPspSym = false;
-#endif
 
             GenTreePtr size = tree->gtOp.gtOp1;
             if (size->IsCnsIntOrI())
@@ -1374,7 +1367,7 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                     sizeVal = AlignUp(sizeVal, STACK_ALIGN);
                     size_t cntStackAlignedWidthItems = (sizeVal >> STACK_ALIGN_SHIFT);
 
-                    // For small allocations upto 6 pointer sized words (i.e. 48 bytes of localloc)
+                    // For small allocations up to 6 pointer sized words (i.e. 48 bytes of localloc)
                     // we will generate 'push 0'.
                     if (cntStackAlignedWidthItems <= 6)
                     {
@@ -1396,10 +1389,7 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                     else
                     {
                         // >6 and need to zero initialize allocated stack space.
-                        // If the method has PSPSym, we need an internal register to hold regCnt
-                        // since targetReg allocated to GT_LCLHEAP node could be the same as one of
-                        // the the internal registers.
-                        info->internalIntCount = hasPspSym ? 1 : 0;
+                        info->internalIntCount = 0;
                     }
                 }
             }
@@ -1411,19 +1401,8 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                 }
                 else
                 {
-                    // If the method has PSPSym, we need an internal register to hold regCnt
-                    // since targetReg allocated to GT_LCLHEAP node could be the same as one of
-                    // the the internal registers.
-                    info->internalIntCount = hasPspSym ? 1 : 0;
+                    info->internalIntCount = 0;
                 }
-            }
-
-            // If the method has PSPSym, we would need an addtional register to relocate it on stack.
-            if (hasPspSym)
-            {      
-                // Exclude const size 0
-                if (!size->IsCnsIntOrI() || (size->gtIntCon.gtIconVal > 0))
-                    info->internalIntCount++;
             }
         }
         break;
@@ -1769,21 +1748,26 @@ Lowering::TreeNodeInfoInitBlockStore(GenTreeBlkOp* blkNode)
             // Always favor unrolling vs rep stos.
             if (size <= INITBLK_UNROLL_LIMIT && initVal->IsCnsIntOrI())
             {
-                // Replace the integer constant in initVal 
-                // to fill an 8-byte word with the fill value of the InitBlk
-                assert(initVal->gtIntCon.gtIconVal == (initVal->gtIntCon.gtIconVal & 0xFF));
+                // The fill value of an initblk is interpreted to hold a
+                // value of (unsigned int8) however a constant of any size
+                // may practically reside on the evaluation stack. So extract
+                // the lower byte out of the initVal constant and replicate
+                // it to a larger constant whose size is sufficient to support
+                // the largest width store of the desired inline expansion.
+
+                ssize_t fill = initVal->gtIntCon.gtIconVal & 0xFF;
 #ifdef _TARGET_AMD64_
                 if (size < REGSIZE_BYTES)
                 {
-                    initVal->gtIntCon.gtIconVal = 0x01010101 * initVal->gtIntCon.gtIconVal;
+                    initVal->gtIntCon.gtIconVal = 0x01010101 * fill;
                 }
                 else
                 {
-                    initVal->gtIntCon.gtIconVal = 0x0101010101010101LL * initVal->gtIntCon.gtIconVal;
+                    initVal->gtIntCon.gtIconVal = 0x0101010101010101LL * fill;
                     initVal->gtType = TYP_LONG;
                 }
 #else // !_TARGET_AMD64_
-                initVal->gtIntCon.gtIconVal = 0x01010101 * initVal->gtIntCon.gtIconVal;
+                initVal->gtIntCon.gtIconVal = 0x01010101 * fill;
 #endif // !_TARGET_AMD64_
 
                 MakeSrcContained(blkNode, blockSize);
@@ -3091,7 +3075,7 @@ bool Lowering::IsBinOpInRMWStoreInd(GenTreePtr tree)
  // to be correct and functional.
  //     IndirsAreEquivalent()
  //     NodesAreEquivalentLeaves()
- //     Codegen of GT_STOREIND and genCodeForShift()
+ //     Codegen of GT_STOREIND and genCodeForShiftRMW()
  //     emitInsRMW()
  //     
  //  TODO-CQ: Enable support for more complex indirections (if needed) or use the value numbering
@@ -3189,21 +3173,13 @@ bool Lowering::IsRMWMemOpRootedAtStoreInd(GenTreePtr tree, GenTreePtr *outIndirC
             oper != GT_AND &&
             oper != GT_OR  &&
             oper != GT_XOR &&
-            oper != GT_LSH &&
-            oper != GT_RSH &&
-            oper != GT_RSZ &&
-            oper != GT_ROL &&
-            oper != GT_ROR)
+            !GenTree::OperIsShiftOrRotate(oper))
         {
             storeInd->SetRMWStatus(STOREIND_RMW_UNSUPPORTED_OPER);
             return false;
         }
 
-        if ((oper == GT_LSH ||
-            oper == GT_RSH ||
-            oper == GT_RSZ ||
-            oper == GT_ROL ||
-            oper == GT_ROR) &&
+        if (GenTree::OperIsShiftOrRotate(oper) &&
             varTypeIsSmall(storeInd))
         {
             // In ldind, Integer values smaller than 4 bytes, a boolean, or a character converted to 4 bytes

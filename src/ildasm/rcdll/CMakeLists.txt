@@ -18,10 +18,8 @@ add_library_clr(ildasmrc
 )
 
 target_link_libraries(ildasmrc
-     msvcrt
+	${STATIC_MT_CRT_LIB}
+	${STATIC_MT_VCRT_LIB}
 )
 
-# We will generate PDB only for the debug configuration
-install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/ildasmrc.pdb DESTINATION PDB)
-
-install (TARGETS ildasmrc DESTINATION .)
+install_clr (ildasmrc)

@@ -143,11 +143,6 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
             break;
 
         case GT_STORE_LCL_FLD:
-            info->srcCount = 1;
-            info->dstCount = 0;
-            LowerStoreLoc(tree->AsLclVarCommon());
-            break;
-
         case GT_STORE_LCL_VAR:
             info->srcCount = 1;
             info->dstCount = 0;
@@ -347,15 +342,9 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
             break;
    
         case GT_MUL:
-            if ((tree->gtFlags & GTF_UNSIGNED) != 0)
+            if (tree->gtOverflow())
             {
-                // unsigned mul should only need one register
-                info->internalIntCount = 1;
-            }
-            else if (tree->gtOverflow())
-            {
-                // Need a register different from target reg to check
-                // for signed overflow.
+                // Need a register different from target reg to check for overflow.
                 info->internalIntCount = 2;
             }
             __fallthrough;
@@ -590,97 +579,107 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                     if (curArgTabEntry->regNum == REG_STK)
                     {
                         // late arg that is not passed in a register
-                        DISPNODE(argNode);
                         assert(argNode->gtOper == GT_PUTARG_STK);
-                        argNode->gtLsraInfo.srcCount = 1;
-                        argNode->gtLsraInfo.dstCount = 0;
+
+                        TreeNodeInfoInitPutArgStk(argNode, curArgTabEntry);
                         continue;
                     }
 
-                    var_types argType = argNode->TypeGet();
-
-                    callHasFloatRegArgs |= varTypeIsFloating(argType);
+                    var_types argType    = argNode->TypeGet();
+                    bool      argIsFloat = varTypeIsFloating(argType);
+                    callHasFloatRegArgs |= argIsFloat;
 
                     regNumber argReg = curArgTabEntry->regNum;
-                    short regCount = 1;
-                    // Default case is that we consume one source; modify this later (e.g. for
-                    // promoted structs)
-                    info->srcCount++;
+                    // We will setup argMask to the set of all registers that compose this argument
+                    regMaskTP argMask = 0;
 
-                    regMaskTP argMask = genRegMask(argReg);
                     argNode = argNode->gtEffectiveVal();
-                    
-                    if (argNode->TypeGet() == TYP_STRUCT)
+
+                    // A GT_LIST has a TYP_VOID, but is used to represent a multireg struct
+                    if (varTypeIsStruct(argNode) || (argNode->gtOper == GT_LIST))
                     {
                         GenTreePtr actualArgNode = argNode;
-                        if (actualArgNode->gtOper == GT_PUTARG_REG)
-                        {
-                            actualArgNode = actualArgNode->gtOp.gtOp1;
-                        }
                         unsigned originalSize = 0;
-                        bool isPromoted = false;
-                        LclVarDsc* varDsc = nullptr;
-                        if (actualArgNode->gtOper == GT_LCL_VAR)
+
+                        if (argNode->gtOper == GT_LIST)
                         {
-                            varDsc = compiler->lvaTable + actualArgNode->gtLclVarCommon.gtLclNum;
-                            originalSize = varDsc->lvSize();
-                        }
-                        else if (actualArgNode->gtOper == GT_MKREFANY)
-                        {
-                            originalSize = 2 * TARGET_POINTER_SIZE;
-                        }
-                        else if (actualArgNode->gtOper == GT_LDOBJ)
-                        {
-                            CORINFO_CLASS_HANDLE ldObjClass = actualArgNode->gtLdObj.gtClass;
-                            originalSize = compiler->info.compCompHnd->getClassSize(ldObjClass);
+                            // There could be up to 2-4 PUTARG_REGs in the list (3 or 4 can only occur for HFAs)
+                            GenTreeArgList* argListPtr = argNode->AsArgList();
+
+                            // Initailize the first register and the first regmask in our list
+                            regNumber targetReg  = argReg;
+                            regMaskTP targetMask = genRegMask(targetReg);
+                            unsigned iterationNum = 0;
+                            originalSize = 0;
+
+                            for (; argListPtr; argListPtr = argListPtr->Rest())
+                            {
+                                GenTreePtr putArgRegNode  = argListPtr->gtOp.gtOp1;
+                                assert(putArgRegNode->gtOper == GT_PUTARG_REG);
+                                GenTreePtr putArgChild = putArgRegNode->gtOp.gtOp1;
+
+                                originalSize += REGSIZE_BYTES;  // 8 bytes
+
+                                // Record the register requirements for the GT_PUTARG_REG node
+                                putArgRegNode->gtLsraInfo.setDstCandidates(l, targetMask);
+                                putArgRegNode->gtLsraInfo.setSrcCandidates(l, targetMask);
+
+                                // To avoid redundant moves, request that the argument child tree be 
+                                // computed in the register in which the argument is passed to the call.
+                                putArgChild->gtLsraInfo.setSrcCandidates(l, targetMask);
+
+                                // We consume one source for each item in this list
+                                info->srcCount++;
+                                iterationNum++;
+
+                                // Update targetReg and targetMask for the next putarg_reg (if any)
+                                targetReg  = REG_NEXT(targetReg);
+                                targetMask = genRegMask(targetReg);   
+                            }
                         }
                         else
                         {
-                            assert(!"Can't predict unsupported TYP_STRUCT arg kind");
+                            noway_assert(!"Unsupported TYP_STRUCT arg kind");
                         }
 
-                        unsigned slots = ((unsigned)(roundUp(originalSize, TARGET_POINTER_SIZE))) / REGSIZE_BYTES;
-                        regNumber reg = (regNumber)(argReg + 1);
-                        unsigned remainingSlots = slots - 1;
+                        unsigned  slots   = ((unsigned)(roundUp(originalSize, REGSIZE_BYTES))) / REGSIZE_BYTES;
+                        regNumber curReg  = argReg;
+                        regNumber lastReg = argIsFloat ? REG_ARG_FP_LAST : REG_ARG_LAST;
+                        unsigned remainingSlots = slots;
 
-                        if (remainingSlots > 1)
+                        while (remainingSlots > 0)
                         {
-                            NYI_ARM64("Lower - Struct typed arguments (size>16)");
-                        }
-
-                        while (remainingSlots > 0 && reg <= REG_ARG_LAST)
-                        {
-                            argMask |= genRegMask(reg);
-                            reg = (regNumber)(reg + 1);
+                            argMask |= genRegMask(curReg);
                             remainingSlots--;
-                            regCount++;
+
+                            if (curReg == lastReg)
+                                break;
+
+                            curReg = REG_NEXT(curReg);
                         }
 
-                        if (remainingSlots > 1)
-                        {
-                            NYI_ARM64("Lower - Struct typed arguments (Reg/Stk split)");
-                        }
-
-                        short internalIntCount = 0;
-                        if (remainingSlots > 0)
-                        {
-                            // This TYP_STRUCT argument is also passed in the outgoing argument area
-                            // We need a register to address the TYP_STRUCT
-                            // And we may need 2
-                            internalIntCount = 2;
-                        }
-                        argNode->gtLsraInfo.internalIntCount = internalIntCount;
+                        // Struct typed arguments must be fully passed in registers (Reg/Stk split not allowed)
+                        noway_assert(remainingSlots == 0);
+                        argNode->gtLsraInfo.internalIntCount = 0;
                     }
-
-                    argNode->gtLsraInfo.setDstCandidates(l, argMask);
-                    argNode->gtLsraInfo.setSrcCandidates(l, argMask);
-
-                    // To avoid redundant moves, have the argument child tree computed in the
-                    // register in which the argument is passed to the call.
-                    if (argNode->gtOper == GT_PUTARG_REG)
+                    else  // A scalar argument (not a struct)
                     {
-                        argNode->gtOp.gtOp1->gtLsraInfo.setSrcCandidates(l, l->getUseCandidates(argNode));
-                    }
+                        // We consume one source
+                        info->srcCount++;
+
+                        argMask |= genRegMask(argReg);
+                        argNode->gtLsraInfo.setDstCandidates(l, argMask);
+                        argNode->gtLsraInfo.setSrcCandidates(l, argMask);
+
+                        if (argNode->gtOper == GT_PUTARG_REG)
+                        {
+                            GenTreePtr putArgChild = argNode->gtOp.gtOp1;
+
+                            // To avoid redundant moves, request that the argument child tree be 
+                            // computed in the register in which the argument is passed to the call.
+                            putArgChild ->gtLsraInfo.setSrcCandidates(l, argMask);
+                        }
+                    }                    
                 }
 
                 // Now, count stack args
@@ -694,14 +693,29 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
                 while (args)
                 {
                     GenTreePtr arg = args->gtOp.gtOp1;
+
+                    // Skip arguments that have been moved to the Late Arg list
                     if (!(args->gtFlags & GTF_LATE_ARG))
-                    {                    
-                        TreeNodeInfo* argInfo = &(arg->gtLsraInfo);
-                        if (argInfo->dstCount != 0)
+                    {
+                        if (arg->gtOper == GT_PUTARG_STK)
                         {
-                            argInfo->isLocalDefUse = true;
+                            fgArgTabEntryPtr curArgTabEntry = compiler->gtArgEntryByNode(tree, arg);
+                            assert(curArgTabEntry);
+
+                            assert(curArgTabEntry->regNum == REG_STK);
+
+                            TreeNodeInfoInitPutArgStk(arg, curArgTabEntry);
                         }
-                        argInfo->dstCount = 0;
+                        else
+                        {
+                            TreeNodeInfo* argInfo = &(arg->gtLsraInfo);
+                            if (argInfo->dstCount != 0)
+                            {
+                                argInfo->isLocalDefUse = true;
+                            }
+
+                            argInfo->dstCount = 0;
+                        }
                     }
                     args = args->gtOp.gtOp2;
                 }
@@ -1003,6 +1017,73 @@ void Lowering::TreeNodeInfoInit(GenTree* stmt)
 }
 
 //------------------------------------------------------------------------
+//  TreeNodeInfoInitPutArgStk: Set the NodeInfo for a GT_PUTARG_STK node
+//
+// Arguments:
+//    argNode       - a GT_PUTARG_STK node
+//
+// Return Value:
+//    None.
+//
+// Notes:
+//    Set the child node(s) to be contained when we have a multireg arg
+//
+void Lowering::TreeNodeInfoInitPutArgStk(GenTree* argNode, fgArgTabEntryPtr info)
+{
+    assert(argNode->gtOper == GT_PUTARG_STK);
+
+    GenTreePtr putArgChild = argNode->gtOp.gtOp1;
+
+    // Initialize 'argNode' as not contained, as this is both the default case 
+    //  and how MakeSrcContained expects to find things setup.
+    //
+    argNode->gtLsraInfo.srcCount = 1;
+    argNode->gtLsraInfo.dstCount = 0;
+
+    // Do we have a TYP_STRUCT argument (or a GT_LIST), if so it must be a 16-byte pass-by-value struct
+    if ((putArgChild->TypeGet() == TYP_STRUCT) || (putArgChild->OperGet() == GT_LIST))
+    {
+        // We will use two store instructions that each write a register sized value
+
+        // We must have a multi-reg struct 
+        assert(info->numSlots >= 2);
+
+        if (putArgChild->OperGet() == GT_LIST)
+        {
+            // We consume all of the items in the GT_LIST
+            argNode->gtLsraInfo.srcCount = info->numSlots;
+        }
+        else
+        {
+            // We could use a ldp/stp sequence so we need two internal registers
+            argNode->gtLsraInfo.internalIntCount = 2;
+
+            if (putArgChild->OperGet() == GT_OBJ)
+            {
+                GenTreePtr objChild = putArgChild->gtOp.gtOp1;
+                if (objChild->OperGet() == GT_LCL_VAR_ADDR)
+                {
+                    // We will generate all of the code for the GT_PUTARG_STK, the GT_OBJ and the GT_LCL_VAR_ADDR
+                    // as one contained operation
+                    //                            
+                    MakeSrcContained(putArgChild, objChild);
+                }
+            }
+
+            // We will generate all of the code for the GT_PUTARG_STK and it's child node 
+            // as one contained operation
+            //                            
+            MakeSrcContained(argNode, putArgChild);
+        }
+    }
+    else
+    {
+        // We must not have a multi-reg struct 
+        assert(info->numSlots == 1);
+    }
+}
+
+//------------------------------------------------------------------------
 // TreeNodeInfoInitBlockStore: Set the NodeInfo for a block store.
 //
 // Arguments:
@@ -1044,16 +1125,21 @@ Lowering::TreeNodeInfoInitBlockStore(GenTreeBlkOp* blkNode)
             && initVal->IsCnsIntOrI())
         {
             ssize_t size = blockSize->gtIntCon.gtIconVal;
-            // Replace the integer constant in initVal 
-            // to fill an 8-byte word with the fill value of the InitBlk
-            assert(initVal->gtIntCon.gtIconVal == (initVal->gtIntCon.gtIconVal & 0xFF));
+            // The fill value of an initblk is interpreted to hold a
+            // value of (unsigned int8) however a constant of any size
+            // may practically reside on the evaluation stack. So extract
+            // the lower byte out of the initVal constant and replicate
+            // it to a larger constant whose size is sufficient to support
+            // the largest width store of the desired inline expansion.
+
+            ssize_t fill = initVal->gtIntCon.gtIconVal & 0xFF;
             if (size < REGSIZE_BYTES)
             {
-                initVal->gtIntCon.gtIconVal = 0x01010101 * initVal->gtIntCon.gtIconVal;
+                initVal->gtIntCon.gtIconVal = 0x01010101 * fill;
             }
             else
             {
-                initVal->gtIntCon.gtIconVal = 0x0101010101010101LL * initVal->gtIntCon.gtIconVal;
+                initVal->gtIntCon.gtIconVal = 0x0101010101010101LL * fill;
                 initVal->gtType = TYP_LONG;
             }
 

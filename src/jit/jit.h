@@ -90,6 +90,10 @@
   #error Unsupported or unset host architecture
 #endif
 
+#if defined(_HOST_AMD64_) || defined(_HOST_ARM64_)
+  #define _HOST_64BIT_
+#endif
+
 #if defined(_TARGET_X86_)
   #if defined(_TARGET_ARM_)
     #error Cannot define both _TARGET_X86_ and _TARGET_ARM_
@@ -175,6 +179,11 @@
 #error Unsupported or unset target architecture
 #endif
 
+// Include the AMD64 unwind codes when appropriate.
+#if defined(_TARGET_AMD64_)
+#include "win64unwind.h"
+#endif
+
 // Macros for defining strongly-typed enums. Use as follows:
 //
 // DECLARE_TYPED_ENUM(FooEnum,BYTE)
@@ -198,6 +207,18 @@
 #define __OPERATOR_NEW_INLINE 1    // indicate that I will define these
 #define __PLACEMENT_NEW_INLINE     // don't bring in the global placement new, it is easy to make a mistake
                                    // with our new(compiler*) pattern.
+
+#if COR_JIT_EE_VER > 460
+#define NO_CLRCONFIG    // Don't bring in the usual CLRConfig infrastructure, since the JIT uses the JIT/EE
+                        // interface to retrieve config values.
+
+// This is needed for contract.inl when FEATURE_STACK_PROBE is enabled.
+struct CLRConfig
+{
+    static struct ConfigKey { } EXTERNAL_NO_SO_NOT_MAINLINE;
+    static DWORD GetConfigValue(const ConfigKey& key) { return 0; }
+};
+#endif
 
 #include "utilcode.h"   // this defines assert as _ASSERTE
 #include "host.h"       // this redefines assert for the JIT to use assertAbort
@@ -419,7 +440,6 @@ typedef ptrdiff_t   ssize_t;
 #define DISPLAY_SIZES       0   // Display generated code, data, and GC information sizes.
 #define MEASURE_BLOCK_SIZE  0   // Collect stats about basic block and flowList node sizes and memory allocations.
 #define MEASURE_FATAL       0   // Count the number of calls to fatal(), including NYIs and noway_asserts.
-#define MEASURE_INLINING    0   // Collect various stats about inlining.
 #define MEASURE_NODE_SIZE   0   // Collect stats about GenTree node allocations.
 #define MEASURE_PTRTAB_SIZE 0   // Collect stats about GC pointer table allocations.
 #define EMITTER_STATS       0   // Collect stats on the emitter.
@@ -460,13 +480,13 @@ const   bool        dspGCtbls = true;
 
 #ifdef DEBUG
 void JitDump(const char* pcFormat, ...);
-#define JITDUMP(...) { if (GetTlsCompiler()->verbose) JitDump(__VA_ARGS__); }
+#define JITDUMP(...) { if (JitTls::GetCompiler()->verbose) JitDump(__VA_ARGS__); }
 #define JITLOG(x) { JitLogEE x; }
 #define JITLOG_THIS(t, x) { (t)->JitLogEE x; }
 #define DBEXEC(flg, expr) if (flg) {expr;}
-#define DISPNODE(t) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(t, nullptr, nullptr, true);
-#define DISPTREE(x) if (GetTlsCompiler()->verbose) GetTlsCompiler()->gtDispTree(x)
-#define VERBOSE GetTlsCompiler()->verbose
+#define DISPNODE(t) if (JitTls::GetCompiler()->verbose) JitTls::GetCompiler()->gtDispTree(t, nullptr, nullptr, true);
+#define DISPTREE(x) if (JitTls::GetCompiler()->verbose) JitTls::GetCompiler()->gtDispTree(x)
+#define VERBOSE JitTls::GetCompiler()->verbose
 #else // !DEBUG
 #define JITDUMP(...)
 #define JITLOG(x)
@@ -520,8 +540,7 @@ extern      JitOptions jitOpts;
 template<typename T>
 inline T UninitializedWord()
 {
-    static ConfigDWORD fDefaultFill;
-    __int64 word = 0x0101010101010101LL * (fDefaultFill.val(CLRConfig::INTERNAL_JitDefaultFill) & 0xFF);
+    __int64 word = 0x0101010101010101LL * (JitConfig.JitDefaultFill() & 0xFF);
     return (T)word;
 }
 
@@ -634,25 +653,22 @@ size_t              unsigned_abs(ssize_t x)
 
 #if CALL_ARG_STATS || COUNT_BASIC_BLOCKS || COUNT_LOOPS || EMITTER_STATS || MEASURE_NODE_SIZE
 
-class histo
+class Histogram
 {
 public:
-                    histo(IAllocator* alloc, unsigned* sizeTab, unsigned sizeCnt = 0);
-                   ~histo();
+    Histogram(IAllocator* allocator, const unsigned* const sizeTable);
+    ~Histogram();
 
-    void            histoClr();
-    void            histoDsp(FILE* fout);
-    void            histoRec(unsigned __int64 siz, unsigned cnt);
-    void            histoRec(unsigned siz, unsigned cnt);
+    void dump(FILE* output);
+    void record(unsigned size);
 
 private:
+    void ensureAllocated();
 
-    void            histoEnsureAllocated();
-
-    IAllocator*     histoAlloc;
-    unsigned        histoSizCnt;
-    unsigned*       histoSizTab;
-    unsigned*       histoCounts;
+    IAllocator* m_allocator;
+    unsigned m_sizeCount;
+    const unsigned* const m_sizeTable;
+    unsigned* m_counts;
 };
 
 #endif // CALL_ARG_STATS || COUNT_BASIC_BLOCKS || COUNT_LOOPS || EMITTER_STATS || MEASURE_NODE_SIZE
@@ -778,8 +794,11 @@ extern  int                     jitNativeCode(CORINFO_METHOD_HANDLE methodHnd,
                                               void *            inlineInfoPtr
                                               );
 
-const size_t DEAD_BEEF =    NOT_WIN64(0xDEADBEEF)
-                            WIN64_ONLY(0xDEADBEEFDEADBEEF);
+#ifdef _HOST_64BIT_
+const size_t INVALID_POINTER_VALUE = 0xFEEDFACEABADF00D;
+#else
+const size_t INVALID_POINTER_VALUE = 0xFEEDFACE;
+#endif
 
 // Constants for making sure size_t fit into smaller types.
 const size_t MAX_USHORT_SIZE_T = static_cast<size_t>(static_cast<unsigned short>(-1));
@@ -798,9 +817,26 @@ enum CompMemKind
     CMK_Count
 };
 
-// These methods are implemented by VM when jit & VM are merged in one dll (eg. coreclr.dll)
-Compiler* GetTlsCompiler();
-void SetTlsCompiler(Compiler* c);
+class Compiler;
+class JitTls
+{
+#ifdef DEBUG
+    Compiler* m_compiler;
+    LogEnv m_logEnv;
+    JitTls* m_next;
+#endif
+
+public:
+    JitTls(ICorJitInfo* jitInfo);
+    ~JitTls();
+
+#ifdef DEBUG
+    static LogEnv* GetLogEnv();
+#endif
+
+    static Compiler* GetCompiler();
+    static void SetCompiler(Compiler* compiler);
+};
 
 #if defined(DEBUG)
 
@@ -809,13 +845,13 @@ void SetTlsCompiler(Compiler* c);
 template<typename T>
 T dspPtr(T p)
 {
-    return (p == 0) ? 0 : (GetTlsCompiler()->opts.dspDiffable ? T(0xD1FFAB1E) : p);
+    return (p == 0) ? 0 : (JitTls::GetCompiler()->opts.dspDiffable ? T(0xD1FFAB1E) : p);
 }
 
 template<typename T>
 T dspOffset(T o)
 {
-    return (o == 0) ? 0 : (GetTlsCompiler()->opts.dspDiffable ? T(0xD1FFAB1E) : o);
+    return (o == 0) ? 0 : (JitTls::GetCompiler()->opts.dspDiffable ? T(0xD1FFAB1E) : o);
 }
 
 #else // !defined(DEBUG)

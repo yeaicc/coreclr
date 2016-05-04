@@ -401,7 +401,11 @@ HRESULT
 LLDBServices::GetExecutingProcessorType(
     PULONG type)
 {
+#ifdef DBG_TARGET_AMD64
     *type = IMAGE_FILE_MACHINE_AMD64;
+#elif DBG_TARGET_ARM
+    *type = IMAGE_FILE_MACHINE_ARMNT;
+#endif
     return S_OK;
 }
 
@@ -560,7 +564,7 @@ LLDBServices::Disassemble(
         hr = E_FAIL;
         goto exit;
     }
-    cch = snprintf(buffer, bufferSize, "%016lx ", offset);
+    cch = snprintf(buffer, bufferSize, "%016llx ", (unsigned long long)offset);
     buffer += cch;
     bufferSize -= cch;
 

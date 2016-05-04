@@ -65,41 +65,93 @@ template <typename T> int signum(T val)
         return 0;
 }
 
-#ifdef DEBUG
-/**************************************************************************/
+class JitSimplerHashBehavior
+{
+public:
+    static const unsigned s_growth_factor_numerator = 3;
+    static const unsigned s_growth_factor_denominator = 2;
 
-/* to be used as static variables - no constructors/destructors, assumes zero 
-   initialized memory */
+    static const unsigned s_density_factor_numerator = 3;
+    static const unsigned s_density_factor_denominator = 4;
+
+    static const unsigned s_minimum_allocation = 7;
+
+    inline static void DECLSPEC_NORETURN NoMemory()
+    {
+        NOMEM();
+    }
+};
+
+#if defined(DEBUG) || defined(INLINE_DATA)
+
+// ConfigMethodRange describes a set of methods, specified via their
+// hash codes. This can be used for binary search and/or specifying an
+// explicit method set.
+//
+// Note method hash codes are not necessarily unique. For instance
+// many IL stubs may have the same hash.
+//
+// If range string is null or just whitespace, range includes all
+// methods.
+//
+// Parses values as decimal numbers.
+//
+// Examples:
+//
+//  [string with just spaces] : all methods
+//                   12345678 : a single method
+//          12345678-23456789 : a range of methods
+// 99998888 12345678-23456789 : a range of methods plus a single method
 
 class ConfigMethodRange
 {
 
 public:
-    bool contains(class ICorJitInfo* info, CORINFO_METHOD_HANDLE method);
 
-    inline void ensureInit(const CLRConfig::ConfigStringInfo & info)
+    // Default capacity
+    enum
     {
-        // make sure that the memory was zero initialized
-        _ASSERTE(m_inited == 0 || m_inited == 1);
+        DEFAULT_CAPACITY = 50
+    };
+
+    // Does the range include this method's hash?
+    bool Contains(class ICorJitInfo* info, CORINFO_METHOD_HANDLE method);
+
+    // Ensure the range string has been parsed.
+    void EnsureInit(const wchar_t* rangeStr, unsigned capacity = DEFAULT_CAPACITY)
+    {
+        // Make sure that the memory was zero initialized
+        assert(m_inited == 0 || m_inited == 1);
 
         if (!m_inited)
         {
-            init(info);
-            _ASSERTE(m_inited == 1);
+            InitRanges(rangeStr, capacity);
+            assert(m_inited == 1);
         }
     }
 
-private:
-    void init(const CLRConfig::ConfigStringInfo & info);
-    void initRanges(__in_z LPCWSTR rangeStr);
+    // Error checks
+    bool Error()          const { return m_badChar != 0; }
+    size_t BadCharIndex() const { return m_badChar - 1; }
 
 private:
-    unsigned char m_lastRange;                   // count of low-high pairs
-    unsigned char m_inited;
-    unsigned m_ranges[100];                      // ranges of functions to Jit (low, high pairs).  
+
+    struct Range
+    {
+        unsigned m_low;
+        unsigned m_high;
+    };
+
+    void InitRanges(const wchar_t* rangeStr, unsigned capacity);
+
+    unsigned  m_entries;    // number of entries in the range array
+    unsigned  m_lastRange;  // count of low-high pairs
+    unsigned  m_inited;     // 1 if range string has been parsed
+    size_t    m_badChar;    // index + 1 of any bad character in range string
+    Range*    m_ranges;     // ranges of functions to include
 };
 
-#endif // DEBUG
+#endif // defined(DEBUG) || defined(INLINE_DATA)
 
 class Compiler;
 
@@ -416,7 +468,7 @@ class AssemblyNamesList2
 {
     struct AssemblyName
     {
-        LPUTF8          m_assemblyName;
+        char*           m_assemblyName;
         AssemblyName*   m_next;
     };
 
@@ -426,12 +478,12 @@ class AssemblyNamesList2
 public:
 
     // Take a Unicode string list of assembly names, parse it, and store it.
-    AssemblyNamesList2(__in LPWSTR list, __in IAllocator* alloc);
+    AssemblyNamesList2(const wchar_t* list, __in IAllocator* alloc);
 
     ~AssemblyNamesList2();
 
     // Return 'true' if 'assemblyName' (in UTF-8 format) is in the stored list of assembly names.
-    bool IsInList(LPCUTF8 assemblyName);
+    bool IsInList(const char* assemblyName);
 
     // Return 'true' if the assembly name list is empty.
     bool IsEmpty()
@@ -509,6 +561,21 @@ struct ListNode
         node->next = nullptr;
         return node;
     }
+};
+
+/*****************************************************************************
+* Floating point utility class 
+*/
+class FloatingPointUtils {
+public:
+
+    static double convertUInt64ToDouble(unsigned __int64 u64);
+
+    static float convertUInt64ToFloat(unsigned __int64 u64);
+
+    static unsigned __int64 convertDoubleToUInt64(double d);
+
+    static double round(double d);
 };
 
 #endif // _UTILS_H_

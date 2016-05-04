@@ -22,9 +22,7 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #if FEATURE_FP_REGALLOC
 Compiler::enumConfigRegisterFP Compiler::raConfigRegisterFP()
 {
-    static ConfigDWORD dwJitRegisterFP;
-
-    DWORD val = dwJitRegisterFP.val(CLRConfig::EXTERNAL_JitRegisterFP);
+    DWORD val = JitConfig.JitRegisterFP();
 
     return (enumConfigRegisterFP) (val & 0x3);
 }
@@ -63,8 +61,7 @@ DWORD Compiler::getCanDoubleAlign()
     if (compStressCompile(STRESS_DBL_ALN, 20))
         return MUST_DOUBLE_ALIGN;
 
-    static ConfigDWORD fJitDoubleAlign;
-    return fJitDoubleAlign.val_DontUse_(CLRConfig::INTERNAL_JitDoubleAlign, DEFAULT_DOUBLE_ALIGN);
+    return JitConfig.JitDoubleAlign();
 #else
     return DEFAULT_DOUBLE_ALIGN;
 #endif
@@ -598,7 +595,7 @@ void                Compiler::raSetupArgMasks(RegState *regState)
             continue;
 
         // only process args that apply to the current register file
-        if ((argDsc->IsFloatRegType() && !info.compIsVarArgs) != regState->rsIsFloat)
+        if ((argDsc->IsFloatRegType() && !info.compIsVarArgs && !opts.compUseSoftFP) != regState->rsIsFloat)
         {
             continue;
         }
@@ -679,6 +676,8 @@ regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *ar
 #ifdef _TARGET_ARM64_
     if ((argDsc->lvOtherArgReg != REG_STK) && (argDsc->lvOtherArgReg != REG_NA))
     {
+        assert(argDsc->lvIsMultiregStruct());
+
         regNumber secondArgReg = argDsc->lvOtherArgReg;
 
         noway_assert(regState->rsIsFloat == false);
@@ -692,7 +691,7 @@ regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *ar
 #ifdef _TARGET_ARM_
     if (argDsc->lvType == TYP_DOUBLE)
     {
-        if (info.compIsVarArgs)
+        if (info.compIsVarArgs || opts.compUseSoftFP)
         {
             assert((inArgReg == REG_R0) || (inArgReg == REG_R2));
             assert(!regState->rsIsFloat);
@@ -1244,7 +1243,7 @@ regMaskTP            Compiler::rpPredictRegPick(var_types    type,
                     }
                 }
 #endif
-                // See if COMPLUS_JitRegisterFP is restricting this FP register
+                // See if COMPlus_JitRegisterFP is restricting this FP register
                 //
                 if ((restrictMask & regBits) != regBits)
                     continue;
@@ -1648,6 +1647,230 @@ void Compiler::rpPredictRefAssign(unsigned lclNum)
 #endif // NOGC_WRITE_BARRIERS
 }
 
+/*****************************************************************************
+ *
+ * Predict the internal temp physical register usage for a block assignment tree,
+ * by setting tree->gtUsedRegs.
+ * Records the internal temp physical register usage for this tree.
+ * Returns a mask of interfering registers for this tree.
+ *
+ * Each of the switch labels in this function updates regMask and assigns tree->gtUsedRegs 
+ * to the set of scratch registers needed when evaluating the tree.  
+ * Generally tree->gtUsedRegs and the return value retMask are the same, except when the
+ * parameter "lockedRegs" conflicts with the computed tree->gtUsedRegs, in which case we
+ * predict additional internal temp physical registers to spill into.
+ *
+ *    tree       - is the child of a GT_IND node
+ *    predictReg - what type of register does the tree need
+ *    lockedRegs - are the registers which are currently held by a previously evaluated node.
+ *                 Don't modify lockedRegs as it is used at the end to compute a spill mask.
+ *    rsvdRegs   - registers which should not be allocated because they will
+ *                 be needed to evaluate a node in the future
+ *               - Also, if rsvdRegs has the RBM_LASTUSE bit set then
+ *                 the rpLastUseVars set should be saved and restored
+ *                 so that we don't add any new variables to rpLastUseVars.
+ */
+regMaskTP           Compiler::rpPredictBlkAsgRegUse(GenTreePtr    tree,
+                                                    rpPredictReg  predictReg,
+                                                    regMaskTP     lockedRegs,
+                                                    regMaskTP     rsvdRegs)
+{
+    regMaskTP       regMask         = RBM_NONE;
+    regMaskTP       interferingRegs = RBM_NONE;
+
+    bool           hasGCpointer   = false;
+    bool           dstIsOnStack   = false;
+    bool           useMemHelper   = false;  
+    bool           useBarriers    = false;
+
+    GenTreeBlkOp*  blkNode        = tree->AsBlkOp();
+    GenTreePtr     dstAddr        = blkNode->Dest();
+    GenTreePtr     op1            = blkNode->gtGetOp1();
+    GenTreePtr     srcAddrOrFill  = op1->gtGetOp2();
+    GenTreePtr     sizeNode       = blkNode->gtGetOp2();
+
+    size_t         blkSize        = 0;
+
+    hasGCpointer = ((tree->gtFlags & GTF_BLK_HASGCPTR) != 0);
+
+    bool isCopyBlk = tree->OperIsCopyBlkOp();
+    bool isCopyObj = (tree->OperGet() == GT_COPYOBJ);
+    bool isInitBlk = (tree->OperGet() == GT_INITBLK);
+
+    if (sizeNode->OperGet() == GT_CNS_INT)
+    {
+        if (sizeNode->IsIconHandle(GTF_ICON_CLASS_HDL))
+        {
+            if (isCopyObj)
+            {
+                dstIsOnStack = (dstAddr->gtOper == GT_ADDR && (dstAddr->gtFlags & GTF_ADDR_ONSTACK));
+            }
+
+            CORINFO_CLASS_HANDLE clsHnd = (CORINFO_CLASS_HANDLE) sizeNode->gtIntCon.gtIconVal;
+            blkSize = roundUp(info.compCompHnd->getClassSize(clsHnd), TARGET_POINTER_SIZE);
+        }
+        else  // gtIconVal contains amount to copy
+        {
+            blkSize = (unsigned) sizeNode->gtIntCon.gtIconVal;
+        }
+
+        if (isInitBlk)
+        {
+            if (srcAddrOrFill->OperGet() != GT_CNS_INT)
+            {
+                useMemHelper = true;  
+            }
+        }
+    }
+    else
+    {
+        useMemHelper = true;  
+    }
+            
+    if (hasGCpointer && !dstIsOnStack)
+    {
+        useBarriers = true;
+    }
+
+#ifdef _TARGET_ARM_
+    //
+    // On ARM For COPYBLK & INITBLK we have special treatment for constant lengths.
+    //
+    if (!useMemHelper && !useBarriers)
+    {
+        bool     useLoop        = false;
+        unsigned fullStoreCount = blkSize / TARGET_POINTER_SIZE;
+                
+        // A mask to use to force the predictor to choose low registers (to reduce code size)
+        regMaskTP avoidReg = (RBM_R12|RBM_LR);
+
+        // Allow the src and dst to be used in place, unless we use a loop, in which
+        // case we will need scratch registers as we will be writing to them.
+        rpPredictReg srcAndDstPredict = PREDICT_REG;
+
+        // Will we be using a loop to implement this INITBLK/COPYBLK?
+        if ((isCopyBlk && (fullStoreCount >= 8)) ||
+            (isInitBlk && (fullStoreCount >= 16))) 
+        {
+            useLoop = true;
+            avoidReg = RBM_NONE;
+            srcAndDstPredict = PREDICT_SCRATCH_REG;
+        }
+
+        if (op1->gtFlags & GTF_REVERSE_OPS)
+        {
+            regMask |= rpPredictTreeRegUse(srcAddrOrFill, srcAndDstPredict, lockedRegs, dstAddr->gtRsvdRegs | avoidReg | RBM_LASTUSE);
+            regMask |= rpPredictTreeRegUse(dstAddr, srcAndDstPredict, lockedRegs | regMask, avoidReg);
+        }
+        else
+        {
+            regMask |= rpPredictTreeRegUse(dstAddr, srcAndDstPredict, lockedRegs, srcAddrOrFill->gtRsvdRegs | avoidReg | RBM_LASTUSE); 
+            regMask |= rpPredictTreeRegUse(srcAddrOrFill, srcAndDstPredict, lockedRegs | regMask, avoidReg);
+        }
+
+        // We need at least one scratch register for a copyBlk
+        if (isCopyBlk)
+        {
+            // Pick a low register to reduce the code size
+            regMask |= rpPredictRegPick(TYP_INT, PREDICT_SCRATCH_REG, lockedRegs | regMask | avoidReg);
+        }
+
+        if (useLoop)
+        {
+            if (isCopyBlk)
+            {
+                // We need a second temp register for a copyBlk (our code gen is load two/store two)
+                // Pick another low register to reduce the code size
+                regMask |= rpPredictRegPick(TYP_INT, PREDICT_SCRATCH_REG, lockedRegs | regMask | avoidReg);
+            }
+
+            // We need a loop index register
+            regMask |= rpPredictRegPick(TYP_INT, PREDICT_SCRATCH_REG, lockedRegs | regMask);
+        }
+
+        tree->gtUsedRegs = dstAddr->gtUsedRegs |
+                           srcAddrOrFill->gtUsedRegs |
+                           (regMaskSmall)regMask;
+
+        return interferingRegs;
+    }
+#endif
+    // What order should the Dest, Val/Src, and Size be calculated
+    GenTreePtr      opsPtr [3];
+    regMaskTP       regsPtr[3];
+
+#if defined(_TARGET_XARCH_)
+    fgOrderBlockOps(tree,
+            RBM_EDI, (isInitBlk) ? RBM_EAX : RBM_ESI, RBM_ECX,
+            opsPtr, regsPtr);
+
+    // We're going to use these, might as well make them available now
+
+    codeGen->regSet.rsSetRegsModified(RBM_EDI | RBM_ECX);
+    if (isCopyBlk)
+        codeGen->regSet.rsSetRegsModified(RBM_ESI);
+
+#elif defined(_TARGET_ARM_)
+
+    if (useMemHelper)
+    {
+        // For all other cases that involve non-constants, we just call memcpy/memset
+        // JIT helpers
+        fgOrderBlockOps(tree, RBM_ARG_0, RBM_ARG_1, RBM_ARG_2, opsPtr, regsPtr);
+        interferingRegs |= RBM_CALLEE_TRASH;
+#ifdef DEBUG
+        if (verbose)
+            printf("Adding interference with RBM_CALLEE_TRASH for memcpy/memset\n"); 
+#endif
+    }
+    else // useBarriers
+    {
+        assert(useBarriers);
+        assert(isCopyBlk);
+
+        fgOrderBlockOps(tree, RBM_ARG_0, RBM_ARG_1, REG_TMP_1, opsPtr, regsPtr);
+
+        // For this case Codegen will call the CORINFO_HELP_ASSIGN_BYREF helper
+        interferingRegs |= RBM_CALLEE_TRASH_NOGC;
+#ifdef DEBUG
+        if (verbose)
+            printf("Adding interference with RBM_CALLEE_TRASH_NOGC for Byref WriteBarrier\n"); 
+#endif
+    }
+#else  // !_TARGET_X86_ && !_TARGET_ARM_
+#error "Non-ARM or x86 _TARGET_ in RegPredict for INITBLK/COPYBLK"
+#endif // !_TARGET_X86_ && !_TARGET_ARM_
+    regMask |= rpPredictTreeRegUse(opsPtr[0],
+                                   rpGetPredictForMask(regsPtr[0]),
+                                   lockedRegs, 
+                                   opsPtr[1]->gtRsvdRegs | opsPtr[2]->gtRsvdRegs | RBM_LASTUSE);
+    regMask |= regsPtr[0];
+    opsPtr[0]->gtUsedRegs |= regsPtr[0];
+    rpRecordRegIntf(regsPtr[0], compCurLife
+                    DEBUGARG("movsd dest"));
+
+    regMask |= rpPredictTreeRegUse(opsPtr[1],
+                                   rpGetPredictForMask(regsPtr[1]),
+                                   lockedRegs | regMask, 
+                                   opsPtr[2]->gtRsvdRegs | RBM_LASTUSE);
+    regMask |= regsPtr[1];
+    opsPtr[1]->gtUsedRegs |= regsPtr[1];
+    rpRecordRegIntf(regsPtr[1], compCurLife
+                    DEBUGARG("movsd src"));
+
+    regMask |= rpPredictTreeRegUse(opsPtr[2],
+                                   rpGetPredictForMask(regsPtr[2]),
+                                   lockedRegs | regMask, 
+                                   RBM_NONE);
+    regMask |= regsPtr[2];
+    opsPtr[2]->gtUsedRegs |= regsPtr[2];
+
+    tree->gtUsedRegs = opsPtr[0]->gtUsedRegs |
+                       opsPtr[1]->gtUsedRegs |
+                       opsPtr[2]->gtUsedRegs |
+                       (regMaskSmall)regMask;
+    return interferingRegs;
+}
 
 /*****************************************************************************
  *
@@ -4122,197 +4345,11 @@ HANDLE_SHIFT_COUNT:
         case GT_COPYOBJ:
         case GT_COPYBLK:
         case GT_INITBLK:
-        {
-            regMask = 0;
-
-            bool      hasGCpointer;    hasGCpointer   = false;
-            bool      dstIsOnStack;    dstIsOnStack   = false;
-            bool      useMemHelper;    useMemHelper   = false;  
-            bool      useBarriers;     useBarriers    = false; 
-
-            size_t    blkSize;         blkSize        = 0;
-
-            hasGCpointer = ((tree->gtFlags & GTF_BLK_HASGCPTR) != 0);
-
-            if (op2->OperGet() == GT_CNS_INT)
-            {
-                if (op2->IsIconHandle(GTF_ICON_CLASS_HDL))
-                {
-                    if (tree->OperGet() == GT_COPYOBJ)
-                    {
-                        GenTreePtr  dstObj = op1->gtOp.gtOp1;
-                        dstIsOnStack = (dstObj->gtOper == GT_ADDR && (dstObj->gtFlags & GTF_ADDR_ONSTACK));
-                    }
-
-                    CORINFO_CLASS_HANDLE clsHnd = (CORINFO_CLASS_HANDLE) op2->gtIntCon.gtIconVal;
-                    blkSize = roundUp(info.compCompHnd->getClassSize(clsHnd), TARGET_POINTER_SIZE);
-                }
-                else  // gtIconVal contains amount to copy
-                {
-                    blkSize = (unsigned) op2->gtIntCon.gtIconVal;
-                }
-
-                if (tree->OperGet() == GT_INITBLK)
-                {
-                    GenTreePtr  initVal = op1->gtOp.gtOp2;
-                    if (initVal->OperGet() != GT_CNS_INT)
-                    {
-                         useMemHelper = true;  
-                    }
-                }
-            }
-            else
-            {
-                useMemHelper = true;  
-            }
-            
-            // If we are copying any GC pointers then the GTF_BLK_HASGCPTR flags must be set
-            if (hasGCpointer && !dstIsOnStack)
-            {
-                useBarriers = true;
-            }
-
-#ifdef _TARGET_ARM_
-            //
-            // On ARM For COPYBLK & INITBLK we have special treatment for constant lengths.
-            //
-            if (!useMemHelper && !useBarriers)
-            {
-                bool     useLoop        = false;
-                unsigned fullStoreCount = blkSize / TARGET_POINTER_SIZE;
-                
-                // A mask to use to force the predictor to choose low registers (to reduce code size)
-                regMaskTP avoidReg = (RBM_R12|RBM_LR);
-
-                // Allow the src and dst to be used in place, unless we use a loop, in which
-                // case we will need scratch registers as we will be writing to them.
-                rpPredictReg srcAndDstPredict = PREDICT_REG;
-
-                // Will we be using a loop to implement this INITBLK/COPYBLK?
-                if ((GenTree::OperIsCopyBlkOp(oper) && (fullStoreCount >= 8)) ||
-                    ((oper == GT_INITBLK)  && (fullStoreCount >= 16))) 
-                {
-                    useLoop = true;
-                    avoidReg = RBM_NONE;
-                    srcAndDstPredict = PREDICT_SCRATCH_REG;
-                }
-
-                if (op1->gtFlags & GTF_REVERSE_OPS)
-                {
-                    regMask |= rpPredictTreeRegUse(op1->gtOp.gtOp2, srcAndDstPredict, lockedRegs, op1->gtOp.gtOp1->gtRsvdRegs | avoidReg | RBM_LASTUSE);
-                    regMask |= rpPredictTreeRegUse(op1->gtOp.gtOp1, srcAndDstPredict, lockedRegs | regMask, avoidReg);
-                }
-                else
-                {
-                    regMask |= rpPredictTreeRegUse(op1->gtOp.gtOp1, srcAndDstPredict, lockedRegs, op1->gtOp.gtOp2->gtRsvdRegs | avoidReg | RBM_LASTUSE); 
-                    regMask |= rpPredictTreeRegUse(op1->gtOp.gtOp2, srcAndDstPredict, lockedRegs | regMask, avoidReg);
-                }
-
-                // We need at least one scratch register for a GT_COPYBLK
-                if (GenTree::OperIsCopyBlkOp(oper))
-                {
-                    // Pick a low register to reduce the code size
-                    regMask |= rpPredictRegPick(TYP_INT, PREDICT_SCRATCH_REG, lockedRegs | regMask | avoidReg);
-                }
-
-                if (useLoop)
-                {
-                    if (GenTree::OperIsCopyBlkOp(oper))
-                    {
-                        // We need a second temp register for a GT_COPYBLK (our code gen is load two/store two)
-                        // Pick another low register to reduce the code size
-                        regMask |= rpPredictRegPick(TYP_INT, PREDICT_SCRATCH_REG, lockedRegs | regMask | avoidReg);
-                    }
-
-                    // We need a loop index register
-                    regMask |= rpPredictRegPick(TYP_INT, PREDICT_SCRATCH_REG, lockedRegs | regMask);
-                }
-
-                tree->gtUsedRegs = op1->gtOp.gtOp1->gtUsedRegs |
-                                   op1->gtOp.gtOp2->gtUsedRegs |
-                                   (regMaskSmall)regMask;
-
-                regMask = 0;
-                goto RETURN_CHECK;
-            }
-#endif
-            // What order should the Dest, Val/Src, and Size be calculated
-
-#if defined(_TARGET_XARCH_)
-            fgOrderBlockOps(tree,
-                    RBM_EDI, (oper == GT_INITBLK) ? RBM_EAX : RBM_ESI, RBM_ECX,
-                    opsPtr, regsPtr);
-
-            // We're going to use these, might as well make them available now
-
-            codeGen->regSet.rsSetRegsModified(RBM_EDI | RBM_ECX);
-            if (GenTree::OperIsCopyBlkOp(oper))
-                codeGen->regSet.rsSetRegsModified(RBM_ESI);
-
-#elif defined(_TARGET_ARM_)
-
-            if (useMemHelper)
-            {
-                // For all other cases that involve non-constants, we just call memcpy/memset
-                // JIT helpers
-                fgOrderBlockOps(tree, RBM_ARG_0, RBM_ARG_1, RBM_ARG_2, opsPtr, regsPtr);
-                interferingRegs |= RBM_CALLEE_TRASH;
-#ifdef DEBUG
-                if (verbose)
-                    printf("Adding interference with RBM_CALLEE_TRASH for memcpy/memset\n"); 
-#endif
-            }
-            else // useBarriers
-            {
-                assert(useBarriers);
-                assert(GenTree::OperIsCopyBlkOp(oper));
-
-                fgOrderBlockOps(tree, RBM_ARG_0, RBM_ARG_1, REG_TMP_1, opsPtr, regsPtr);
-
-                // For this case Codegen will call the CORINFO_HELP_ASSIGN_BYREF helper
-                interferingRegs |= RBM_CALLEE_TRASH_NOGC;
-#ifdef DEBUG
-                if (verbose)
-                    printf("Adding interference with RBM_CALLEE_TRASH_NOGC for Byref WriteBarrier\n"); 
-#endif
-            }
-#else  // !_TARGET_X86_ && !_TARGET_ARM_
-#error "Non-ARM or x86 _TARGET_ in RegPredict for INITBLK/COPYBLK"
-#endif // !_TARGET_X86_ && !_TARGET_ARM_
-            regMask |= rpPredictTreeRegUse(opsPtr[0],
-                                           rpGetPredictForMask(regsPtr[0]),
-                                           lockedRegs, 
-                                           opsPtr[1]->gtRsvdRegs | opsPtr[2]->gtRsvdRegs | RBM_LASTUSE);
-            regMask |= regsPtr[0];
-            opsPtr[0]->gtUsedRegs |= regsPtr[0];
-            rpRecordRegIntf(regsPtr[0], compCurLife
-                            DEBUGARG("movsd dest"));
-
-            regMask |= rpPredictTreeRegUse(opsPtr[1],
-                                           rpGetPredictForMask(regsPtr[1]),
-                                           lockedRegs | regMask, 
-                                           opsPtr[2]->gtRsvdRegs | RBM_LASTUSE);
-            regMask |= regsPtr[1];
-            opsPtr[1]->gtUsedRegs |= regsPtr[1];
-            rpRecordRegIntf(regsPtr[1], compCurLife
-                            DEBUGARG("movsd src"));
-
-            regMask |= rpPredictTreeRegUse(opsPtr[2],
-                                           rpGetPredictForMask(regsPtr[2]),
-                                           lockedRegs | regMask, 
-                                           RBM_NONE);
-            regMask |= regsPtr[2];
-            opsPtr[2]->gtUsedRegs |= regsPtr[2];
-
-            tree->gtUsedRegs = opsPtr[0]->gtUsedRegs |
-                               opsPtr[1]->gtUsedRegs |
-                               opsPtr[2]->gtUsedRegs |
-                               (regMaskSmall)regMask;
+            interferingRegs |= rpPredictBlkAsgRegUse(tree, predictReg,lockedRegs,rsvdRegs);
             regMask = 0;
             goto RETURN_CHECK;
-        }
 
-        case GT_LDOBJ:
+        case GT_OBJ:
             {
 #ifdef _TARGET_ARM_
                 if (predictReg <= PREDICT_REG)
@@ -4329,16 +4366,16 @@ HANDLE_SHIFT_COUNT:
                 }
 
 #ifdef _TARGET_ARM_
-                unsigned objSize = info.compCompHnd->getClassSize(tree->gtLdObj.gtClass);
+                unsigned objSize = info.compCompHnd->getClassSize(tree->gtObj.gtClass);
                 regMaskTP preferReg = rpPredictRegMask(predictReg, TYP_I_IMPL);
                 // If it has one bit set, and that's an arg reg...
                 if (preferReg != RBM_NONE && genMaxOneBit(preferReg) && ((preferReg & RBM_ARG_REGS) != 0))
                 {
-                    // We are passing the ldObj in the argument registers
+                    // We are passing the 'obj' in the argument registers
                     //
                     regNumber rn = genRegNumFromMask(preferReg);
 
-                    //  Add the registers used to pass the ldObj to regMask.
+                    //  Add the registers used to pass the 'obj' to regMask.
                     for (unsigned i = 0; i < objSize/4; i++)
                     {
                         if (rn == MAX_REG_ARG)
@@ -4350,8 +4387,8 @@ HANDLE_SHIFT_COUNT:
                 }
                 else
                 {
-                    // We are passing the ldObj in the outgoing arg space
-                    // We will need one register to load into unless the ldObj size is 4 or less.
+                    // We are passing the 'obj' in the outgoing arg space
+                    // We will need one register to load into unless the 'obj' size is 4 or less.
                     //
                     if (objSize > 4)
                     {
@@ -4618,22 +4655,22 @@ HANDLE_SHIFT_COUNT:
                 GenTreePtr argx = args;
                 GenTreePtr lclVarTree = NULL;
 
-                /* The GT_LDOBJ may be be a child of a GT_COMMA */
+                /* The GT_OBJ may be be a child of a GT_COMMA */
                 while (argx->gtOper == GT_COMMA)
                 {
                     argx = argx->gtOp.gtOp2;
                 }
                 unsigned originalSize = 0;
 
-                if (argx->gtOper == GT_LDOBJ)
+                if (argx->gtOper == GT_OBJ)
                 {    
-                    originalSize = info.compCompHnd->getClassSize(argx->gtLdObj.gtClass);
+                    originalSize = info.compCompHnd->getClassSize(argx->gtObj.gtClass);
 
                     // Is it the address of a promoted struct local?
-                    if (argx->gtLdObj.gtOp1->gtOper == GT_ADDR &&
-                        argx->gtLdObj.gtOp1->gtOp.gtOp1->gtOper == GT_LCL_VAR)
+                    if (argx->gtObj.gtOp1->gtOper == GT_ADDR &&
+                        argx->gtObj.gtOp1->gtOp.gtOp1->gtOper == GT_LCL_VAR)
                     {
-                        lclVarTree = argx->gtLdObj.gtOp1->gtOp.gtOp1;
+                        lclVarTree = argx->gtObj.gtOp1->gtOp.gtOp1;
                         LclVarDsc* varDsc = &lvaTable[lclVarTree->gtLclVarCommon.gtLclNum];
                         if (varDsc->lvPromoted)
                             promotedStructLocal = varDsc;
@@ -4769,9 +4806,9 @@ HANDLE_SHIFT_COUNT:
                 tmpMask |= rpPredictTreeRegUse(args, argPredictReg, lockedRegs | regArgMask, RBM_LASTUSE);
             }
 
-            // We mark LDOBJ(ADDR(LOCAL)) with GTF_VAR_DEATH since the local is required to live
-            // for the duration of the LDOBJ.
-            if (args->OperGet() == GT_LDOBJ && (args->gtFlags & GTF_VAR_DEATH))
+            // We mark OBJ(ADDR(LOCAL)) with GTF_VAR_DEATH since the local is required to live
+            // for the duration of the OBJ.
+            if (args->OperGet() == GT_OBJ && (args->gtFlags & GTF_VAR_DEATH))
             {
                 GenTreePtr lclVarTree = fgIsIndirOfAddrOfLocal(args);
                 assert(lclVarTree != NULL); // Or else would not be marked with GTF_VAR_DEATH.
@@ -6260,8 +6297,7 @@ void               Compiler::rpPredictRegUse()
 #endif
 
 #ifdef  DEBUG
-    static ConfigDWORD jitNoRegLoc;
-    BOOL fJitNoRegLoc = jitNoRegLoc.val(CLRConfig::INTERNAL_JitNoRegLoc);
+    BOOL fJitNoRegLoc = JitConfig.JitNoRegLoc();
     if (fJitNoRegLoc)
         regAvail = RBM_NONE;
 #endif
@@ -6395,8 +6431,7 @@ void               Compiler::rpPredictRegUse()
         }
 
 #ifdef DEBUG
-        static ConfigDWORD fJitMaxRegAllocPasses;
-        if (fJitMaxRegAllocPasses.val(CLRConfig::INTERNAL_JitAssertOnMaxRAPasses))
+        if (JitConfig.JitAssertOnMaxRAPasses())
         {
             noway_assert(rpPasses < rpPassesMax &&
                    "This may not a bug, but dev team should look and see what is happening");

@@ -35,6 +35,7 @@
 #endif // FEATURE_COMINTEROP
 
 #include "rcwwalker.h"
+#include "../gc/softwarewritewatch.h"
 
 //========================================================================
 //
@@ -349,13 +350,28 @@ OBJECTREF AllocateArrayEx(TypeHandle arrayType, INT32 *pArgs, DWORD dwNumArgs, B
                 lowerBound = pArgs[i];
                 i++;
             }
+
             int length = pArgs[i];
             if (length < 0)
                 COMPlusThrow(kOverflowException);
+
             if ((SIZE_T)length > MaxArrayLength(componentSize))
+            {
+                // This will cause us to throw below if we don't throw anything else before then.
                 maxArrayDimensionLengthOverflow = true;
-            if ((length > 0) && (lowerBound + (length - 1) < lowerBound))
-                COMPlusThrow(kArgumentOutOfRangeException, W("ArgumentOutOfRange_ArrayLBAndLength"));
+            }
+
+            if (length > 0)
+            {
+                int highestAllowableLowerBound = INT32_MAX - (length - 1);
+                if (lowerBound > highestAllowableLowerBound)
+                {
+                    // We throw because the lower bound is large enough that the sum of the 
+                    // dimension's length and the lower bound would exceed INT32_MAX.
+                    COMPlusThrow(kArgumentOutOfRangeException, W("ArgumentOutOfRange_ArrayLBAndLength"));
+                }
+            }
+
             safeTotalElements = safeTotalElements * S_UINT32(length);
             if (safeTotalElements.IsOverflow())
                 ThrowOutOfMemoryDimensionsExceeded();
@@ -1182,6 +1198,13 @@ extern "C" HCIMPL2_RAW(VOID, JIT_CheckedWriteBarrier, Object **dst, Object *ref)
     updateGCShadow(dst, ref);     // support debugging write barrier
 #endif
 
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+    if (SoftwareWriteWatch::IsEnabledForGCHeap())
+    {
+        SoftwareWriteWatch::SetDirty(dst, sizeof(*dst));
+    }
+#endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
     if((BYTE*) dst >= g_ephemeral_low && (BYTE*) dst < g_ephemeral_high)
     {
@@ -1232,6 +1255,13 @@ extern "C" HCIMPL2_RAW(VOID, JIT_WriteBarrier, Object **dst, Object *ref)
     updateGCShadow(dst, ref);     // support debugging write barrier
 #endif
     
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+    if (SoftwareWriteWatch::IsEnabledForGCHeap())
+    {
+        SoftwareWriteWatch::SetDirty(dst, sizeof(*dst));
+    }
+#endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
     if((BYTE*) dst >= g_ephemeral_low && (BYTE*) dst < g_ephemeral_high)
     {
@@ -1292,7 +1322,14 @@ void ErectWriteBarrier(OBJECTREF *dst, OBJECTREF ref)
 #ifdef WRITE_BARRIER_CHECK
     updateGCShadow((Object**) dst, OBJECTREFToObject(ref));     // support debugging write barrier
 #endif
-    
+
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+    if (SoftwareWriteWatch::IsEnabledForGCHeap())
+    {
+        SoftwareWriteWatch::SetDirty(dst, sizeof(*dst));
+    }
+#endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+
     if((BYTE*) OBJECTREFToObject(ref) >= g_ephemeral_low && (BYTE*) OBJECTREFToObject(ref) < g_ephemeral_high)
     {
         // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered 
@@ -1319,6 +1356,13 @@ void ErectWriteBarrierForMT(MethodTable **dst, MethodTable *ref)
     
     if (ref->Collectible())
     {
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+        if (SoftwareWriteWatch::IsEnabledForGCHeap())
+        {
+            SoftwareWriteWatch::SetDirty(dst, sizeof(*dst));
+        }
+#endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+
         BYTE *refObject = *(BYTE **)((MethodTable*)ref)->GetLoaderAllocatorObjectHandle();
         if((BYTE*) refObject >= g_ephemeral_low && (BYTE*) refObject < g_ephemeral_high)
         {

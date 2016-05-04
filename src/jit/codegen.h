@@ -182,11 +182,11 @@ private:
     // to be the sizes of the prolog and epilog, respectively.  In DEBUG, makes a check involving the
     // "codePtr", assumed to be a pointer to the start of the generated code.
 #ifdef JIT32_GCENCODER
-    void*               genCreateAndStoreGCInfo     (unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUG_ARG(void* codePtr));
-    void*               genCreateAndStoreGCInfoJIT32(unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUG_ARG(void* codePtr));
+    void*               genCreateAndStoreGCInfo     (unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUGARG(void* codePtr));
+    void*               genCreateAndStoreGCInfoJIT32(unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUGARG(void* codePtr));
 #else // !JIT32_GCENCODER
-    void                genCreateAndStoreGCInfo     (unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUG_ARG(void* codePtr));
-    void                genCreateAndStoreGCInfoX64  (unsigned codeSize, unsigned prologSize DEBUG_ARG(void* codePtr));
+    void                genCreateAndStoreGCInfo     (unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUGARG(void* codePtr));
+    void                genCreateAndStoreGCInfoX64  (unsigned codeSize, unsigned prologSize DEBUGARG(void* codePtr));
 #endif // !JIT32_GCENCODER
 
     /**************************************************************************
@@ -296,7 +296,7 @@ protected:
     // Prolog functions and data (there are a few exceptions for more generally used things)
     //
 
-
+    void                genEstablishFramePointer(int delta, bool reportUnwindData);
     void                genFnPrologCalleeRegArgs(regNumber xtraReg,                                            
                                                  bool *    pXtraRegClobbered,
                                                  RegState *regState);
@@ -467,23 +467,25 @@ protected:
 
     void                genPrologPadForReJit();
 
-    void                genEmitCall(int                   callType,
-                                    CORINFO_METHOD_HANDLE methHnd,
-                                    INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO* sigInfo)
-                                    void*                 addr
-                                    X86_ARG(ssize_t       argSize),
-                                    emitAttr              retSize,
-                                    IL_OFFSETX            ilOffset,
-                                    regNumber             base   = REG_NA,
-                                    bool                  isJump = false,
-                                    bool                  isNoGC = false);
-
+    void                genEmitCall(int                                                 callType,
+                                    CORINFO_METHOD_HANDLE                               methHnd,
+                                    INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO*             sigInfo)
+                                    void*                                               addr
+                                    X86_ARG(ssize_t                                     argSize),
+                                    emitAttr                                            retSize
+                                    FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(emitAttr secondRetSize),
+                                    IL_OFFSETX                                          ilOffset,
+                                    regNumber                                           base   = REG_NA,
+                                    bool                                                isJump = false,
+                                    bool                                                isNoGC = false);
+    
     void                genEmitCall(int                   callType, 
                                     CORINFO_METHOD_HANDLE methHnd,
                                     INDEBUG_LDISASM_COMMA(CORINFO_SIG_INFO* sigInfo)
                                     GenTreeIndir*         indir
                                     X86_ARG(ssize_t       argSize),
-                                    emitAttr              retSize,
+                                    emitAttr              retSize
+                                    FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(emitAttr secondRetSize),
                                     IL_OFFSETX            ilOffset);
 
 
@@ -497,8 +499,7 @@ protected:
 
 #if defined(_TARGET_ARM64_)
 
-    void                genPopCalleeSavedRegistersAndFreeLclFrame(bool               jmpEpilog,
-                                                                  /* IN OUT */ bool* pUnwindStarted);
+    void                genPopCalleeSavedRegistersAndFreeLclFrame(bool jmpEpilog);
 
 #else // !defined(_TARGET_ARM64_)
 
@@ -937,7 +938,8 @@ public :
 
     void                instEmit_indCall(GenTreePtr     call,
                                          size_t         argSize,
-                                         emitAttr       retSize);
+                                         emitAttr       retSize
+                                         FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(emitAttr    secondRetSize));
 
     void                instEmit_RM     (instruction    ins,
                                          GenTreePtr     tree,
@@ -1140,6 +1142,10 @@ public :
 #ifdef  DEBUG
     void    __cdecl     instDisp(instruction ins, bool noNL, const char *fmt, ...);
 #endif
+
+#ifdef _TARGET_XARCH_
+    instruction         genMapShiftInsToShiftByConstantIns(instruction ins, int shiftByValue);
+#endif // _TARGET_XARCH_
 
 };
 

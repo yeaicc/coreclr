@@ -698,12 +698,6 @@ FCIMPL5(FC_BOOL_RET, COMDelegate::BindToMethodName,
     // performance gain in some reflection emit scenarios.
     MethodTable::AllowMethodDataCaching();
 
-#ifdef FEATURE_LEGACYNETCF
-    // NetCF has done relaxed signature matching unconditionally
-    if (GetAppDomain()->GetAppDomainCompatMode() == BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8)
-        flags |= DBF_RelaxedSignature;
-#endif
-
     TypeHandle targetType((gc.target != NULL) ? gc.target->GetTrueMethodTable() : NULL);
     // get the invoke of the delegate
     MethodTable * pDelegateType = gc.refThis->GetMethodTable();
@@ -2418,7 +2412,7 @@ PCODE COMDelegate::GetInvokeMethodStub(EEImplMethodDesc* pMD)
         STANDARD_VM_CHECK;
         POSTCONDITION(RETVAL != NULL);
 
-        INJECT_FAULT(COMPlusThrowOM()); 
+        INJECT_FAULT(COMPlusThrowOM());
     }
     CONTRACT_END;
 
@@ -2465,7 +2459,7 @@ PCODE COMDelegate::GetInvokeMethodStub(EEImplMethodDesc* pMD)
         // If the call was indeed for async delegate invocation, we will just throw an exception.
         if ((pMD == pClass->m_pBeginInvokeMethod) || (pMD == pClass->m_pEndInvokeMethod))
         {
-            COMPlusThrow(kNotSupportedException);
+            COMPlusThrow(kPlatformNotSupportedException);
         }
 
 #endif //FEATURE_REMOTING
@@ -2474,7 +2468,7 @@ PCODE COMDelegate::GetInvokeMethodStub(EEImplMethodDesc* pMD)
         COMPlusThrow(kInvalidProgramException);
     }
 
-    RETURN ret;    
+    RETURN ret;
 }
 
 FCIMPL1(Object*, COMDelegate::InternalAlloc, ReflectClassBaseObject * pTargetUNSAFE)

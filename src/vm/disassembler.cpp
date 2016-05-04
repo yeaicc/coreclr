@@ -13,12 +13,9 @@
 
 #if USE_COREDISTOOLS_DISASSEMBLER
 HMODULE Disassembler::s_libraryHandle = nullptr;
-
-Disassembler::CorDisasm *(*Disassembler::External_InitDisasm)(enum TargetArch Target) = nullptr;
-SIZE_T(*Disassembler::External_DisasmInstruction)(const Disassembler::CorDisasm *Disasm, size_t Address,
-                                  const uint8_t *Bytes, size_t Maxlength,
-                                  bool PrintAssembly) = nullptr;
-void(*Disassembler::External_FinishDisasm)(const Disassembler::CorDisasm *Disasm) = nullptr;
+InitDisasm_t *Disassembler::External_InitDisasm = nullptr;
+FinishDisasm_t *Disassembler::External_FinishDisasm = nullptr;
+DisasmInstruction_t *Disassembler::External_DisasmInstruction = nullptr;
 #endif // USE_COREDISTOOLS_DISASSEMBLER
 
 Disassembler::ExternalDisassembler *Disassembler::s_availableExternalDisassembler = nullptr;
@@ -70,7 +67,6 @@ bool Disassembler::IsAvailable()
 #endif // USE_COREDISTOOLS_DISASSEMBLER
 }
 
-// static
 void Disassembler::StaticInitialize()
 {
     LIMITED_METHOD_CONTRACT;
@@ -78,10 +74,35 @@ void Disassembler::StaticInitialize()
 #if USE_COREDISTOOLS_DISASSEMBLER
     _ASSERTE(!IsAvailable());
 
-    // TODO: The 'coredistools' library will eventually be part of a NuGet package, need to be able to load
-    // that using appropriate search paths
-    LPCWSTR libraryName = MAKEDLLNAME(W("coredistools"));
-    HMODULE libraryHandle = CLRLoadLibrary(libraryName);
+    HMODULE libraryHandle = nullptr;
+    PathString libPath;
+    DWORD result = WszGetModuleFileName(nullptr, libPath);
+    if (result == 0) {
+#ifdef _DEBUG
+        wprintf(
+            W("GetModuleFileName failed, function 'DisasmInstruction': error %u\n"),
+            GetLastError());
+#endif // _DEBUG
+        return;
+    }
+
+#if defined(FEATURE_PAL)
+    WCHAR delim = W('/');
+#else
+    WCHAR delim = W('\\');
+#endif
+    LPCWSTR libFileName = MAKEDLLNAME(W("coredistools"));
+    PathString::Iterator iter = libPath.End();
+    if (libPath.FindBack(iter, delim)) {
+        libPath.Truncate(++iter);
+        libPath.Append(libFileName);
+    }
+    else {
+        _ASSERTE(!"unreachable");
+    }
+
+    LPCWSTR libraryName = libPath.GetUnicode();
+    libraryHandle = CLRLoadLibrary(libraryName);
     do
     {
         if (libraryHandle == nullptr)
@@ -137,8 +158,8 @@ void Disassembler::StaticInitialize()
         return;
     } while (false);
 
-    CLRFreeLibrary(libraryHandle);
     _ASSERTE(!IsAvailable());
+    
 #endif // USE_COREDISTOOLS_DISASSEMBLER
 }
 
@@ -215,7 +236,7 @@ SIZE_T Disassembler::DisassembleInstruction(const UINT8 *code, SIZE_T codeLength
     _ASSERTE(IsAvailable());
 
 #if USE_COREDISTOOLS_DISASSEMBLER
-    SIZE_T instructionLength = External_DisasmInstruction(m_externalDisassembler, reinterpret_cast<SIZE_T>(code), code, codeLength, false /* PrintAssembly */);
+    SIZE_T instructionLength = External_DisasmInstruction(m_externalDisassembler, code, code, codeLength);
 #elif USE_MSVC_DISASSEMBLER
     SIZE_T instructionLength =
         m_externalDisassembler->CbDisassemble(reinterpret_cast<ExternalDisassembler::ADDR>(code), code, codeLength);

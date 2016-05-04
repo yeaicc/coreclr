@@ -91,7 +91,7 @@ INST5(ldr,     "ldr",    0,LD, IF_EN5A,   0xB9400000,  0xB9400000,  0xB8400000, 
                                    //  ldr     Rt,[Xn+pimm12]       LS_2B  1X11100101iiiiii iiiiiinnnnnttttt   B940 0000   imm(0-4095<<{2,3})
                                    //  ldr     Rt,[Xn+simm9]        LS_2C  1X111000010iiiii iiiiPPnnnnnttttt   B840 0000   [Xn imm(-256..+255) pre/post/no inc]
                                    //  ldr     Rt,[Xn,(Rm,ext,shl)] LS_3A  1X111000011mmmmm oooS10nnnnnttttt   B860 0800   [Xn, ext(Rm) LSL {0,2,3}]
-                                   //  ldr     Vt/Rt,[PC+simm19<<2] LS_1A  XX011000iiiiiiii iiiiiiiiiiittttt   1800 0000   [PC +- imm(1MB)]
+                                   //  ldr     Vt/Rt,[PC+simm19<<2] LS_1A  XX011V00iiiiiiii iiiiiiiiiiittttt   1800 0000   [PC +- imm(1MB)]
   
 INST5(ldrsw,   "ldrsw",  0,LD, IF_EN5A,   0xB9800000,  0xB9800000,  0xB8800000,  0xB8A00800,  0x98000000)
                                    //  ldrsw   Rt,[Xn]              LS_2A  1011100110000000 000000nnnnnttttt   B980 0000   
@@ -597,15 +597,15 @@ INST1(bl_local,"bl",     0, 0, IF_BI_0A,  0x94000000)
 INST1(bl,      "bl",     0, 0, IF_BI_0C,  0x94000000)
                                    //  bl      simm26               BI_0C  100101iiiiiiiiii iiiiiiiiiiiiiiii   9400 0000   simm26:00
 
-INST1(br,      "br",     0, 0, IF_BR_1A,  0xD61F0000)
-                                   //  br      Rn                   BR_1A  1101011000011111 000000nnnnn00000   D61F 0000   
-   
-INST1(blr,     "blr",    0, 0, IF_BR_1A,  0xD63F0000)
-                                   //  blr     Rn                   BR_1A  1101011000111111 000000nnnnn00000   D63F 0000   
-   
+INST1(br,      "br",     0, 0, IF_BR_1B,  0xD61F0000)
+                                   //  br      Rn                   BR_1B  1101011000011111 000000nnnnn00000   D61F 0000
+
+INST1(blr,     "blr",    0, 0, IF_BR_1B,  0xD63F0000)
+                                   //  blr     Rn                   BR_1B  1101011000111111 000000nnnnn00000   D63F 0000
+
 INST1(ret,     "ret",    0, 0, IF_BR_1A,  0xD65F0000)
-                                   //  ret     Rn                   BR_1A  1101011001011111 000000nnnnn00000   D65F 0000   
-   
+                                   //  ret     Rn                   BR_1A  1101011001011111 000000nnnnn00000   D65F 0000
+
 INST1(beq,     "beq",    0, 0, IF_BI_0B,  0x54000000)  
                                    //  beq     simm19               BI_0B  01010100iiiiiiii iiiiiiiiiii00000   5400 0000   simm19:00
 

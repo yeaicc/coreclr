@@ -31,9 +31,12 @@ set __crossgen=
 set __ILAsmRoundtrip=
 set __BuildSequential=
 set __TestPriority=
+set __LongGCTests=
+set __GCSimulatorTests=
 set __msbuildCleanBuildArgs=
 set __msbuildExtraArgs=
 set __verbosity=normal
+set __GCStressLevel=0
 
 :Arg_Loop
 if "%1" == "" goto ArgsDone
@@ -63,8 +66,15 @@ if /i "%1" == "crossgen"            (set __crossgen=true&shift&goto Arg_Loop)
 if /i "%1" == "ilasmroundtrip"      (set __ILAsmRoundtrip=true&shift&goto Arg_Loop)
 if /i "%1" == "sequential"          (set __BuildSequential=1&shift&goto Arg_Loop)
 if /i "%1" == "priority"            (set __TestPriority=%2&shift&shift&goto Arg_Loop)
+if /i "%1" == "gcstresslevel"       (set __GCStressLevel=%2&shift&shift&goto Arg_Loop)
+if /i "%1" == "longgctests"         (set __LongGCTests=1&shift&goto Arg_Loop)
+if /i "%1" == "gcsimulator"         (set __GCSimulatorTests=1&shift&goto Arg_Loop)
 
 if /i "%1" == "verbose"             (set __verbosity=detailed&shift&goto Arg_Loop)
+
+@REM It was initially /toolset_dir. Not sure why, since it doesn't match the other usage.
+if /i "%1" == "/toolset_dir"        (set __ToolsetDir=%2&set __PassThroughArgs=%__PassThroughArgs% %2&shift&shift&goto Arg_Loop)
+if /i "%1" == "toolset_dir"         (set __ToolsetDir=%2&set __PassThroughArgs=%__PassThroughArgs% %2&shift&shift&goto Arg_Loop)
 
 if /i not "%1" == "msbuildargs" goto SkipMsbuildArgs
 :: All the rest of the args will be collected and passed directly to msbuild.
@@ -79,6 +89,10 @@ echo Invalid command-line argument: %1
 goto Usage
 
 :ArgsDone
+
+rem arm64 builds currently use private toolset which has not been released yet
+REM TODO, remove once the toolset is open.
+if /i "%__BuildArch%" == "arm64" call :PrivateToolSet
 
 if %__verbosity%==detailed (
     echo Enabling verbose file logging
@@ -96,7 +110,7 @@ set "__TestBinDir=%__TestRootDir%\%__BuildOS%.%__BuildArch%.%__BuildType%"
 if not defined __TestIntermediateDir (
     set "__TestIntermediateDir=tests\obj\%__BuildOS%.%__BuildArch%.%__BuildType%"
 )
-set "__NativeTestIntermediatesDir=%__RootBinDir%\%__TestIntermediateDirDir%\Native"
+set "__NativeTestIntermediatesDir=%__RootBinDir%\%__TestIntermediateDir%\Native"
 set "__ManagedTestIntermediatesDir=%__RootBinDir%\%__TestIntermediateDir%\Managed"
 
 :: Generate path to be set for CMAKE_INSTALL_PREFIX to contain forward slash
@@ -148,7 +162,6 @@ if not exist %_msbuildexe% set _msbuildexe="%ProgramFiles(x86)%\MSBuild\14.0\Bin
 goto :CheckMSBuild14
 :MSBuild14
 set _msbuildexe="%ProgramFiles(x86)%\MSBuild\14.0\Bin\MSBuild.exe"
-set UseRoslynCompiler=true
 :CheckMSBuild14
 if not exist %_msbuildexe% set _msbuildexe="%ProgramFiles%\MSBuild\14.0\Bin\MSBuild.exe"
 if not exist %_msbuildexe% echo Error: Could not find MSBuild.exe.  Please see https://github.com/dotnet/coreclr/blob/master/Documentation/project-docs/developer-guide.md for build instructions. && exit /b 1
@@ -181,6 +194,11 @@ setlocal EnableDelayedExpansion
 
 echo %__MsgPrefix%Commencing build of native test components for %__BuildArch%/%__BuildType%
 
+if defined __ToolsetDir (
+ echo %__MsgPrefix%ToolsetDir is defined to be :%__ToolsetDir%
+ goto GenVSSolution :: Private ToolSet is Defined
+)
+
 :: Set the environment for the native build
 echo %__MsgPrefix%Using environment: "%__VSToolsRoot%\..\..\VC\vcvarsall.bat" %__VCBuildArch%
 call                                 "%__VSToolsRoot%\..\..\VC\vcvarsall.bat" x86_amd64
@@ -192,7 +210,8 @@ if not defined VSINSTALLDIR (
 )
 if not exist "%VSINSTALLDIR%DIA SDK" goto NoDIA
 
-echo %__MsgPrefix%Regenerating the Visual Studio solution
+:GenVSSolution
+echo %__MsgPrefix%Regenerating the Visual Studio solution in %__NativeTestIntermediatesDir%
 
 pushd "%__NativeTestIntermediatesDir%"
 call "%__SourceDir%\pal\tools\gen-buildsys-win.bat" "%__ProjectFilesDir%\" %__VSVersion% %__BuildArch%
@@ -204,10 +223,17 @@ if not exist "%__NativeTestIntermediatesDir%\install.vcxproj" (
     exit /b 1
 )
 
-set __BuildLogRootName=Tests_Native
-call :msbuild "%__NativeTestIntermediatesDir%\install.vcxproj" %__msbuildCleanBuildArgs% /p:Configuration=%__BuildType% /p:Platform=%__BuildArch%
-if errorlevel 1 exit /b 1
+set __msbuildNativeArgs=%__msbuildCleanBuildArgs% /p:Configuration=%__BuildType%
 
+if defined __ToolsetDir (
+    set __msbuildNativeArgs=%__msbuildNativeArgs% /p:UseEnv=true
+) else (
+    set __msbuildNativeArgs=%__msbuildNativeArgs% /p:Platform=%__BuildArch%
+)
+
+set __BuildLogRootName=Tests_Native
+call :msbuild "%__NativeTestIntermediatesDir%\install.vcxproj" %__msbuildNativeArgs%
+if errorlevel 1 exit /b 1
 REM endlocal to rid us of environment changes from vcvarsall.bat
 endlocal
 
@@ -246,6 +272,21 @@ if defined __ILAsmRoundtrip (
 if defined __TestPriority (
     echo Building Test Priority %__TestPriority%
     set __msbuildManagedBuildArgs=%__msbuildManagedBuildArgs% /p:CLRTestPriorityToBuild=%__TestPriority%
+)
+
+if %__GCStressLevel% GTR 0 (
+    echo Tests will run under GCStressLevel = %__GCStressLevel%
+    set __msbuildManagedBuildArgs=%__msbuildManagedBuildArgs% /p:GCStressLevel=%__GCStressLevel%   
+)
+
+if defined __LongGCTests (
+    echo Building tests with Long GC tests enabled.
+    set __msbuildManagedBuildArgs=%__msbuildManagedBuildArgs% /p:GCLongRunning=true
+)
+
+if defined __GCSimulatorTests (
+    echo Building GCSimulator tests
+    set __msbuildManagedBuildArgs=%__msbuildManagedBuildArgs% /p:GCSimulatorRun=true
 )
 
 set __BuildLogRootName=Tests_Managed
@@ -330,8 +371,11 @@ echo clean: force a clean build ^(default is to perform an incremental build^).
 echo CrossGen: enables the tests to run crossgen on the test executables before executing them. 
 echo msbuildargs ... : all arguments following this tag will be passed directly to msbuild.
 echo priority ^<N^> : specify a set of test that will be built and run, with priority N.
+echo gcstresslevel ^<N^> : specify the GCStress level the tests should run under.
 echo sequential: force a non-parallel build ^(default is to build in parallel
 echo     using all processors^).
+echo longgctests: Build tests so that runtests.cmd will do a long-running GC test.
+echo gcsimulator: Build tests so that runtests.cmd will do a GCSimulator test run.
 echo IlasmRoundTrip: enables ilasm round trip build and run of the tests before executing them.
 echo verbose: enables detailed file logging for the msbuild tasks into the msbuild log file.
 exit /b 1
@@ -351,3 +395,28 @@ echo Visual Studio 2013 Express does not include the DIA SDK. ^
 You need Visual Studio 2013+ (Community is free).
 echo See: https://github.com/dotnet/coreclr/blob/master/Documentation/project-docs/developer-guide.md#prerequisites
 exit /b 1
+
+
+:PrivateToolSet
+
+echo %__MsgPrefix% Setting Up the usage of __ToolsetDir:%__ToolsetDir%
+
+if /i "%__ToolsetDir%" == "" (
+    echo %__MsgPrefix%Error: A toolset directory is required for the Arm64 Windows build. Use the toolset_dir argument.
+    exit /b 1
+)
+
+set PATH=%__ToolsetDir%\VC_sdk\bin;%PATH%
+set LIB=%__ToolsetDir%\VC_sdk\lib\arm64;%__ToolsetDir%\sdpublic\sdk\lib\arm64
+set INCLUDE=^
+%__ToolsetDir%\VC_sdk\inc;^
+%__ToolsetDir%\sdpublic\sdk\inc;^
+%__ToolsetDir%\sdpublic\shared\inc;^
+%__ToolsetDir%\sdpublic\shared\inc\minwin;^
+%__ToolsetDir%\sdpublic\sdk\inc\ucrt;^
+%__ToolsetDir%\sdpublic\sdk\inc\minwin;^
+%__ToolsetDir%\sdpublic\sdk\inc\mincore;^
+%__ToolsetDir%\sdpublic\sdk\inc\abi;^
+%__ToolsetDir%\sdpublic\sdk\inc\clientcore;^
+%__ToolsetDir%\diasdk\include
+exit /b 0

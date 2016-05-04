@@ -100,16 +100,6 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 #include "lsra.h"
 
-// Simulated C++11 ranged-for construct
-#define FOREACH(I,C) for (auto __iterator = (C).begin(); __iterator != (C).end(); __iterator++) { auto I = *__iterator; 
-#define END_FOREACH  }
-
-// Actual C++11 ranged-for construct
-// NOTE: CoreCLR builds use an older compiler that doesn't understand this (2012/3/5).
-// We could check _MSC_VER or _MSC_FULL_VER and use this when it's available.
-//#define FOREACH(I,C) for (auto I : C)
-//#define END_FOREACH
-
 #ifdef DEBUG
 const char* LinearScan::resolveTypeName[] = { "Split", "Join", "Critical", "SharedCritical" };
 #endif // DEBUG
@@ -207,26 +197,6 @@ bool isSingleRegister(regMaskTP regMask)
     return (regMask != RBM_NONE && genMaxOneBit(regMask));
 }
 
-RefPositionList::ItemIterator
-skipRefsNotMatching(RefPositionList::ItemIterator iter, RefType match)
-{
-    while (iter && (*iter)->refType != match)
-    {
-        iter++;
-    }
-    return iter;
-}
-
-RefPositionList::ItemIterator
-skipRefsMatching(RefPositionList::ItemIterator iter, RefType match)
-{
-    while (iter && (*iter)->refType == match)
-    {
-        iter++;
-    }
-    return iter;
-}
-
 #ifdef DEBUG
 // TODO-Cleanup: Consider using a #include file with custom #defines for both defining
 // the enum as well as the string array
@@ -293,7 +263,7 @@ LinearScan::getRegisterRecord(regNumber regNum)
 //    mask      - The current mask of register candidates for a node
 //
 // Return Value:
-//    A possibly-modified mask, based on the value of COMPLUS_JitStressRegs.
+//    A possibly-modified mask, based on the value of COMPlus_JitStressRegs.
 //
 // Notes:
 //    This is the method used to implement the stress options that limit
@@ -343,11 +313,8 @@ LinearScan::stressLimitRegs(RefPosition* refPosition, regMaskTP mask)
 Interval *
 LinearScan::newInterval(RegisterType theRegisterType)
 {
-    Interval *newInt = intervals.AppendThrowing();
-    newInt->init();
-
-    newInt->registerType = theRegisterType;
-    newInt->registerPreferences = allRegs(theRegisterType);
+    intervals.emplace_back(theRegisterType, allRegs(theRegisterType));
+    Interval *newInt = &intervals.back();
 
 #ifdef DEBUG
     newInt->intervalIndex = intervalCount;
@@ -359,14 +326,13 @@ LinearScan::newInterval(RegisterType theRegisterType)
 }
 
 RefPosition *
-LinearScan::newRefPositionRaw()
+LinearScan::newRefPositionRaw(LsraLocation nodeLocation, GenTree* treeNode, RefType refType)
 {
-    RefPosition *newRP = refPositions.AppendThrowing();
-    memset(newRP, 0, sizeof(RefPosition)); // TODO-Cleanup: call a RefPosition constructor instead?
+    refPositions.emplace_back(curBBNum, nodeLocation, treeNode, refType);
+    RefPosition *newRP = &refPositions.back();
 #ifdef DEBUG
     newRP->rpNum = refPositionCount;
 #endif // DEBUG
-    newRP->bbNum = curBBNum;
     refPositionCount++;
     return newRP;
 }
@@ -675,21 +641,9 @@ LinearScan::newRefPosition(
     RefType theRefType, GenTree * theTreeNode,
     regMaskTP mask)
 {
-    RefPosition *newRP = newRefPositionRaw();
+    RefPosition *newRP = newRefPositionRaw(theLocation, theTreeNode, theRefType);
 
     newRP->setReg(getRegisterRecord(reg));
-    newRP->nextRefPosition = nullptr;
-    newRP->nodeLocation = theLocation;
-    newRP->treeNode = theTreeNode;
-    newRP->refType = theRefType;
-
-    // Last Use - this may be true for multiple RefPositions in the same Interval
-    newRP->lastUse = false;
-
-    // Spill info
-    newRP->reload = false;
-    newRP->spillAfter = false;
-    newRP->isPhysRegRef = true;
 
     newRP->registerAssignment = mask;
     associateRefPosWithInterval(newRP);
@@ -737,19 +691,11 @@ LinearScan::newRefPosition(
         assert((allRegs(theInterval->registerType) & mask) != 0);
     }
 
-    RefPosition *newRP = newRefPositionRaw();
+    RefPosition *newRP = newRefPositionRaw(theLocation, theTreeNode, theRefType);
 
     newRP->setInterval(theInterval);
-    newRP->nextRefPosition = nullptr;
-    newRP->nodeLocation = theLocation;
-    newRP->treeNode = theTreeNode;
-    newRP->refType = theRefType;
-    // Last Use - this may be true for multiple RefPositions in the same Interval
-    newRP->lastUse = false;
 
     // Spill info
-    newRP->reload = false;
-    newRP->spillAfter = false;
     newRP->isFixedRegRef = isFixedRegister;
 
     // We don't need this for AMD because the PInvoke method epilog code is explicit
@@ -912,21 +858,6 @@ LinearScanInterface *getLinearScanAllocator(Compiler *comp)
 }
 
 
-void *
-LinearScanMemoryAllocatorInterval::Alloc (void *context, SIZE_T cb)
-{
-    LinearScan * linearScan = CONTAINING_RECORD(context, LinearScan, intervals);
-    return linearScan->compiler->compGetMem(cb, CMK_LSRA_Interval);
-}
-
-void *
-LinearScanMemoryAllocatorRefPosition::Alloc (void *context, SIZE_T cb)
-{
-    LinearScan * linearScan = CONTAINING_RECORD(context, LinearScan, refPositions);
-    return linearScan->compiler->compGetMem(cb, CMK_LSRA_RefPosition);
-}
-// everything but REG_STK
-
 //------------------------------------------------------------------------
 // LSRA constructor
 //
@@ -944,6 +875,8 @@ LinearScan::LinearScan(Compiler * theCompiler)
 #if MEASURE_MEM_ALLOC
     , lsraIAllocator(nullptr)
 #endif // MEASURE_MEM_ALLOC
+    , intervals(LinearScanMemoryAllocatorInterval(theCompiler))
+    , refPositions(LinearScanMemoryAllocatorRefPosition(theCompiler))
 {
 #ifdef DEBUG
     intervalCount = 0;
@@ -952,8 +885,7 @@ LinearScan::LinearScan(Compiler * theCompiler)
     initRefTypeNames();
 
     // Get the value of the environment variable that controls stress for register allocation
-    static ConfigDWORD fJitStressRegs;
-    lsraStressMask = fJitStressRegs.val(CLRConfig::INTERNAL_JitStressRegs);
+    lsraStressMask = JitConfig.JitStressRegs();
 #if 0
 #ifdef DEBUG
     if (lsraStressMask != 0)
@@ -990,8 +922,7 @@ LinearScan::LinearScan(Compiler * theCompiler)
 #endif // DEBUG
 #endif
 
-    static ConfigDWORD fJitDumpTerseLsra;
-    dumpTerse = (fJitDumpTerseLsra.val(CLRConfig::INTERNAL_JitDumpTerseLsra) != 0);
+    dumpTerse = (JitConfig.JitDumpTerseLsra() != 0);
 
 #endif // DEBUG
     refPositionCount = 0;
@@ -1254,25 +1185,18 @@ LinearScan::setBlockSequence()
                 // We can stop checking now.
                 checkForCriticalOutEdge = false;
             }
+
             if (isTraversalLayoutOrder() || isBlockVisited(succ))
             {
                 continue;
             }
 
-            // For pred-first order, we prefer layout order, as long as there is an edge between
-            // them.  Otherwise, we'll add it to the list.
-            if (isTraversalPredFirstOrder() && succ == block->bbNext)
-            {
-                nextBlock = succ;
-                BlockSetOps::AddElemD(compiler, readySet, succ->bbNum);
-                continue;
-            }
             // We've now seen a predecessor, so add it to the work list and the "readySet".
             // It will be inserted in the worklist according to the specified traversal order
             // (i.e. pred-first or random, since layout order is handled above).
             if (!BlockSetOps::IsMember(compiler, readySet, succ->bbNum))
             {
-                addToBlockSequenceWorkList(succ);
+                addToBlockSequenceWorkList(readySet, succ);
                 BlockSetOps::AddElemD(compiler, readySet, succ->bbNum);
             }
         }
@@ -1287,6 +1211,7 @@ LinearScan::setBlockSequence()
         while (nextBlock == nullptr)
         {
             nextBlock = getNextCandidateFromWorkList();
+
             // TODO-Throughput: We would like to bypass this traversal if we know we've handled all
             // the blocks - but fgBBcount does not appear to be updated when blocks are removed.
             if (nextBlock == nullptr /* && bbSeqCount != compiler->fgBBcount*/ && !verifiedAllBBs)
@@ -1304,15 +1229,16 @@ LinearScan::setBlockSequence()
                 {
                     if (!isBlockVisited(block))
                     {
-                        addToBlockSequenceWorkList(block);
+                        addToBlockSequenceWorkList(readySet, block);
                         BlockSetOps::AddElemD(compiler, readySet, block->bbNum);
                     }
                 }
+
                 for (BasicBlock* block = compiler->fgFirstBB; block; block = block->bbNext)
                 {
                     if (!isBlockVisited(block))
                     {
-                        addToBlockSequenceWorkList(block);
+                        addToBlockSequenceWorkList(readySet, block);
                         BlockSetOps::AddElemD(compiler, readySet, block->bbNum);
                     }
                 }
@@ -1329,11 +1255,35 @@ LinearScan::setBlockSequence()
 #ifdef DEBUG
     // Make sure that we've visited all the blocks.
     for( BasicBlock* block = compiler->fgFirstBB;
-            block != nullptr;
-            block = block->bbNext)
+         block != nullptr;
+         block = block->bbNext)
     {
         assert(isBlockVisited(block));
     }
+
+    JITDUMP("LSRA Block Sequence: ");
+    int i = 1;
+    for (BasicBlock* block = startBlockSequence();
+         block != nullptr;
+         ++i, block = moveToNextBlock())
+    {
+        JITDUMP("BB%02u", block->bbNum);
+
+        if (block->isMaxBBWeight())
+        {
+            JITDUMP("(MAX) ");
+        }
+        else
+        {
+            JITDUMP("(%6s) ", refCntWtd2str(block->getBBWeight(compiler)));
+        }
+
+        if (i % 10 == 0)
+        {
+            JITDUMP("\n                     ");
+        }
+    }
+    JITDUMP("\n\n");
 #endif
 }
 
@@ -1341,8 +1291,9 @@ LinearScan::setBlockSequence()
 // compareBlocksForSequencing: Compare two basic blocks for sequencing order.
 //
 // Arguments:
-//    block1 - the first block for comparison
-//    block2 - the second block for comparison
+//    block1            - the first block for comparison
+//    block2            - the second block for comparison
+//    useBlockWeights   - whether to use block weights for comparison
 //
 // Return Value:
 //    -1 if block1 is preferred.
@@ -1351,11 +1302,25 @@ LinearScan::setBlockSequence()
 //
 // Notes:
 //    See addToBlockSequenceWorkList.
-//    Currently, this is a simplistic method that prioritizes low bbNum.
-static int
-compareBlocksForSequencing(BasicBlock* block1, BasicBlock* block2)
-{
-    // Prefer LOWER bbnum
+int
+LinearScan::compareBlocksForSequencing(BasicBlock* block1, BasicBlock* block2, bool useBlockWeights)
+{     
+    if (useBlockWeights)
+    {
+        unsigned weight1 = block1->getBBWeight(compiler);
+        unsigned weight2 = block2->getBBWeight(compiler);
+
+        if (weight1 > weight2)
+        {
+            return -1;
+        }
+        else if (weight1 < weight2)
+        {
+            return 1;
+        }
+    }
+
+    // If weights are the same prefer LOWER bbnum
     if (block1->bbNum < block2->bbNum)
     {
         return -1;
@@ -1374,7 +1339,8 @@ compareBlocksForSequencing(BasicBlock* block1, BasicBlock* block2)
 // addToBlockSequenceWorkList: Add a BasicBlock to the work list for sequencing.
 //
 // Arguments:
-//    block - the block to be added
+//    sequencedBlockSet - the set of blocks that are already sequenced
+//    block             - the new block to be added
 //
 // Return Value:
 //    None.
@@ -1384,22 +1350,66 @@ compareBlocksForSequencing(BasicBlock* block1, BasicBlock* block2)
 //    as we encounter a block whose successors have all been sequenced, in pred-first
 //    order, or the very next block if we are traversing in random order (once implemented).
 //    This method uses a comparison method to determine the order in which to place
-//    the blocks in the list.  Currently, this is a simplistic method based on
-//    bbNum.  This could be a future candidate for tuning.
+//    the blocks in the list.  This method queries whether all predecessors of the
+//    block are sequenced at the time it is added to the list and if so uses block weights
+//    for inserting the block.  A block is never inserted ahead of its predecessors.
+//    A block at the time of insertion may not have all its predecessors sequenced, in
+//    which case it will be sequenced based on its block number. Once a block is inserted,
+//    its priority\order will not be changed later once its remaining predecessors are
+//    sequenced.  This would mean that work list may not be sorted entirely based on 
+//    block weights alone.
+//
 //    Note also that, when random traversal order is implemented, this method
 //    should insert the blocks into the list in random order, so that we can always
 //    simply select the first block in the list.
 void
-LinearScan::addToBlockSequenceWorkList(BasicBlock* block)
+LinearScan::addToBlockSequenceWorkList(BlockSet sequencedBlockSet, BasicBlock* block)
 {
-    BasicBlockList* prevNode = nullptr;
-    BasicBlockList* nextNode;
-    for (nextNode = blockSequenceWorkList;
-         nextNode != nullptr && compareBlocksForSequencing(nextNode->block, block) <= 0;
-         nextNode = nextNode->next)
+    // The block that is being added is not already sequenced
+    assert(!BlockSetOps::IsMember(compiler, sequencedBlockSet, block->bbNum));
+
+    // Get predSet of block
+    BlockSet BLOCKSET_INIT_NOCOPY(predSet, BlockSetOps::MakeEmpty(compiler));
+    flowList* pred;
+    for (pred = block->bbPreds; pred != nullptr; pred = pred->flNext)
     {
-        prevNode = nextNode;
+        BlockSetOps::AddElemD(compiler, predSet, pred->flBlock->bbNum);
     }
+
+    // If either a rarely run block or all its preds are already sequenced, use block's weight to sequence
+    bool useBlockWeight = block->isRunRarely() || BlockSetOps::IsSubset(compiler, sequencedBlockSet, predSet);
+
+    BasicBlockList* prevNode = nullptr;
+    BasicBlockList* nextNode = blockSequenceWorkList;
+
+    while (nextNode != nullptr)
+    {
+        int seqResult;
+
+        if (nextNode->block->isRunRarely())
+        {
+            // If the block that is yet to be sequenced is a rarely run block, always use block weights for sequencing
+            seqResult = compareBlocksForSequencing(nextNode->block, block, true);
+        }
+        else if (BlockSetOps::IsMember(compiler, predSet, nextNode->block->bbNum))
+        {
+            // always prefer unsequenced pred blocks
+            seqResult = -1;
+        }
+        else
+        {
+            seqResult = compareBlocksForSequencing(nextNode->block, block, useBlockWeight);
+        }
+
+        if (seqResult > 0)
+        {
+            break;
+        }
+
+        prevNode = nextNode;
+        nextNode = nextNode->next;
+    }
+
     BasicBlockList* newListNode = new (compiler, CMK_LSRA) BasicBlockList(block, nextNode);
     if (prevNode == nullptr)
     {
@@ -1675,7 +1685,7 @@ LinearScan::identifyCandidatesExceptionDataflow()
         unsigned varNum = compiler->lvaTrackedToVarNum[varIndex];
         LclVarDsc* varDsc = compiler->lvaTable + varNum;
 
-        compiler->lvaSetVarDoNotEnregister(varNum DEBUG_ARG(Compiler::DNER_LiveInOutOfHandler));
+        compiler->lvaSetVarDoNotEnregister(varNum DEBUGARG(Compiler::DNER_LiveInOutOfHandler));
 
         if (varTypeIsGC(varDsc))
         {
@@ -1831,13 +1841,13 @@ void LinearScan::identifyCandidates()
                 dner = Compiler::DNER_IsStruct;
             }
 #endif // DEBUG
-            compiler->lvaSetVarDoNotEnregister(lclNum DEBUG_ARG(dner));
+            compiler->lvaSetVarDoNotEnregister(lclNum DEBUGARG(dner));
         }
         else if (varDsc->lvPinned)
         {
             varDsc->lvTracked  = 0;
 #ifdef JIT32_GCENCODER
-            compiler->lvaSetVarDoNotEnregister(lclNum DEBUG_ARG(Compiler::DNER_PinningRef));
+            compiler->lvaSetVarDoNotEnregister(lclNum DEBUGARG(Compiler::DNER_PinningRef));
 #endif // JIT32_GCENCODER
         }
 
@@ -1847,7 +1857,7 @@ void LinearScan::identifyCandidates()
         //
         if  (compiler->opts.MinOpts() && compiler->compHndBBtabCount > 0)
         {
-            compiler->lvaSetVarDoNotEnregister(lclNum DEBUG_ARG(Compiler::DNER_LiveInOutOfHandler));
+            compiler->lvaSetVarDoNotEnregister(lclNum DEBUGARG(Compiler::DNER_LiveInOutOfHandler));
             varDsc->lvLRACandidate = 0;
             continue;
         }
@@ -2234,12 +2244,7 @@ LinearScan::setLastUses(BasicBlock * block)
 
     VARSET_TP VARSET_INIT(compiler, temp, block->bbLiveOut);
 
-    // TODO: we are walking the RefPositions backwards, but refPositions.GetIndex() walks the
-    // list forwards (by chunks) to find the given index. This will be fast as long as the number
-    // of chunks is small. But it should be considered since technically it makes this loop O(N^2).
-
-    unsigned index = refPositionCount - 1;
-    RefPosition * currentRefPosition = refPositions.GetIndex(index);
+    auto currentRefPosition = refPositions.rbegin();
 
     while (currentRefPosition->refType != RefTypeBB)
     {
@@ -2290,9 +2295,8 @@ LinearScan::setLastUses(BasicBlock * block)
                 VarSetOps::RemoveElemD(compiler, temp, varIndex);
             }
         }
-        assert(index != 0);
-        index--;
-        currentRefPosition = refPositions.GetIndex(index);
+        assert(currentRefPosition != refPositions.rend());
+        ++currentRefPosition;
     }
 
 #ifdef DEBUG
@@ -2419,6 +2423,7 @@ LinearScan::getKillSetForNode(GenTree* tree)
                 killMask = compiler->compHelperCallKillSet(CORINFO_HELP_MEMCPY);
                 break;
 #ifdef _TARGET_AMD64_
+
             case GenTreeBlkOp::BlkOpKindRepInstr:
                 // rep movs kills RCX, RDI and RSI
                 killMask = RBM_RCX | RBM_RDI | RBM_RSI;
@@ -2473,19 +2478,7 @@ LinearScan::getKillSetForNode(GenTree* tree)
         }
         break;
     case GT_RETURNTRAP:
-        // if there is no FP used, we can ignore the FP kills
-        if (compiler->compFloatingPointUsed)
-        {
-            killMask = RBM_CALLEE_TRASH;
-        }
-        else
-        {
-            killMask = RBM_INT_CALLEE_TRASH;
-        }
-#if defined(_TARGET_AMD64_) || defined (_TARGET_ARM_)
-        // AMD (and ARM) helpers for this save the return value
-        killMask &= ~(RBM_INTRET | RBM_FLOATRET);
-#endif
+        killMask = compiler->compHelperCallKillSet(CORINFO_HELP_STOP_FOR_GC);
         break;
     case GT_CALL:
         // if there is no FP used, we can ignore the FP kills
@@ -2580,7 +2573,7 @@ LinearScan::buildKillPositionsForNode(GenTree*     tree,
         // CORINFO_HELP_ASSIGN_BYREF helper, which kills callee-saved RSI and RDI, if
         // LSRA doesn't assign RSI/RDI, they wouldn't get marked as modified until codegen,
         // which is too late.
-        compiler->codeGen->regSet.rsSetRegsModified(killMask DEBUG_ARG(dumpTerse));
+        compiler->codeGen->regSet.rsSetRegsModified(killMask DEBUGARG(dumpTerse));
 
         addRefsForPhysRegMask(killMask, currentLoc, RefTypeKill, true);
 
@@ -3451,7 +3444,7 @@ LinearScan::updateRegStateForArg(LclVarDsc* argDsc)
 //                                    the register locations will be "rotated" to stress the resolution and allocation code.
 
 BasicBlock*
-LinearScan::findPredBlockForLiveIn(BasicBlock* block, BasicBlock* prevBlock DEBUG_ARG(bool* pPredBlockIsAllocated))
+LinearScan::findPredBlockForLiveIn(BasicBlock* block, BasicBlock* prevBlock DEBUGARG(bool* pPredBlockIsAllocated))
 {
     BasicBlock* predBlock = nullptr;
 #ifdef DEBUG
@@ -3697,7 +3690,7 @@ LinearScan::buildIntervals()
         JITDUMP("\nNEW BLOCK BB%02u\n", block->bbNum);
 
         bool predBlockIsAllocated = false;
-        predBlock = findPredBlockForLiveIn(block, prevBlock DEBUG_ARG(&predBlockIsAllocated));
+        predBlock = findPredBlockForLiveIn(block, prevBlock DEBUGARG(&predBlockIsAllocated));
 
         if (block == compiler->fgFirstBB)
         {
@@ -4535,52 +4528,6 @@ LinearScan::tryAllocateFreeReg(Interval *currentInterval, RefPosition *refPositi
         singleReg = genRegNumFromMask(candidates);
         regOrder = &singleReg;
     }
-#if FEATURE_MULTIREG_ARGS
-#ifdef _TARGET_ARM64_
-    // Handle the 16-byte pass-by-value TYP_STRUCT for ARM64
-    if (regType == TYP_STRUCT)
-    {
-        // We currently use two consecutive registers:
-        //    to pass in argument registers or
-        //    to load and the store into the outgoing arg space
-
-        // TODO: revisit this and remove the limitation that we use two consecutive registers.
-
-        // Make sure that we have two consecutive registers available
-        regMaskTP lowRegBit  = genFindLowestBit(candidates);
-        regMaskTP nextRegBit = lowRegBit << 1;
-        regMaskTP regPairMask = (lowRegBit | nextRegBit);
-        
-        do {
-            // Are there two consecutive register bits available?
-            if ((candidates & regPairMask) == regPairMask)
-            {
-                // We use the same trick as above when regOrderSize, singleReg and regOrder are set 
-                regOrderSize = 1;
-                singleReg = genRegNumFromMask(lowRegBit);
-                regOrder = &singleReg;
-                break;
-            }
-            // setup the next register pair bit
-            lowRegBit  = nextRegBit;
-            nextRegBit = lowRegBit << 1;  // shift left by one bit
-            regPairMask = (lowRegBit | nextRegBit);
-
-        } while (nextRegBit != 0);  // If we shifted out all of the bits then nextRegBit will become zero
-        // Note that shifting out all of the bits is an error, and we catch it with the following noway_assert
-
-        // Make sure we took the break to exit the while loop            
-        noway_assert(singleReg != REG_NA);
-
-        // Unless we setup singleReg we have to issue an NYI error here
-        if (singleReg == REG_NA)
-        {
-            // Need support for MultiReg sized structs
-            NYI("Multireg struct - LinearScan::tryAllocateFreeReg");
-        }
-    }
-#endif  // _TARGET_ARM64_
-#endif // FEATURE_MULTIREG_ARGS
     
     for (unsigned i = 0; i < regOrderSize && (candidates != RBM_NONE); i++)
     {
@@ -4849,7 +4796,7 @@ LinearScan::allocateBusyReg(Interval *current, RefPosition *refPosition)
     RegRecord * farthestRefPhysRegRecord = nullptr;
     LsraLocation farthestLocation = MinLocation;
     LsraLocation refLocation = refPosition->nodeLocation;
-    FOREACH(regNum, Registers(regType))
+    for (regNumber regNum : Registers(regType))
     {
         regMaskTP candidateBit = genRegMask(regNum);
         if (!(candidates & candidateBit)) continue;
@@ -4897,7 +4844,12 @@ LinearScan::allocateBusyReg(Interval *current, RefPosition *refPosition)
         if (assignedInterval == nullptr)
         {
             RefPosition* nextPhysRegPosition = physRegRecord->getNextRefPosition();
+
+#ifndef _TARGET_ARM64_
+            // TODO-Cleanup: Revisit this after Issue #3524 is complete
+            // On ARM64 the nodeLocation is not always == refLocation, Disabling this assert for now.
             assert(nextPhysRegPosition->nodeLocation == refLocation && candidateBit != candidates);
+#endif
             continue;
         }
 
@@ -4974,7 +4926,6 @@ LinearScan::allocateBusyReg(Interval *current, RefPosition *refPosition)
             farthestRefPhysRegRecord = physRegRecord;
         }
     }
-    END_FOREACH
     assert(farthestRefPhysRegRecord != nullptr &&
            (farthestLocation > refLocation || refPosition->isFixedRegRef));
     foundReg = farthestRefPhysRegRecord->regNum;
@@ -5063,7 +5014,7 @@ void LinearScan::checkAndAssignInterval( RegRecord * regRec, Interval * interval
 void LinearScan::assignPhysReg( RegRecord * regRec, Interval * interval)
 {
     regMaskTP assignedRegMask = genRegMask(regRec->regNum);
-    compiler->codeGen->regSet.rsSetRegsModified(assignedRegMask DEBUG_ARG(dumpTerse));
+    compiler->codeGen->regSet.rsSetRegsModified(assignedRegMask DEBUGARG(dumpTerse));
 
     checkAndAssignInterval(regRec, interval);
     interval->assignedReg = regRec;
@@ -5077,22 +5028,6 @@ void LinearScan::assignPhysReg( RegRecord * regRec, Interval * interval)
         checkAndAssignInterval(nextRegRec, interval);
     }
 #endif // _TARGET_ARM_
-
-#if FEATURE_MULTIREG_ARGS_OR_RET
-#ifdef _TARGET_ARM64_
-    // Handle the 16-byte pass-by-value TYP_STRUCT for ARM64
-    if (interval->registerType == TYP_STRUCT)
-    {
-        // We use two consecutive registers:
-        //    to pass in argument registers or
-        //    to load and the store into the outgoing arg space
-        regNumber   nextRegNum = REG_NEXT(regRec->regNum);
-        RegRecord * nextRegRec = getRegisterRecord(nextRegNum);
-
-        checkAndAssignInterval(nextRegRec, interval);
-    }
-#endif //  _TARGET_ARM64_
-#endif // FEATURE_MULTIREG_ARGS_OR_RET
 
     interval->physReg = regRec->regNum;
     interval->isActive = true;
@@ -5253,23 +5188,6 @@ void LinearScan::unassignPhysReg( RegRecord * regRec, RefPosition* spillRefPosit
         checkAndClearInterval(nextRegRec, spillRefPosition);
     }
 #endif // _TARGET_ARM_
-
-#if FEATURE_MULTIREG_ARGS_OR_RET
-#ifdef _TARGET_ARM64_
-    // Handle the 16-byte pass-by-value TYP_STRUCT for ARM64
-    if (assignedInterval->registerType == TYP_STRUCT)
-    {
-
-        // We use two consecutive registers:
-        //    to pass in argument registers or
-        //    to load and the store into the outgoing arg space
-
-        regNumber   nextRegNum = REG_NEXT(regRec->regNum);
-        RegRecord * nextRegRec = getRegisterRecord(nextRegNum);
-        checkAndClearInterval(nextRegRec, spillRefPosition);
-    }
-#endif //  _TARGET_ARM64_
-#endif // FEATURE_MULTIREG_ARGS_OR_RET
 
 #ifdef DEBUG
     if (VERBOSE && !dumpTerse)
@@ -5774,11 +5692,10 @@ LinearScan::dumpRefPositions(const char *str)
     printf("------------\n");
     printf("REFPOSITIONS %s: \n", str);
     printf("------------\n");
-    FOREACH(refPos, refPositions)
+    for (auto& refPos : refPositions)
     {
-        refPos->dump();
+        refPos.dump();
     }
-    END_FOREACH
 }
 #endif // DEBUG
 
@@ -5872,9 +5789,11 @@ LinearScan::allocateRegisters()
     JITDUMP("*************** In LinearScan::allocateRegisters()\n");
     DBEXEC(VERBOSE, lsraDumpIntervals("before allocateRegisters"));
 
+
     // at start, nothing is active except for register args
-    FOREACH(currentInterval, intervals)
+    for (auto& interval : intervals)
     {
+        Interval* currentInterval = &interval;
         currentInterval->recentRefPosition = nullptr;
         currentInterval->isActive = false;
         if (currentInterval->isLocalVar)
@@ -5886,7 +5805,7 @@ LinearScan::allocateRegisters()
             }
         }
     }
-    END_FOREACH
+
     for (regNumber reg = REG_FIRST; reg < ACTUAL_REG_COUNT; reg = REG_NEXT(reg))
     {
         getRegisterRecord(reg)->recentRefPosition = nullptr;
@@ -5924,8 +5843,10 @@ LinearScan::allocateRegisters()
 
     bool handledBlockEnd = false;
 
-    FOREACH(currentRefPosition, refPositions)
+    for (auto& refPosition : refPositions)
     {
+        RefPosition* currentRefPosition = &refPosition;
+
 #ifdef DEBUG
         // Set the activeRefPosition to null until we're done with any boundary handling.
         activeRefPosition = nullptr;
@@ -6103,6 +6024,7 @@ LinearScan::allocateRegisters()
 
             // Identify the special cases where we decide up-front not to allocate
             bool allocate = true;
+            bool didDump = false;
 
             if (refType == RefTypeParamDef || refType == RefTypeZeroInit)
             {
@@ -6114,6 +6036,7 @@ LinearScan::allocateRegisters()
                 if (refType == RefTypeParamDef && varDsc->lvRefCntWtd <= BB_UNITY_WEIGHT)
                 {
                     INDEBUG(dumpLsraAllocationEvent(LSRA_EVENT_NO_ENTRY_REG_ALLOCATED, currentInterval));
+                    didDump = true;
                     allocate = false;
                 }
                 // If it has no actual references, mark it as "lastUse"; since they're not actually part
@@ -6142,9 +6065,10 @@ LinearScan::allocateRegisters()
                 {
                     unassignPhysReg(getRegisterRecord(assignedRegister), currentRefPosition);
                 }
-                else
+                else if (!didDump)
                 {
                     INDEBUG(dumpLsraAllocationEvent(LSRA_EVENT_NO_REG_ALLOCATED, currentInterval));
+                    didDump = true;
                 }
                 currentRefPosition->registerAssignment = RBM_NONE;
                 continue;
@@ -6523,7 +6447,6 @@ LinearScan::allocateRegisters()
             lastAllocatedRefPosition = currentRefPosition;
         }
     }
-    END_FOREACH
 
     // Free registers to clear associated intervals for resolution phase
 #ifdef DEBUG
@@ -6567,15 +6490,14 @@ LinearScan::allocateRegisters()
         // provide a Reset function (!) - we'll probably replace this so don't bother
         // adding it
     
-        FOREACH(interval, intervals)
+        for (auto& interval : intervals)
         {
-            if (interval->isActive)
+            if (interval.isActive)
             {
                 printf("Active ");
-                interval->dump();
+                interval.dump();
             }
         }
-        END_FOREACH
 
         printf("\n");
     }
@@ -7213,14 +7135,12 @@ LinearScan::resolveRegisters()
     }
 
     // handle incoming arguments and special temps
-    auto iter = refPositions.begin();
-    RefPosition * currentRefPosition;
+    auto currentRefPosition = refPositions.begin();
 
     VarToRegMap entryVarToRegMap = inVarToRegMaps[compiler->fgFirstBB->bbNum];
-    while (iter != refPositions.end() &&
-           ((*iter)->refType == RefTypeParamDef || (*iter)->refType == RefTypeZeroInit))
+    while (currentRefPosition != refPositions.end() &&
+           (currentRefPosition->refType == RefTypeParamDef || currentRefPosition->refType == RefTypeZeroInit))
     {
-        currentRefPosition = *iter;
         Interval * interval = currentRefPosition->getInterval();
         assert(interval != nullptr && interval->isLocalVar);
         resolveLocalRef(nullptr, currentRefPosition);
@@ -7237,10 +7157,8 @@ LinearScan::resolveRegisters()
             interval->isActive = false;
         }
         entryVarToRegMap[varIndex] = reg;
-        iter++;
+        ++currentRefPosition;
     }
-    currentRefPosition = *iter;
-    iter++;
 
     JITDUMP("------------------------\n");
     JITDUMP("WRITING BACK ASSIGNMENTS\n");
@@ -7275,8 +7193,8 @@ LinearScan::resolveRegisters()
 
         // Handle the DummyDefs, updating the incoming var location.
         for ( ;
-              currentRefPosition != nullptr && currentRefPosition->refType == RefTypeDummyDef;
-              currentRefPosition = *iter,iter++)
+              currentRefPosition != refPositions.end() && currentRefPosition->refType == RefTypeDummyDef;
+              ++currentRefPosition)
         {
             assert(currentRefPosition->isIntervalRef());
             // Don't mark dummy defs as reload
@@ -7296,15 +7214,14 @@ LinearScan::resolveRegisters()
         }
 
         // The next RefPosition should be for the block.  Move past it.
-        assert(currentRefPosition != nullptr);
+        assert(currentRefPosition != refPositions.end());
         assert(currentRefPosition->refType == RefTypeBB);
-        currentRefPosition = *iter;
-        iter++;
+        ++currentRefPosition;
 
         // Handle the RefPositions for the block
         for ( ;
-              currentRefPosition != nullptr && currentRefPosition->refType != RefTypeBB && currentRefPosition->refType != RefTypeDummyDef;
-              currentRefPosition = *iter,iter++)
+              currentRefPosition != refPositions.end() && currentRefPosition->refType != RefTypeBB && currentRefPosition->refType != RefTypeDummyDef;
+              ++currentRefPosition)
         {
             currentLocation = currentRefPosition->nodeLocation;
             JITDUMP("current : ");
@@ -8712,7 +8629,7 @@ LinearScan::resolveEdge(BasicBlock*      fromBlock,
                     {
                         // Spill "targetReg" to the stack and add its eventual target (otherTargetReg)
                         // to "targetRegsFromStack", which will be handled below.
-                        // NOTE: This condition is very rare.  Setting COMPLUS_JitStressRegs=0x203
+                        // NOTE: This condition is very rare.  Setting COMPlus_JitStressRegs=0x203
                         // has been known to trigger it in JIT SH.
 
                         // First, spill "otherInterval" from targetReg to the stack.
@@ -8732,7 +8649,7 @@ LinearScan::resolveEdge(BasicBlock*      fromBlock,
                 }
                 else
                 {
-                    compiler->codeGen->regSet.rsSetRegsModified(genRegMask(tempReg) DEBUG_ARG(dumpTerse));
+                    compiler->codeGen->regSet.rsSetRegsModified(genRegMask(tempReg) DEBUGARG(dumpTerse));
                     assert(sourceIntervals[targetReg] != nullptr);
                     addResolution(block, insertionPoint, sourceIntervals[targetReg], tempReg, targetReg);
                     JITDUMP(" (%s)\n", resolveTypeName[resolveType]);
@@ -8978,13 +8895,12 @@ LinearScan::lsraDumpIntervals(const char* msg)
     Interval          * interval;
 
     printf("\nLinear scan intervals %s:\n", msg);
-    FOREACH(interval, intervals)
+    for (auto& interval : intervals)
     {
         // only dump something if it has references
         //if (interval->firstRefPosition)
-            interval->dump();
+            interval.dump();
     }
-    END_FOREACH
 
     printf("\n");
 }
@@ -9006,7 +8922,7 @@ LinearScan::lsraGetOperandString(GenTreePtr tree, LsraTupleDumpMode mode, char *
         break;
     case LinearScan::LSRA_DUMP_POST:
         {
-            Compiler *compiler = GetTlsCompiler();
+            Compiler *compiler = JitTls::GetCompiler();
 
             if (!tree->gtHasReg())
             {
@@ -9026,7 +8942,7 @@ LinearScan::lsraGetOperandString(GenTreePtr tree, LsraTupleDumpMode mode, char *
 void
 LinearScan::lsraDispNode(GenTreePtr tree, LsraTupleDumpMode mode, bool hasDest)
 {
-    Compiler*         compiler = GetTlsCompiler();
+    Compiler*         compiler = JitTls::GetCompiler();
     const unsigned    operandStringLength = 16;
     char              operandString[operandStringLength];
     const char*       emptyDestOperand = "               ";
@@ -9123,8 +9039,7 @@ void LinearScan::TupleStyleDump(LsraTupleDumpMode mode)
     // currentRefPosition is not used for LSRA_DUMP_PRE
     // We keep separate iterators for defs, so that we can print them
     // on the lhs of the dump
-    RefPosition * currentRefPosition = nullptr;
-    auto iter = refPositions.begin();
+    auto currentRefPosition = refPositions.begin();
 
     switch (mode)
     {
@@ -9145,9 +9060,9 @@ void LinearScan::TupleStyleDump(LsraTupleDumpMode mode)
     if (mode != LSRA_DUMP_PRE)
     {
         printf ("Incoming Parameters: ");
-        for ( currentRefPosition = *iter,iter++;
-              currentRefPosition != nullptr && currentRefPosition->refType != RefTypeBB;
-              currentRefPosition = *iter,iter++)
+        for ( ;
+              currentRefPosition != refPositions.end() && currentRefPosition->refType != RefTypeBB;
+              ++currentRefPosition)
         {
             Interval* interval = currentRefPosition->getInterval();
             assert(interval != nullptr && interval->isLocalVar);
@@ -9185,11 +9100,11 @@ void LinearScan::TupleStyleDump(LsraTupleDumpMode mode)
             bool printedBlockHeader = false;
             // We should find the boundary RefPositions in the order of exposed uses, dummy defs, and the blocks
             for ( ;
-                  currentRefPosition != nullptr &&
+                  currentRefPosition != refPositions.end() &&
                   (currentRefPosition->refType == RefTypeExpUse   ||
                    currentRefPosition->refType == RefTypeDummyDef ||
                    (currentRefPosition->refType == RefTypeBB && !printedBlockHeader));
-                  currentRefPosition = *iter,iter++)
+                  ++currentRefPosition)
             {
                 Interval * interval = nullptr;
                 if (currentRefPosition->isIntervalRef()) interval = currentRefPosition->getInterval();
@@ -9330,14 +9245,14 @@ void LinearScan::TupleStyleDump(LsraTupleDumpMode mode)
                     bool killPrinted = false;
                     RefPosition * lastFixedRegRefPos = nullptr;
                     for ( ;
-                          currentRefPosition != nullptr &&
+                          currentRefPosition != refPositions.end() &&
                           (currentRefPosition->refType == RefTypeUse      ||
                            currentRefPosition->refType == RefTypeFixedReg ||
                            currentRefPosition->refType == RefTypeKill ||
                            currentRefPosition->refType == RefTypeDef) &&
                           (currentRefPosition->nodeLocation == tree->gtSeqNum ||
                            currentRefPosition->nodeLocation == tree->gtSeqNum+1);
-                          currentRefPosition = *iter,iter++)
+                          ++currentRefPosition)
                     {
                         Interval * interval = nullptr;
                         if (currentRefPosition->isIntervalRef())
@@ -10140,12 +10055,12 @@ LinearScan::verifyFinalAllocation()
         RegRecord * physRegRecord = getRegisterRecord(reg);
         physRegRecord->assignedInterval = nullptr;
     }
-    FOREACH(interval, intervals)
+
+    for (auto& interval : intervals)
     {
-        interval->assignedReg = nullptr;
-        interval->physReg = REG_NA;
+        interval.assignedReg = nullptr;
+        interval.physReg = REG_NA;
     }
-    END_FOREACH
 
     DBEXEC(VERBOSE, dumpRegRecordTitle());
 
@@ -10154,8 +10069,9 @@ LinearScan::verifyFinalAllocation()
     regMaskTP regsToFree = RBM_NONE;
     regMaskTP delayRegsToFree = RBM_NONE;
     LsraLocation currentLocation = MinLocation;
-    FOREACH(currentRefPosition, refPositions)
+    for (auto& refPosition : refPositions)
     {
+        RefPosition* currentRefPosition = &refPosition;
         Interval* interval = nullptr;
         RegRecord* regRecord = nullptr;
         regNumber regNum = REG_NA;
@@ -10464,7 +10380,6 @@ LinearScan::verifyFinalAllocation()
             }
         }
     }
-    END_FOREACH
 
     // Now, verify the resolution blocks.
     // Currently these are nearly always at the end of the method, but that may not alwyas be the case.

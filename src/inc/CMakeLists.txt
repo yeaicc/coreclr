@@ -67,19 +67,21 @@ add_compile_options(-fPIC)
 endif(WIN32)
 
 # Compile *_i.c to lib
-add_library(corguids ${CORGUIDS_SOURCES})
+_add_library(corguids ${CORGUIDS_SOURCES})
 
 # Binplace the inc files for packaging later.
 
-install (FILES cfi.h
+_install (FILES cfi.h
                cor.h
                cordebuginfo.h
+               coredistools.h
                corhdr.h
                corinfo.h
                corjit.h
+               corjithost.h
                opcode.def
                openum.h
                gcinfoencoder.h
                gcinfotypes.h
                DESTINATION inc)
-install (TARGETS corguids DESTINATION lib)
+_install (TARGETS corguids DESTINATION lib)

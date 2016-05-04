@@ -26,10 +26,13 @@
     </CodeAnalysisDependentAssemblyPaths>
   </ItemGroup>
   <PropertyGroup>
-    
+    <DebugType>PdbOnly</DebugType>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="sizeof-ia64.il" />
+    <Compile Condition="'$(BuildArch)' ==   'x64'" Include="sizeof-ia64.il" />
+    <Compile Condition="'$(BuildArch)' == 'arm64'" Include="sizeof-ia64.il" />
+    <Compile Condition="'$(BuildArch)' ==   'x86'" Include="sizeof-i386.il" />
+    <Compile Condition="'$(BuildArch)' ==   'arm'" Include="sizeof-i386.il" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />

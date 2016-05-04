@@ -246,7 +246,7 @@ void CodeGen::genPrologSaveRegPair(regNumber reg1,
 }
 
 //------------------------------------------------------------------------
-// genPrologSaveRegPair: Like genPrologSaveRegPair, but for a single register. Save a single general-purpose or floating-point/SIMD register
+// genPrologSaveReg: Like genPrologSaveRegPair, but for a single register. Save a single general-purpose or floating-point/SIMD register
 // in a function or funclet prolog. Note that if we wish to change SP (i.e., spDelta != 0), then spOffset must be 8. This is because
 // otherwise we would create an alignment hole above the saved register, not below it, which we currently don't support. This restriction
 // could be loosened if the callers change to handle it (and this function changes to support using pre-indexed STR addressing).
@@ -275,11 +275,6 @@ void CodeGen::genPrologSaveReg(regNumber reg1,
 
     if (spDelta != 0)
     {
-        // If saving a single callee-save register, and we need to change SP, the offset cannot be zero. It must be 8 to account
-        // for alignment.
-        assert(spOffset != 0);
-        assert(spOffset == REGSIZE_BYTES);
-
         // generate sub SP,SP,imm
         genStackPointerAdjustment(spDelta, tmpReg, pTmpRegIsZero);
     }
@@ -377,8 +372,6 @@ void CodeGen::genEpilogRestoreReg(regNumber reg1,
 
     if (spDelta != 0)
     {
-        assert(spOffset != 0);
-
         // generate add SP,SP,imm
         genStackPointerAdjustment(spDelta, tmpReg, pTmpRegIsZero);
     }
@@ -416,13 +409,19 @@ void CodeGen::genSaveCalleeSavedRegistersHelp(regMaskTP   regsToSaveMask,
                                               int         lowestCalleeSavedOffset,
                                               int         spDelta)
 {
+    assert(spDelta <= 0);
     unsigned regsToSaveCount = genCountBits(regsToSaveMask);
     if (regsToSaveCount == 0)
     {
+        if (spDelta != 0)
+        {
+            // Currently this is the case for varargs only
+            // whose size is MAX_REG_ARG * REGSIZE_BYTES = 64 bytes.
+            genStackPointerAdjustment(spDelta, REG_NA, nullptr);
+        }
         return;
     }
 
-    assert(spDelta <= 0);
     assert((spDelta % 16) == 0);
     assert((regsToSaveMask & RBM_FP) == 0); // we never save FP here
     assert(regsToSaveCount <= genCountBits(RBM_CALLEE_SAVED | RBM_LR)); // We also save LR, even though it is not in RBM_CALLEE_SAVED.
@@ -432,107 +431,116 @@ void CodeGen::genSaveCalleeSavedRegistersHelp(regMaskTP   regsToSaveMask,
 
     int spOffset = lowestCalleeSavedOffset; // this is the offset *after* we change SP.
 
-    if (maskSaveRegsInt != RBM_NONE)
+    unsigned intRegsToSaveCount = genCountBits(maskSaveRegsInt);
+    unsigned floatRegsToSaveCount = genCountBits(maskSaveRegsFloat);
+    bool isPairSave = false;
+#ifdef DEBUG
+    bool isRegsToSaveCountOdd = ((intRegsToSaveCount + floatRegsToSaveCount) % 2 != 0);
+#endif
+
+    // Save the integer registers
+
+    bool lastSavedWasPair = false;
+
+    while (maskSaveRegsInt != RBM_NONE)
     {
-        // Save the integer registers
+        // If this is the first store that needs to change SP (spDelta != 0),
+        // then the offset must be 8 to account for alignment for the odd count
+        // or it must be 0 for the even count.
+        assert((spDelta == 0) ||
+               (isRegsToSaveCountOdd && spOffset == REGSIZE_BYTES) ||
+               (!isRegsToSaveCountOdd && spOffset == 0));
 
-        unsigned intRegsToSaveCount = genCountBits(maskSaveRegsInt);
-        bool lastSavedWasPair = false;
+        isPairSave = (intRegsToSaveCount >= 2);
+        regMaskTP reg1Mask = genFindLowestBit(maskSaveRegsInt);
+        regNumber reg1 = genRegNumFromMask(reg1Mask);
+        maskSaveRegsInt &= ~reg1Mask;
+        intRegsToSaveCount -= 1;
 
-        while (maskSaveRegsInt != RBM_NONE)
+        if (isPairSave)
         {
-            regMaskTP reg1Mask = genFindLowestBit(maskSaveRegsInt);
-            regNumber reg1 = genRegNumFromMask(reg1Mask);
-            maskSaveRegsInt &= ~reg1Mask;
+            // We can use a STP instruction.
 
-            if (intRegsToSaveCount >= 2)
-            {
-                // We can use a STP instruction.
+            regMaskTP reg2Mask = genFindLowestBit(maskSaveRegsInt);
+            regNumber reg2 = genRegNumFromMask(reg2Mask);
+            assert((reg2 == REG_NEXT(reg1)) || (reg2 == REG_LR));
+            maskSaveRegsInt &= ~reg2Mask;
+            intRegsToSaveCount -= 1;
 
-                regMaskTP reg2Mask = genFindLowestBit(maskSaveRegsInt);
-                regNumber reg2 = genRegNumFromMask(reg2Mask);
-                assert((reg2 == REG_NEXT(reg1)) || (reg2 == REG_LR));
-                maskSaveRegsInt &= ~reg2Mask;
+            genPrologSaveRegPair(reg1, reg2, spOffset, spDelta, lastSavedWasPair, REG_IP0, nullptr);
 
-                genPrologSaveRegPair(reg1, reg2, spOffset, spDelta, lastSavedWasPair, REG_IP0, nullptr);
+            // TODO-ARM64-CQ: this code works in the prolog, but it's a bit weird to think about "next" when generating this epilog, to
+            // get the codes to match. Turn this off until that is better understood.
+            // lastSavedWasPair = true;
 
-                // TODO-ARM64-CQ: this code works in the prolog, but it's a bit weird to think about "next" when generating this epilog, to
-                // get the codes to match. Turn this off until that is better understood.
-                // lastSavedWasPair = true;
+            spOffset += 2 * REGSIZE_BYTES;
+         }
+        else
+        {
+            // No register pair; we use a STR instruction.
 
-                intRegsToSaveCount -= 2;
-                spOffset += 2 * REGSIZE_BYTES;
-            }
-            else
-            {
-                // No register pair; we use a STR instruction.
+            genPrologSaveReg(reg1, spOffset, spDelta, REG_IP0, nullptr);
 
-                assert(intRegsToSaveCount == 1); // this will be the last store we do
-
-                genPrologSaveReg(reg1, spOffset, spDelta, REG_IP0, nullptr);
-
-                lastSavedWasPair = false;
-
-                intRegsToSaveCount -= 1;
-                spOffset += REGSIZE_BYTES;
-            }
-
-            spDelta = 0; // We've now changed SP already, if necessary; don't do it again.
+            lastSavedWasPair = false;
+            spOffset += REGSIZE_BYTES;
         }
 
-        assert(intRegsToSaveCount == 0);
+        spDelta = 0; // We've now changed SP already, if necessary; don't do it again.
     }
 
-    if (maskSaveRegsFloat != RBM_NONE)
+    assert(intRegsToSaveCount == 0);
+
+    // Save the floating-point/SIMD registers
+
+    lastSavedWasPair = false;
+
+    while (maskSaveRegsFloat != RBM_NONE)
     {
-        // Save the floating-point/SIMD registers
+        // If this is the first store that needs to change SP (spDelta != 0),
+        // then the offset must be 8 to account for alignment for the odd count
+        // or it must be 0 for the even count.
+        assert((spDelta == 0) ||
+               (isRegsToSaveCountOdd && spOffset == REGSIZE_BYTES) ||
+               (!isRegsToSaveCountOdd && spOffset == 0));
 
-        unsigned floatRegsToSaveCount = genCountBits(maskSaveRegsFloat);
-        bool lastSavedWasPair = false;
+        isPairSave = (floatRegsToSaveCount >= 2);
+        regMaskTP reg1Mask = genFindLowestBit(maskSaveRegsFloat);
+        regNumber reg1 = genRegNumFromMask(reg1Mask);
+        maskSaveRegsFloat &= ~reg1Mask;
+        floatRegsToSaveCount -= 1;
 
-        while (maskSaveRegsFloat != RBM_NONE)
+        if (isPairSave)
         {
-            regMaskTP reg1Mask = genFindLowestBit(maskSaveRegsFloat);
-            regNumber reg1 = genRegNumFromMask(reg1Mask);
-            maskSaveRegsFloat &= ~reg1Mask;
+            // We can use a STP instruction.
 
-            if (floatRegsToSaveCount >= 2)
-            {
-                // We can use a STP instruction.
+            regMaskTP reg2Mask = genFindLowestBit(maskSaveRegsFloat);
+            regNumber reg2 = genRegNumFromMask(reg2Mask);
+            assert(reg2 == REG_NEXT(reg1));
+            maskSaveRegsFloat &= ~reg2Mask;
+            floatRegsToSaveCount -= 1;
 
-                regMaskTP reg2Mask = genFindLowestBit(maskSaveRegsFloat);
-                regNumber reg2 = genRegNumFromMask(reg2Mask);
-                assert(reg2 == REG_NEXT(reg1));
-                maskSaveRegsFloat &= ~reg2Mask;
+            genPrologSaveRegPair(reg1, reg2, spOffset, spDelta, lastSavedWasPair, REG_IP0, nullptr);
 
-                genPrologSaveRegPair(reg1, reg2, spOffset, spDelta, lastSavedWasPair, REG_IP0, nullptr);
+            // TODO-ARM64-CQ: this code works in the prolog, but it's a bit weird to think about "next" when generating this epilog, to
+            // get the codes to match. Turn this off until that is better understood.
+            // lastSavedWasPair = true;
 
-                // TODO-ARM64-CQ: this code works in the prolog, but it's a bit weird to think about "next" when generating this epilog, to
-                // get the codes to match. Turn this off until that is better understood.
-                // lastSavedWasPair = true;
+            spOffset += 2 * FPSAVE_REGSIZE_BYTES;
+        }
+        else
+        {
+            // No register pair; we use a STR instruction.
 
-                floatRegsToSaveCount -= 2;
-                spOffset += 2 * FPSAVE_REGSIZE_BYTES;
-            }
-            else
-            {
-                // No register pair; we use a STR instruction.
+            genPrologSaveReg(reg1, spOffset, spDelta, REG_IP0, nullptr);
 
-                assert(floatRegsToSaveCount == 1);
-
-                genPrologSaveReg(reg1, spOffset, spDelta, REG_IP0, nullptr);
-
-                lastSavedWasPair = false;
-
-                floatRegsToSaveCount -= 1;
-                spOffset += FPSAVE_REGSIZE_BYTES;
-            }
-
-            spDelta = 0; // We've now changed SP already, if necessary; don't do it again.
+            lastSavedWasPair = false;
+            spOffset += FPSAVE_REGSIZE_BYTES;
         }
 
-        assert(floatRegsToSaveCount == 0);
+        spDelta = 0; // We've now changed SP already, if necessary; don't do it again.
     }
+
+    assert(floatRegsToSaveCount == 0);
 }
 
 
@@ -570,13 +578,19 @@ void CodeGen::genRestoreCalleeSavedRegistersHelp(regMaskTP   regsToRestoreMask,
                                                  int         lowestCalleeSavedOffset,
                                                  int         spDelta)
 {
+    assert(spDelta >= 0);
     unsigned regsToRestoreCount = genCountBits(regsToRestoreMask);
     if (regsToRestoreCount == 0)
     {
+        if (spDelta != 0)
+        {
+            // Currently this is the case for varargs only
+            // whose size is MAX_REG_ARG * REGSIZE_BYTES = 64 bytes.
+            genStackPointerAdjustment(spDelta, REG_NA, nullptr);
+        }
         return;
     }
 
-    assert(spDelta >= 0);
     assert((spDelta % 16) == 0);
     assert((regsToRestoreMask & RBM_FP) == 0); // we never restore FP here
     assert(regsToRestoreCount <= genCountBits(RBM_CALLEE_SAVED | RBM_LR)); // We also save LR, even though it is not in RBM_CALLEE_SAVED.
@@ -587,108 +601,120 @@ void CodeGen::genRestoreCalleeSavedRegistersHelp(regMaskTP   regsToRestoreMask,
     assert(REGSIZE_BYTES == FPSAVE_REGSIZE_BYTES);
     int spOffset = lowestCalleeSavedOffset + regsToRestoreCount * REGSIZE_BYTES;    // Point past the end, to start. We predecrement to find the offset to load from.
 
+    unsigned floatRegsToRestoreCount = genCountBits(maskRestoreRegsFloat);
+    unsigned intRegsToRestoreCount = genCountBits(maskRestoreRegsInt);
+    int stackDelta = 0;
+    bool isPairRestore = false;
+    bool thisIsTheLastRestoreInstruction = false;
+#ifdef DEBUG
+    bool isRegsToRestoreCountOdd = ((floatRegsToRestoreCount + intRegsToRestoreCount) % 2 != 0);
+#endif
+
     // We want to restore in the opposite order we saved, so the unwind codes match. Be careful to handle odd numbers of
     // callee-saved registers properly.
 
-    if (maskRestoreRegsFloat != RBM_NONE)
+
+    // Restore the floating-point/SIMD registers
+
+    while (maskRestoreRegsFloat != RBM_NONE)
     {
-        // Restore the floating-point/SIMD registers
+        thisIsTheLastRestoreInstruction = (floatRegsToRestoreCount <= 2) && (maskRestoreRegsInt == RBM_NONE);
+        isPairRestore = (floatRegsToRestoreCount % 2) == 0;
 
-        unsigned floatRegsToRestoreCount = genCountBits(maskRestoreRegsFloat);
-
-        while (maskRestoreRegsFloat != RBM_NONE)
+        // Update stack delta only if it is the last restore (the first save).
+        if (thisIsTheLastRestoreInstruction)
         {
-            if ((floatRegsToRestoreCount % 2) == 0)
-            {
-                assert(floatRegsToRestoreCount >= 2);
-
-                regMaskTP reg2Mask = genFindHighestBit(maskRestoreRegsFloat);
-                regNumber reg2 = genRegNumFromMask(reg2Mask);
-                maskRestoreRegsFloat &= ~reg2Mask;
-
-                regMaskTP reg1Mask = genFindHighestBit(maskRestoreRegsFloat);
-                regNumber reg1 = genRegNumFromMask(reg1Mask);
-                maskRestoreRegsFloat &= ~reg1Mask;
-
-                spOffset -= 2 * FPSAVE_REGSIZE_BYTES;
-
-                // Is this the last restore instruction? And have we've been told to adjust SP?
-                bool thisIsTheLastRestoreInstruction = (floatRegsToRestoreCount == 2) && (maskRestoreRegsInt == RBM_NONE);
-                genEpilogRestoreRegPair(reg1, reg2, spOffset, thisIsTheLastRestoreInstruction ? spDelta : 0, REG_IP0, nullptr);
-
-                floatRegsToRestoreCount -= 2;
-            }
-            else
-            {
-                // We do the odd register first when restoring, last when saving.
-                assert((floatRegsToRestoreCount % 2) == 1);
-
-                regMaskTP reg1Mask = genFindHighestBit(maskRestoreRegsFloat);
-                regNumber reg1 = genRegNumFromMask(reg1Mask);
-                maskRestoreRegsFloat &= ~reg1Mask;
-
-                spOffset -= FPSAVE_REGSIZE_BYTES;
-
-                // Is this the last restore instruction? And have we've been told to adjust SP?
-                bool thisIsTheLastRestoreInstruction = (floatRegsToRestoreCount == 1) && (maskRestoreRegsInt == RBM_NONE);
-                genEpilogRestoreReg(reg1, spOffset, thisIsTheLastRestoreInstruction ? spDelta : 0, REG_IP0, nullptr);
-
-                floatRegsToRestoreCount -= 1;
-            }
+            assert(stackDelta == 0);
+            stackDelta = spDelta;
         }
 
-        assert(floatRegsToRestoreCount == 0);
-    }
-
-    if (maskRestoreRegsInt != RBM_NONE)
-    {
-        // Restore the integer registers
-
-        unsigned intRegsToRestoreCount = genCountBits(maskRestoreRegsInt);
-
-        while (maskRestoreRegsInt != RBM_NONE)
+        // Update stack offset.
+        if (isPairRestore)
         {
-            if ((intRegsToRestoreCount % 2) == 0)
-            {
-                assert(intRegsToRestoreCount >= 2);
-
-                regMaskTP reg2Mask = genFindHighestBit(maskRestoreRegsInt);
-                regNumber reg2 = genRegNumFromMask(reg2Mask);
-                maskRestoreRegsInt &= ~reg2Mask;
-
-                regMaskTP reg1Mask = genFindHighestBit(maskRestoreRegsInt);
-                regNumber reg1 = genRegNumFromMask(reg1Mask);
-                maskRestoreRegsInt &= ~reg1Mask;
-
-                spOffset -= 2 * REGSIZE_BYTES;
-
-                // Is this the last restore instruction? And have we've been told to adjust SP?
-                bool thisIsTheLastRestoreInstruction = (intRegsToRestoreCount == 2);
-                genEpilogRestoreRegPair(reg1, reg2, spOffset, thisIsTheLastRestoreInstruction ? spDelta : 0, REG_IP0, nullptr);
-
-                intRegsToRestoreCount -= 2;
-            }
-            else
-            {
-                // We do the odd register first when restoring, last when saving.
-                assert((intRegsToRestoreCount % 2) == 1);
-
-                regMaskTP reg1Mask = genFindHighestBit(maskRestoreRegsInt);
-                regNumber reg1 = genRegNumFromMask(reg1Mask);
-                maskRestoreRegsInt &= ~reg1Mask;
-
-                spOffset -= REGSIZE_BYTES;
-
-                // Is this the last restore instruction? And have we've been told to adjust SP?
-                bool thisIsTheLastRestoreInstruction = (intRegsToRestoreCount == 1);
-                genEpilogRestoreReg(reg1, spOffset, thisIsTheLastRestoreInstruction ? spDelta : 0, REG_IP0, nullptr);
-
-                intRegsToRestoreCount -= 1;
-            }
+            spOffset -= 2 * FPSAVE_REGSIZE_BYTES;
+        }
+        else
+        {
+            spOffset -= FPSAVE_REGSIZE_BYTES;
         }
 
-        assert(intRegsToRestoreCount == 0);
+        // If this is the last restore (the first save) that needs to change SP (stackDelta != 0),
+        // then the offset must be 8 to account for alignment for the odd count
+        // or it must be 0 for the even count.
+        assert((stackDelta == 0) ||
+               (isRegsToRestoreCountOdd && spOffset == FPSAVE_REGSIZE_BYTES) ||
+               (!isRegsToRestoreCountOdd && spOffset == 0));
+
+        regMaskTP reg2Mask = genFindHighestBit(maskRestoreRegsFloat);
+        regNumber reg2 = genRegNumFromMask(reg2Mask);
+        maskRestoreRegsFloat &= ~reg2Mask;
+        floatRegsToRestoreCount -= 1;
+
+        if (isPairRestore)
+        {
+            regMaskTP reg1Mask = genFindHighestBit(maskRestoreRegsFloat);
+            regNumber reg1 = genRegNumFromMask(reg1Mask);
+            maskRestoreRegsFloat &= ~reg1Mask;
+            floatRegsToRestoreCount -= 1;
+
+            genEpilogRestoreRegPair(reg1, reg2, spOffset, stackDelta, REG_IP0, nullptr);
+        }
+        else
+        {
+            genEpilogRestoreReg(reg2, spOffset, stackDelta, REG_IP0, nullptr);
+        }
     }
+
+    assert(floatRegsToRestoreCount == 0);
+
+    // Restore the integer registers
+
+    while (maskRestoreRegsInt != RBM_NONE)
+    {
+        thisIsTheLastRestoreInstruction = (intRegsToRestoreCount <= 2);
+        isPairRestore = (intRegsToRestoreCount % 2) == 0;
+
+        // Update stack delta only if it is the last restore (the first save).
+        if (thisIsTheLastRestoreInstruction)
+        {
+            assert(stackDelta == 0);
+            stackDelta = spDelta;
+        }
+
+        // Update stack offset.
+        spOffset -= REGSIZE_BYTES;
+        if (isPairRestore)
+        {
+            spOffset -= REGSIZE_BYTES;
+        }
+
+        // If this is the last restore (the first save) that needs to change SP (stackDelta != 0),
+        // then the offset must be 8 to account for alignment for the odd count
+        // or it must be 0 for the even count.
+        assert((stackDelta == 0) || (isRegsToRestoreCountOdd && spOffset == REGSIZE_BYTES)
+            || (!isRegsToRestoreCountOdd && spOffset == 0));
+
+        regMaskTP reg2Mask = genFindHighestBit(maskRestoreRegsInt);
+        regNumber reg2 = genRegNumFromMask(reg2Mask);
+        maskRestoreRegsInt &= ~reg2Mask;
+        intRegsToRestoreCount -= 1;
+
+        if (isPairRestore)
+        {
+            regMaskTP reg1Mask = genFindHighestBit(maskRestoreRegsInt);
+            regNumber reg1 = genRegNumFromMask(reg1Mask);
+            maskRestoreRegsInt &= ~reg1Mask;
+            intRegsToRestoreCount -= 1;
+
+            genEpilogRestoreRegPair(reg1, reg2, spOffset, stackDelta, REG_IP0, nullptr);
+        }
+        else
+        {
+            genEpilogRestoreReg(reg2, spOffset, stackDelta, REG_IP0, nullptr);
+        }
+    }
+
+    assert(intRegsToRestoreCount == 0);
 }
 
 
@@ -1109,6 +1135,12 @@ void                CodeGen::genCaptureFuncletPrologEpilogInfo()
 
     unsigned saveRegsCount = genCountBits(rsMaskSaveRegs);
     unsigned saveRegsPlusPSPSize = saveRegsCount * REGSIZE_BYTES + /* PSPSym */ REGSIZE_BYTES;
+    if (compiler->info.compIsVarArgs)
+    {
+        // For varargs we always save all of the integer register arguments
+        // so that they are contiguous with the incoming stack arguments.
+        saveRegsPlusPSPSize += MAX_REG_ARG * REGSIZE_BYTES;
+    }
     unsigned saveRegsPlusPSPSizeAligned = (unsigned)roundUp(saveRegsPlusPSPSize, STACK_ALIGN);
 
     assert(compiler->lvaOutgoingArgSpaceSize % REGSIZE_BYTES == 0);
@@ -1575,8 +1607,8 @@ void                CodeGen::genCodeForBBlist()
         }
 #endif // DEBUG
 
-        gcInfo.gcMarkRegSetGCref(newRegGCrefSet DEBUG_ARG(true));
-        gcInfo.gcMarkRegSetByref(newRegByrefSet DEBUG_ARG(true));
+        gcInfo.gcMarkRegSetGCref(newRegGCrefSet DEBUGARG(true));
+        gcInfo.gcMarkRegSetByref(newRegByrefSet DEBUGARG(true));
 
         /* Blocks with handlerGetsXcptnObj()==true use GT_CATCH_ARG to
            represent the exception object (TYP_REF).
@@ -1819,7 +1851,7 @@ void                CodeGen::genCodeForBBlist()
         {
             // Unit testing of the ARM64 emitter: generate a bunch of instructions into the last block
             // (it's as good as any, but better than the prolog, which can only be a single instruction
-            // group) then use COMPLUS_JitLateDisasm=* to see if the late disassembler
+            // group) then use COMPlus_JitLateDisasm=* to see if the late disassembler
             // thinks the instructions are the same as we do.
             genArm64EmitterUnitTests();
         }
@@ -2125,12 +2157,11 @@ void                CodeGen::instGen_Set_Reg_To_Imm(emitAttr    size,
     {
         size = EA_SIZE(size);  // Strip any Reloc flags from size if we aren't doing relocs
     }
-    
+
     if (EA_IS_RELOC(size))
     {
-        // Emit a data section constant for a relocatable integer constant.
-        CORINFO_FIELD_HANDLE hnd = getEmitter()->emitLiteralConst(imm);
-        getEmitter()->emitIns_R_C(INS_ldr, size, reg, hnd, 0);    
+        // This emits a pair of adrp/add (two instructions) with fix-ups.
+        getEmitter()->emitIns_R_AI(INS_adrp, size, reg, imm);
     }
     else if (imm == 0)
     {
@@ -2220,7 +2251,7 @@ void                CodeGen::genSetRegToConst(regNumber targetReg, var_types tar
                 // We must load the FP constant from the constant pool
                 // Emit a data section constant for the float or double constant.
                 CORINFO_FIELD_HANDLE hnd = emit->emitFltOrDblConst(dblConst);
-                emit->emitIns_R_C(INS_ldr, size, targetReg, hnd, 0);        
+                emit->emitIns_R_C(INS_ldr, size, targetReg, hnd, 0);
             }
         }
         break;
@@ -2319,7 +2350,6 @@ void CodeGen::genCodeForBinary(GenTree* treeNode)
 
     genProduceReg(treeNode);
 }
-
 
 /*****************************************************************************
  *
@@ -2486,7 +2516,6 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
                         // this will set both the Z and V flags only when dividendReg is MinInt
                         //
                         emit->emitIns_R_R_R(INS_adds, size, REG_ZR, dividendReg, dividendReg);
-                        
                         inst_JMP(jmpNotEqual, sdivLabel);                  // goto sdiv if the Z flag is clear
                         genJumpToThrowHlpBlk(EJ_vs, SCK_ARITH_EXCPN);      // if the V flags is set throw ArithmeticException
 
@@ -2530,7 +2559,7 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
     case GT_RSH:
     case GT_RSZ:
     case GT_ROR:
-        genCodeForShift(treeNode->gtGetOp1(), treeNode->gtGetOp2(), treeNode);
+        genCodeForShift(treeNode);
         // genCodeForShift() calls genProduceReg()
         break;
 
@@ -2627,28 +2656,16 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
             if (!treeNode->InReg() && !(treeNode->gtFlags & GTF_SPILLED))
             {
                 assert(!isRegCandidate);
-                if (targetType == TYP_STRUCT)
-                {
-                    // At this point any TYP_STRUCT LclVar must be a two register argument
-                    assert(varDsc->lvSize() == 2*TARGET_POINTER_SIZE);
 
-                    const BYTE * gcPtrs = varDsc->lvGcLayout;
+                // targetType must be a normal scalar type and not a TYP_STRUCT
+                assert(targetType != TYP_STRUCT);
 
-                    var_types type0 = compiler->getJitGCType(gcPtrs[0]);
-                    var_types type1 = compiler->getJitGCType(gcPtrs[1]);
+                instruction ins  = ins_Load(targetType);
+                emitAttr    attr = emitTypeSize(targetType);
 
-                    emit->emitIns_R_S(ins_Load(type0), emitTypeSize(type0), targetReg, varNum, 0);
-                    emit->emitIns_R_S(ins_Load(type1), emitTypeSize(type1), REG_NEXT(targetReg), varNum, TARGET_POINTER_SIZE);
-                }
-                else // targetType is a normal scalar type and not a TYP_STRUCT
-                {
-                    instruction ins  = ins_Load(targetType);
-                    emitAttr    attr = emitTypeSize(targetType);
+                attr = emit->emitInsAdjustLoadStoreAttr(ins, attr);
 
-                    attr = emit->emitInsAdjustLoadStoreAttr(ins, attr);
-
-                    emit->emitIns_R_S(ins, attr, targetReg, varNum, 0);
-                }
+                emit->emitIns_R_S(ins, attr, targetReg, varNum, 0);
                 genProduceReg(treeNode);
             }
         }
@@ -2822,10 +2839,6 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
         genConsumeAddress(treeNode->AsIndir()->Addr());
         emit->emitInsLoadStoreOp(ins_Load(targetType), emitTypeSize(treeNode), targetReg,  treeNode->AsIndir());
         genProduceReg(treeNode);
-        break;
-
-    case GT_LDOBJ:
-        genCodeForLdObj(treeNode->AsOp());
         break;
 
     case GT_MULHI:
@@ -3149,123 +3162,12 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
         break;
 
     case GT_PUTARG_STK:
-        {
-            // Get argument offset on stack.
-            // Here we cross check that argument offset hasn't changed from lowering to codegen since
-            // we are storing arg slot number in GT_PUTARG_STK node in lowering phase.
-            int argOffset = treeNode->AsPutArgStk()->gtSlotNum * TARGET_POINTER_SIZE;
-            
-#ifdef DEBUG
-            fgArgTabEntryPtr curArgTabEntry = compiler->gtArgEntryByNode(treeNode->AsPutArgStk()->gtCall, treeNode);
-            assert(curArgTabEntry);
-            assert(argOffset == (int)curArgTabEntry->slotNum * TARGET_POINTER_SIZE);
-#endif // DEBUG
-
-            GenTreePtr data = treeNode->gtOp.gtOp1;
-            unsigned varNum;   // typically this is the varNum for the Outgoing arg space           
-
-#if FEATURE_FASTTAILCALL
-            bool putInIncomingArgArea = treeNode->AsPutArgStk()->putInIncomingArgArea;
-#else
-            const bool putInIncomingArgArea = false;
-#endif
-            // Whether to setup stk arg in incoming or out-going arg area?
-            // Fast tail calls implemented as epilog+jmp = stk arg is setup in incoming arg area.
-            // All other calls - stk arg is setup in out-going arg area.
-            if (putInIncomingArgArea)
-            {
-                // The first varNum is guaranteed to be the first incoming arg of the method being compiled.
-                // See lvaInitTypeRef() for the order in which lvaTable entries are initialized.
-                varNum = 0;
-#ifdef DEBUG
-#if FEATURE_FASTTAILCALL
-                // This must be a fast tail call.
-                assert(treeNode->AsPutArgStk()->gtCall->AsCall()->IsFastTailCall());
-
-                // Since it is a fast tail call, the existence of first incoming arg is guaranteed
-                // because fast tail call requires that in-coming arg area of caller is >= out-going
-                // arg area required for tail call.
-                LclVarDsc* varDsc = compiler->lvaTable;
-                assert(varDsc != nullptr);
-                assert(varDsc->lvIsRegArg && ((varDsc->lvArgReg == REG_ARG_0) || (varDsc->lvArgReg == REG_FLTARG_0))); 
-#endif // FEATURE_FASTTAILCALL
-#endif
-            }
-            else
-            {
-                varNum = compiler->lvaOutgoingArgSpaceVar;
-            }
-
-            // Do we have a TYP_STRUCT argument, if so it must be a 16-byte pass-by-value struct
-            if (targetType == TYP_STRUCT)
-            {
-                // We will use two store instructions that each write a register sized value
-
-                // We must have a multi-reg struct that takes two slots
-                assert(curArgTabEntry->numSlots == 2);
-                assert(!data->isContained());  // Impossible to have a contained 16-byte operand
-
-                // We will need to determine the GC type to use for each of the stores
-                // We obtain the gcPtrs values by examining op1 using getStructGcPtrsFromOp()
-
-                BYTE gcPtrs[2] = {TYPE_GC_NONE, TYPE_GC_NONE};
-
-                compiler->getStructGcPtrsFromOp(data, &gcPtrs[0]);
-
-                var_types type0 = compiler->getJitGCType(gcPtrs[0]);
-                var_types type1 = compiler->getJitGCType(gcPtrs[1]);
-
-                genConsumeReg(data); 
-
-                // Emit two store instructions to store two consecutive registers into the outgoing argument area
-                getEmitter()->emitIns_S_R(ins_Store(type0), emitTypeSize(type0), data->gtRegNum,           varNum, argOffset);
-                getEmitter()->emitIns_S_R(ins_Store(type1), emitTypeSize(type1), REG_NEXT(data->gtRegNum), varNum, argOffset + TARGET_POINTER_SIZE);
-            }
-            else  // a normal non-Struct targetType
-            {
-                instruction storeIns  = ins_Store(targetType);  
-                emitAttr    storeAttr = emitTypeSize(targetType);
-
-                // If it is contained then data must be the integer constant zero
-                if (data->isContained())
-                {
-                    assert(data->OperGet() == GT_CNS_INT);
-                    assert(data->AsIntConCommon()->IconValue() == 0);
-                    getEmitter()->emitIns_S_R(storeIns, storeAttr, REG_ZR, varNum, argOffset);
-                }
-                else
-                {
-                    genConsumeReg(data);
-                    getEmitter()->emitIns_S_R(storeIns, storeAttr, data->gtRegNum, varNum, argOffset);
-                }
-            }
-        }
+        genPutArgStk(treeNode);
         break;
 
     case GT_PUTARG_REG:
-        if (targetType == TYP_STRUCT)
-        {
-            // We will need to determine the GC type to use for each of the stores
-            // We obtain the gcPtrs values by examining op1 using getStructGcPtrsFromOp()
-
-            GenTree *op1 = treeNode->gtOp.gtOp1;
-            BYTE gcPtrs[2] = {TYPE_GC_NONE, TYPE_GC_NONE};
-
-            compiler->getStructGcPtrsFromOp(op1, &gcPtrs[0]);
-
-            var_types type0 = compiler->getJitGCType(gcPtrs[0]);
-            var_types type1 = compiler->getJitGCType(gcPtrs[1]);
-
-            // If child node is not already in the registers we need, move it
-
-            genConsumeReg(op1);  // for multireg operands
-            if (targetReg != op1->gtRegNum)
-            {
-                inst_RV_RV(ins_Copy(type0), targetReg, op1->gtRegNum, type0);
-                inst_RV_RV(ins_Copy(type1), REG_NEXT(targetReg), REG_NEXT(op1->gtRegNum), type1);
-            }
-        }
-        else  // a normal non-Struct targetType
+        assert(targetType != TYP_STRUCT);  // Any TYP_STRUCT register args should have been removed by fgMorphMultiregStructArg
+        // We have a normal non-Struct targetType
         {
             GenTree *op1 = treeNode->gtOp.gtOp1;
             // If child node is not already in the register we need, move it
@@ -3673,7 +3575,7 @@ CodeGen::genLclHeap(GenTreePtr tree)
         regMaskTP pspSymRegMask = genFindLowestBit(tmpRegsMask);
         tmpRegsMask &= ~pspSymRegMask;
         pspSymReg = genRegNumFromMask(pspSymRegMask);
-        getEmitter()->emitIns_R_S(ins_Store(TYP_I_IMPL), EA_PTRSIZE, pspSymReg, compiler->lvaPSPSym, 0);
+        getEmitter()->emitIns_R_S(ins_Load(TYP_I_IMPL), EA_PTRSIZE, pspSymReg, compiler->lvaPSPSym, 0);
     }
 #endif
 
@@ -4691,46 +4593,43 @@ instruction CodeGen::genGetInsForOper(genTreeOps oper, var_types type)
     return ins;
 }
 
-/** Generates the code sequence for a GenTree node that
- * represents a bit shift operation (<<, >>, >>>).
- *
- * Arguments: operand:  the value to be shifted by shiftBy bits.
- *            shiftBy:  the number of bits to shift the operand.
- *            parent:   the actual bitshift node (that specifies the
- *                      type of bitshift to perform.
- *
- * Preconditions:    a) All GenTrees are register allocated.
- *                   b) Either shiftBy is a contained constant or
- *                      it's an expression sitting in RCX.
- *                   c) The actual bit shift node is not stack allocated
- *                      nor contained (not yet supported).
- */
-void CodeGen::genCodeForShift(GenTreePtr operand,
-                              GenTreePtr shiftBy,
-                              GenTreePtr parent)
+//------------------------------------------------------------------------
+// genCodeForShift: Generates the code sequence for a GenTree node that
+// represents a bit shift or rotate operation (<<, >>, >>>, rol, ror).
+//
+// Arguments:
+//    tree - the bit shift node (that specifies the type of bit shift to perform).
+//
+// Assumptions:
+//    a) All GenTrees are register allocated.
+//
+void CodeGen::genCodeForShift(GenTreePtr tree)
 {
-    var_types targetType = parent->TypeGet();
-    genTreeOps oper = parent->OperGet();
+    var_types targetType = tree->TypeGet();
+    genTreeOps oper = tree->OperGet();
     instruction ins = genGetInsForOper(oper, targetType);
-    emitAttr size = emitTypeSize(parent);
+    emitAttr size = emitTypeSize(tree);
 
-    assert(parent->gtRegNum != REG_NA);
+    assert(tree->gtRegNum != REG_NA);
+
+    GenTreePtr operand = tree->gtGetOp1();
     genConsumeReg(operand);
     
+    GenTreePtr shiftBy = tree->gtGetOp2();
     if (!shiftBy->IsCnsIntOrI())
     {
         genConsumeReg(shiftBy);
-        getEmitter()->emitIns_R_R_R(ins, size, parent->gtRegNum, operand->gtRegNum, shiftBy->gtRegNum);
+        getEmitter()->emitIns_R_R_R(ins, size, tree->gtRegNum, operand->gtRegNum, shiftBy->gtRegNum);
     }
     else
     {
         unsigned immWidth   = emitter::getBitWidth(size);                  // immWidth will be set to 32 or 64
         ssize_t  shiftByImm = shiftBy->gtIntCon.gtIconVal & (immWidth-1);
         
-        getEmitter()->emitIns_R_R_I(ins, size, parent->gtRegNum, operand->gtRegNum, shiftByImm);
+        getEmitter()->emitIns_R_R_I(ins, size, tree->gtRegNum, operand->gtRegNum, shiftByImm);
     }
 
-    genProduceReg(parent);
+    genProduceReg(tree);
 }
 
 // TODO-Cleanup: move to CodeGenCommon.cpp
@@ -4854,26 +4753,7 @@ void CodeGen::genRegCopy(GenTree* treeNode)
 
     if (varTypeIsFloating(treeNode) != varTypeIsFloating(op1))
     {
-#if 0
-        instruction ins;
-        regNumber fpReg;
-        regNumber intReg;
-        if(varTypeIsFloating(treeNode))
-        {
-            ins = INS_mov_i2xmm;
-            fpReg = targetReg;
-            intReg = op1->gtRegNum;
-        }
-        else
-        {
-            ins = INS_mov_xmm2i;
-            intReg = targetReg;
-            fpReg = op1->gtRegNum;
-        }
-        inst_RV_RV(ins, fpReg, intReg, targetType);
-#else
-        NYI_ARM64("CodeGen - FP/Int RegCopy");
-#endif
+        inst_RV_RV(INS_fmov, targetReg, genConsumeReg(op1), targetType);
     }
     else
     {
@@ -5219,11 +5099,35 @@ void CodeGen::genCallInstruction(GenTreePtr node)
         if (curArgTabEntry->regNum == REG_STK)
             continue;
 
-        regNumber argReg = curArgTabEntry->regNum;
-        genConsumeReg(argNode);
-        if (argNode->gtRegNum != argReg)
+        // Deal with multi register passed struct args.
+        if (argNode->OperGet() == GT_LIST)
         {
-            inst_RV_RV(ins_Move_Extend(argNode->TypeGet(), argNode->InReg()), argReg, argNode->gtRegNum);
+            GenTreeArgList* argListPtr = argNode->AsArgList();
+            unsigned iterationNum = 0;
+            regNumber argReg = curArgTabEntry->regNum;
+            for (; argListPtr != nullptr; argListPtr = argListPtr->Rest(), iterationNum++)
+            {
+                GenTreePtr putArgRegNode = argListPtr->gtOp.gtOp1;
+                assert(putArgRegNode->gtOper == GT_PUTARG_REG);
+
+                genConsumeReg(putArgRegNode);
+
+                if (putArgRegNode->gtRegNum != argReg)
+                {
+                    inst_RV_RV(ins_Move_Extend(putArgRegNode->TypeGet(), putArgRegNode->InReg()), argReg, putArgRegNode->gtRegNum);
+                }
+
+                argReg = REG_NEXT(argReg);
+            }
+        }
+        else
+        {
+            regNumber argReg = curArgTabEntry->regNum;
+            genConsumeReg(argNode);
+            if (argNode->gtRegNum != argReg)
+            {
+                inst_RV_RV(ins_Move_Extend(argNode->TypeGet(), argNode->InReg()), argReg, argNode->gtRegNum);
+            }
         }
 
         // In the case of a varargs call, 
@@ -6225,13 +6129,8 @@ CodeGen::genIntToFloatCast(GenTreePtr treeNode)
     emitAttr srcSize = EA_ATTR(genTypeSize(srcType));
     noway_assert((srcSize == EA_4BYTE) ||(srcSize == EA_8BYTE));
 
-    instruction ins = INS_scvtf;            // default to sign converts
+    instruction ins = varTypeIsUnsigned(srcType) ? INS_ucvtf : INS_scvtf;
     insOpts     cvtOption = INS_OPTS_NONE;  // invalid value
-
-    if (varTypeIsUnsigned(dstType))
-    {
-        ins = INS_ucvtf;             // use unsigned converts
-    }
 
     if (dstType == TYP_DOUBLE)
     {
@@ -6499,7 +6398,7 @@ CodeGen::genIntrinsic(GenTreePtr treeNode)
 
     case CORINFO_INTRINSIC_Round:
         genConsumeOperands(treeNode->AsOp());
-        getEmitter()->emitInsBinary(INS_frinta, emitTypeSize(treeNode), treeNode, srcNode);
+        getEmitter()->emitInsBinary(INS_frintn, emitTypeSize(treeNode), treeNode, srcNode);
         break;
 
     case CORINFO_INTRINSIC_Sqrt:
@@ -6516,145 +6415,331 @@ CodeGen::genIntrinsic(GenTreePtr treeNode)
 }
 
 //---------------------------------------------------------------------
-// genCodeForLdObj - generate code for a GT_LDOBJ node
+// genPutArgStk - generate code for a GT_PUTARG_STK node
 //
 // Arguments
-//    treeNode - the GT_LDOBJ node
+//    treeNode - the GT_PUTARG_STK node
 //
 // Return value:
 //    None
 //
-
-void CodeGen::genCodeForLdObj(GenTreeOp* treeNode)
+void CodeGen::genPutArgStk(GenTreePtr treeNode)
 {
-    assert(treeNode->OperGet() == GT_LDOBJ);
-
-    GenTree* addr = treeNode->gtOp.gtOp1;
-    genConsumeAddress(addr);
-     
-    regNumber addrReg    = addr->gtRegNum;
-    regNumber targetReg  = treeNode->gtRegNum;
+    assert(treeNode->OperGet() == GT_PUTARG_STK);
     var_types targetType = treeNode->TypeGet();
-    emitter * emit       = getEmitter();
+    emitter *emit = getEmitter();
 
-    noway_assert(targetType == TYP_STRUCT); 
-    noway_assert(targetReg != REG_NA);
+    // Get argument offset on stack.
+    // Here we cross check that argument offset hasn't changed from lowering to codegen since
+    // we are storing arg slot number in GT_PUTARG_STK node in lowering phase.
+    int argOffset = treeNode->AsPutArgStk()->gtSlotNum * TARGET_POINTER_SIZE;
 
-    CORINFO_CLASS_HANDLE ldObjClass = treeNode->gtLdObj.gtClass;
-    int structSize = compiler->info.compCompHnd->getClassSize(ldObjClass);
+#ifdef DEBUG
+    fgArgTabEntryPtr curArgTabEntry = compiler->gtArgEntryByNode(treeNode->AsPutArgStk()->gtCall, treeNode);
+    assert(curArgTabEntry);
+    assert(argOffset == (int)curArgTabEntry->slotNum * TARGET_POINTER_SIZE);
+#endif // DEBUG
 
-    assert(structSize <= 2*TARGET_POINTER_SIZE);
-    BYTE gcPtrs[2] = {TYPE_GC_NONE, TYPE_GC_NONE};
-    compiler->info.compCompHnd->getClassGClayout(ldObjClass, &gcPtrs[0]);
+    GenTreePtr data = treeNode->gtOp.gtOp1;
+    unsigned varNum;   // typically this is the varNum for the Outgoing arg space           
 
-    var_types type0 = compiler->getJitGCType(gcPtrs[0]);
-    var_types type1 = compiler->getJitGCType(gcPtrs[1]);
+#if FEATURE_FASTTAILCALL
+    bool putInIncomingArgArea = treeNode->AsPutArgStk()->putInIncomingArgArea;
+#else
+    const bool putInIncomingArgArea = false;
+#endif
+    // Whether to setup stk arg in incoming or out-going arg area?
+    // Fast tail calls implemented as epilog+jmp = stk arg is setup in incoming arg area.
+    // All other calls - stk arg is setup in out-going arg area.
+    if (putInIncomingArgArea)
+    {
+        // The first varNum is guaranteed to be the first incoming arg of the method being compiled.
+        // See lvaInitTypeRef() for the order in which lvaTable entries are initialized.
+        varNum = 0;
+#ifdef DEBUG
+#if FEATURE_FASTTAILCALL
+        // This must be a fast tail call.
+        assert(treeNode->AsPutArgStk()->gtCall->AsCall()->IsFastTailCall());
 
-    bool hasGCpointers = varTypeIsGC(type0) || varTypeIsGC(type1);
+        // Since it is a fast tail call, the existence of first incoming arg is guaranteed
+        // because fast tail call requires that in-coming arg area of caller is >= out-going
+        // arg area required for tail call.
+        LclVarDsc* varDsc = compiler->lvaTable;mit
+        assert(varDsc != nullptr);
+        assert(varDsc->lvIsRegArg && ((varDsc->lvArgReg == REG_ARG_0) || (varDsc->lvArgReg == REG_FLTARG_0))); 
+#endif // FEATURE_FASTTAILCALL
+#endif
+    }
+    else
+    {
+        varNum = compiler->lvaOutgoingArgSpaceVar;
+    }
+    bool isStruct = (targetType == TYP_STRUCT) || (data->OperGet() == GT_LIST);
 
-    noway_assert(structSize <= MAX_PASS_MULTIREG_BYTES);
+    if (!isStruct)   // a normal non-Struct argument
+    {
+        instruction storeIns  = ins_Store(targetType);  
+        emitAttr    storeAttr = emitTypeSize(targetType);
 
-    // For a 16-byte structSize with GC pointers we will use two ldr instruction to load two registers
-    //             ldr     x2, [x0]
-    //             ldr     x3, [x0]
-    //
-    // For a 16-byte structSize with no GC pointers we will use a ldp instruction to load two registers
-    //             ldp     x2, x3, [x0]
-    //
-    // For a 12-byte structSize we will we will generate two load instructions
-    //             ldr     x2, [x0]
-    //             ldr     w3, [x0, #8]
-    //
-    // When the first instruction has a targetReg that is the same register 
-    // as the source register: addrReg,  we set deferLoad to true and
-    // issue the intructions in the reverse order:
-    //             ldr     w3, [x2, #8]
-    //             ldr     x2, [x2]
-
-    bool      deferLoad     = false;
-    emitAttr  deferAttr     = EA_PTRSIZE;
-    int       deferOffset   = 0;
-    int       remainingSize = structSize;
-    unsigned  structOffset  = 0;
-    var_types nextType      = type0;
-
-    // Use the ldp instruction for a struct that is exactly 16-bytes in size
-    //             ldp     x2, x3, [x0]
-    //
-    if (remainingSize == 2*TARGET_POINTER_SIZE)
-    { 
-        if (hasGCpointers)
+        // If it is contained then data must be the integer constant zero
+        if (data->isContained())
         {
-            // We have GC pointers use two ldr instructions 
-
-            getEmitter()->emitIns_R_R_I(INS_ldr, emitTypeSize(type0), targetReg,           addrReg, structOffset);
-            noway_assert(REG_NEXT(targetReg) != addrReg);
-            getEmitter()->emitIns_R_R_I(INS_ldr, emitTypeSize(type1), REG_NEXT(targetReg), addrReg, structOffset + TARGET_POINTER_SIZE);
+            assert(data->OperGet() == GT_CNS_INT);
+            assert(data->AsIntConCommon()->IconValue() == 0);
+            emit->emitIns_S_R(storeIns, storeAttr, REG_ZR, varNum, argOffset);
         }
         else
         {
-            // Use a ldp instruction 
-
-            getEmitter()->emitIns_R_R_R_I(INS_ldp, EA_PTRSIZE, targetReg, REG_NEXT(targetReg), addrReg, structOffset);
+            genConsumeReg(data);
+            emit->emitIns_S_R(storeIns, storeAttr, data->gtRegNum, varNum, argOffset);
         }
-        remainingSize = 0;     // We have completely wrote the 16-byte struct
     }
-
-    while (remainingSize > 0)
+    else  // We have a TYP_STRUCT argument (it currently must be a 16-byte multi-reg struct)
     {
-        if (remainingSize >= TARGET_POINTER_SIZE)
+        // We will use two store instructions that each write a register sized value
+
+        // We must have a multi-reg struct that takes two slots
+        assert(curArgTabEntry->numSlots == 2);
+        assert(data->isContained());    // We expect that this node was marked as contained in LowerArm64
+
+        regNumber loReg = REG_NA;
+        regNumber hiReg = REG_NA;
+
+        if (data->OperGet() != GT_LIST)
         {
-            remainingSize -= TARGET_POINTER_SIZE;
-
-            if ((targetReg != addrReg) || (remainingSize == 0))
-            {
-                noway_assert(targetReg != addrReg);
-                getEmitter()->emitIns_R_R_I(INS_ldr, emitTypeSize(nextType), targetReg, addrReg, structOffset);
-            }
-            else
-            {
-                deferLoad = true;
-                deferAttr = emitTypeSize(nextType);
-                deferOffset = structOffset;
-            }
-            targetReg = REG_NEXT(targetReg);
-            structOffset += TARGET_POINTER_SIZE;
-            nextType = type1;
+            // In lowerArm64 we reserved two internal integer registers for this 16-byte TYP_STRUCT
+            genGetRegPairFromMask(treeNode->gtRsvdRegs, &loReg, &hiReg);
         }
-        else // (remainingSize < TARGET_POINTER_SIZE)
+
+        // We will need to record the GC type used by each of the load instructions
+        //  so that we use the same type in each of the store instructions
+        var_types type0 = TYP_UNKNOWN;
+        var_types type1 = TYP_UNKNOWN;
+
+        if (data->OperGet() == GT_OBJ)
         {
-            int loadSize = remainingSize;
-            remainingSize = 0;
+            GenTree* objNode  = data;
+            GenTree* addrNode = objNode->gtOp.gtOp1;
 
-            // the left over size is smaller than a pointer and thus can never be a GC type
-            assert(varTypeIsGC(nextType) == false); 
-
-            var_types loadType = TYP_UINT;
-            if (loadSize == 1)
+            if (addrNode->OperGet() == GT_LCL_VAR_ADDR)
             {
-                loadType = TYP_UBYTE;
+                // We have a GT_OBJ(GT_LCL_VAR_ADDR)
+                //
+                // We will treat this case the same as a GT_LCL_VAR node 
+                // so update 'data' to point this GT_LCL_VAR_ADDR node
+                // and continue to the codegen for the LCL_VAR node below
+                //
+                data = addrNode;
             }
-            else if (loadSize == 2)
+            else  // We have a GT_OBJ with an address expression
             {
-                loadType = TYP_USHORT;
+                // Generate code to load the address that we need into a register
+                genConsumeAddress(addrNode);
+
+                regNumber addrReg    = addrNode->gtRegNum;
+                var_types targetType = objNode->TypeGet();
+
+                noway_assert(varTypeIsStruct(targetType)); 
+
+                CORINFO_CLASS_HANDLE objClass = objNode->gtObj.gtClass;
+                int structSize = compiler->info.compCompHnd->getClassSize(objClass);
+
+                assert(structSize <= 2*TARGET_POINTER_SIZE);
+
+                // We obtain the gcPtrs values by examining op1 using getClassGClayout()
+
+                BYTE gcPtrs[2] = {TYPE_GC_NONE, TYPE_GC_NONE};
+                compiler->info.compCompHnd->getClassGClayout(objClass, &gcPtrs[0]);
+
+                // We need to record the GC type to used for each of the loads
+                type0 = compiler->getJitGCType(gcPtrs[0]);
+                type1 = compiler->getJitGCType(gcPtrs[1]);
+
+                bool hasGCpointers = varTypeIsGC(type0) || varTypeIsGC(type1);
+
+                noway_assert(structSize <= MAX_PASS_MULTIREG_BYTES);
+
+                // For a 16-byte structSize with GC pointers we will use two ldr instruction to load two registers
+                //             ldr     x2, [x0]
+                //             ldr     x3, [x0]
+                //
+                // For a 16-byte structSize with no GC pointers we will use a ldp instruction to load two registers
+                //             ldp     x2, x3, [x0]
+                //
+                // For a 12-byte structSize we will we will generate two load instructions
+                //             ldr     x2, [x0]
+                //             ldr     w3, [x0, #8]
+                //
+                // When the first instruction has a loReg that is the same register 
+                // as the source register: addrReg,  we set deferLoad to true and
+                // issue the intructions in the reverse order:
+                //             ldr     w3, [x2, #8]
+                //             ldr     x2, [x2]
+
+                bool      deferLoad     = false;
+                emitAttr  deferAttr     = EA_PTRSIZE;
+                int       deferOffset   = 0;
+                int       remainingSize = structSize;
+                unsigned  structOffset  = 0;
+                var_types nextType      = type0;
+
+                // Use the ldp instruction for a struct that is exactly 16-bytes in size
+                //             ldp     x2, x3, [x0]
+                //
+                if (remainingSize == 2*TARGET_POINTER_SIZE)
+                {
+                    if (hasGCpointers)
+                    {
+                        // We have GC pointers, so use two ldr instructions
+                        //
+                        // We do it this  way because we can't currently pass or track 
+                        // two different emitAttr values for a ldp instruction.
+
+                        // Make sure that the first load instruction does not overwrite the addrReg.
+                        //
+                        if (loReg != addrReg)
+                        {
+                            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type0), loReg, addrReg, structOffset);
+                            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type1), hiReg, addrReg, structOffset + TARGET_POINTER_SIZE);
+                        }
+                        else 
+                        {
+                            assert(hiReg != addrReg);
+                            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type1), hiReg, addrReg, structOffset + TARGET_POINTER_SIZE);
+                            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(type0), loReg, addrReg, structOffset);
+                        }
+                    }
+                    else
+                    {
+                        // Use a ldp instruction 
+
+                        emit->emitIns_R_R_R_I(INS_ldp, EA_PTRSIZE, loReg, hiReg, addrReg, structOffset);
+                    }
+                    remainingSize = 0;     // We completely wrote the 16-byte struct
+                }
+
+                regNumber curReg = loReg;
+                while (remainingSize > 0)
+                {
+                    if (remainingSize >= TARGET_POINTER_SIZE)
+                    {
+                        remainingSize -= TARGET_POINTER_SIZE;
+
+                        if ((curReg == addrReg) && (remainingSize != 0))
+                        {
+                            deferLoad = true;
+                            deferAttr = emitTypeSize(nextType);
+                            deferOffset = structOffset;
+                        }
+                        else  // the typical case
+                        {
+                            emit->emitIns_R_R_I(INS_ldr, emitTypeSize(nextType), curReg, addrReg, structOffset);
+                        }
+                        curReg = hiReg;
+                        structOffset += TARGET_POINTER_SIZE;
+                        nextType = type1;
+                    }
+                    else // (remainingSize < TARGET_POINTER_SIZE)
+                    {
+                        int loadSize = remainingSize;
+                        remainingSize = 0;
+
+                        // the left over size is smaller than a pointer and thus can never be a GC type
+                        assert(varTypeIsGC(nextType) == false); 
+
+                        var_types loadType = TYP_UINT;
+                        if (loadSize == 1)
+                        {
+                            loadType = TYP_UBYTE;
+                        }
+                        else if (loadSize == 2)
+                        {
+                            loadType = TYP_USHORT;
+                        }
+                        else
+                        {
+                            // Need to handle additional loadSize cases here
+                            noway_assert(loadSize == 4);
+                        }
+
+                        instruction loadIns  = ins_Load(loadType);
+                        emitAttr    loadAttr = emitAttr(loadSize);
+
+                        // When deferLoad is false, curReg can be the same as addrReg 
+                        // because the last instruction is allowed to overwrite addrReg.
+                        //
+                        noway_assert(!deferLoad || (curReg != addrReg));
+
+                        emit->emitIns_R_R_I(loadIns, loadAttr, curReg, addrReg, structOffset);
+                    }
+                }
+
+                if (deferLoad)
+                {
+                    curReg = addrReg;
+                    emit->emitIns_R_R_I(INS_ldr, deferAttr, curReg, addrReg, deferOffset);
+                }
             }
-
-            instruction loadIns  = ins_Load(loadType);
-            emitAttr    loadAttr = emitAttr(loadSize);
-
-            noway_assert(targetReg != addrReg);
-
-            getEmitter()->emitIns_R_R_I(loadIns, loadAttr, targetReg, addrReg, structOffset);
         }
-    }
+        else if (data->OperGet() == GT_LIST)
+        {
+            // Deal with multi register passed struct args.
+            GenTreeArgList* argListPtr = data->AsArgList();
+            unsigned iterationNum = 0;
+            for (; argListPtr != nullptr; argListPtr = argListPtr->Rest(), iterationNum++)
+            {
+                GenTreePtr nextArgNode = argListPtr->gtOp.gtOp1;
+                genConsumeReg(nextArgNode);
 
-    if (deferLoad)
-    {
-        targetReg = addrReg;
-        noway_assert(targetReg != addrReg);
-        getEmitter()->emitIns_R_R_I(INS_ldr, deferAttr, targetReg, addrReg, deferOffset);
+                if (iterationNum == 0)
+                {
+                    // record loReg and type0 for the store to the out arg space
+                    loReg = nextArgNode->gtRegNum;
+                    type0 = nextArgNode->TypeGet();
+                }
+                else
+                {
+                    assert(iterationNum == 1);
+                    // record hiReg and type1 for the store to the out arg space
+                    hiReg = nextArgNode->gtRegNum;;
+                    type1 = nextArgNode->TypeGet();
+                }
+            }
+        }
+
+        if ((data->OperGet() == GT_LCL_VAR) || (data->OperGet() == GT_LCL_VAR_ADDR))
+        {
+            GenTreeLclVarCommon* varNode = data->AsLclVarCommon();
+            unsigned   varNum = varNode->gtLclNum;        assert(varNum < compiler->lvaCount);
+            LclVarDsc* varDsc = &compiler->lvaTable[varNum];
+
+            // At this point any TYP_STRUCT LclVar must be a 16-byte pass by value argument
+            assert(varDsc->lvSize() == 2 * TARGET_POINTER_SIZE);
+            // This struct also must live in the stack frame
+            assert(varDsc->lvOnFrame);
+
+            // We need to record the GC type to used for each of the loads
+            // We obtain the GC type values by examining the local's varDsc->lvGcLayout
+            //
+            type0 = compiler->getJitGCType(varDsc->lvGcLayout[0]);
+            type1 = compiler->getJitGCType(varDsc->lvGcLayout[1]);
+
+            emit->emitIns_R_S(ins_Load(type0), emitTypeSize(type0), loReg, varNum, 0);
+            emit->emitIns_R_S(ins_Load(type1), emitTypeSize(type1), hiReg, varNum, TARGET_POINTER_SIZE);
+        }
+
+        // We are required to set these two values above
+        assert(loReg != REG_NA);
+        assert(hiReg != REG_NA);
+
+        // We are required to set these two values above, so that the stores have the same GC type as the loads
+        assert(type0 != TYP_UNKNOWN);
+        assert(type1 != TYP_UNKNOWN);
+
+        // Emit two store instructions to store two consecutive registers into the outgoing argument area
+        emit->emitIns_S_R(ins_Store(type0), emitTypeSize(type0), loReg, varNum, argOffset);
+        emit->emitIns_S_R(ins_Store(type1), emitTypeSize(type1), hiReg, varNum, argOffset + TARGET_POINTER_SIZE);
     }
-    genProduceReg(treeNode);
 }
 
 
@@ -6663,16 +6748,16 @@ void CodeGen::genCodeForLdObj(GenTreeOp* treeNode)
  *  Create and record GC Info for the function.
  */
 void
-CodeGen::genCreateAndStoreGCInfo(unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUG_ARG(void* codePtr))
+CodeGen::genCreateAndStoreGCInfo(unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUGARG(void* codePtr))
 {
-    genCreateAndStoreGCInfoX64(codeSize, prologSize DEBUG_ARG(codePtr));
+    genCreateAndStoreGCInfoX64(codeSize, prologSize DEBUGARG(codePtr));
 }
 
 void
-CodeGen::genCreateAndStoreGCInfoX64(unsigned codeSize, unsigned prologSize DEBUG_ARG(void* codePtr))
+CodeGen::genCreateAndStoreGCInfoX64(unsigned codeSize, unsigned prologSize DEBUGARG(void* codePtr))
 {
     IAllocator* allowZeroAlloc = new (compiler, CMK_GC) AllowZeroAllocator(compiler->getAllocatorGC());
-    GcInfoEncoder* gcInfoEncoder = new (compiler, CMK_GC) GcInfoEncoder(compiler->info.compCompHnd, compiler->info.compMethodInfo, allowZeroAlloc);
+    GcInfoEncoder* gcInfoEncoder = new (compiler, CMK_GC) GcInfoEncoder(compiler->info.compCompHnd, compiler->info.compMethodInfo, allowZeroAlloc, NOMEM);
     assert(gcInfoEncoder != nullptr);
 
     // Follow the code pattern of the x86 gc info encoder (genCreateAndStoreGCInfoJIT32).
@@ -6849,7 +6934,7 @@ void        CodeGen::genSetScopeInfo  (unsigned             which,
 
 /*****************************************************************************
  * Unit testing of the ARM64 emitter: generate a bunch of instructions into the prolog
- * (it's as good a place as any), then use COMPLUS_JitLateDisasm=* to see if the late
+ * (it's as good a place as any), then use COMPlus_JitLateDisasm=* to see if the late
  * disassembler thinks the instructions as the same as we do.
  */
 

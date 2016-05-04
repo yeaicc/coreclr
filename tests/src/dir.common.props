@@ -18,19 +18,19 @@
     <DebugSymbols Condition="'$(DebugSymbols)' == ''">true</DebugSymbols>
     <Optimize Condition="'$(Optimize)' == ''">false</Optimize>
     <DebugType Condition="'$(DebugType)' == ''">full</DebugType>
-    <DefineConstants>$(DefineConstants);DEBUG;TRACE</DefineConstants>
+    <DefineConstants>$(DefineConstants);DEBUG;TRACE;XUNIT_PERF</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugSymbols Condition="'$(DebugSymbols)' == ''">true</DebugSymbols>
     <Optimize Condition="'$(Optimize)' == ''">true</Optimize>
     <DebugType Condition="'$(DebugType)' == ''">pdbonly</DebugType>
-    <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
+    <DefineConstants>$(DefineConstants);TRACE;XUNIT_PERF</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Checked'">
     <DebugSymbols Condition="'$(DebugSymbols)' == ''">true</DebugSymbols>
     <Optimize Condition="'$(Optimize)' == ''">true</Optimize>
     <DebugType Condition="'$(DebugType)' == ''">full</DebugType>
-    <DefineConstants>$(DefineConstants);DEBUG;TRACE</DefineConstants>
+    <DefineConstants>$(DefineConstants);DEBUG;TRACE;XUNIT_PERF</DefineConstants>
   </PropertyGroup>
 
 <!-- Setup the default output and intermediate paths -->
@@ -55,7 +55,6 @@
   <PropertyGroup>
     <CLRTestKind Condition="'$(CLRTestKind)' == ' '">BuildAndRun</CLRTestKind>
     <CLRTestPriority Condition="'$(CLRTestPriority)' == ''">0</CLRTestPriority>
-    <_CLRTestInServiceOfHigherPriority Condition="'$(_CLRTestInServiceOfHigherPriority)' == ''">false</_CLRTestInServiceOfHigherPriority>
   </PropertyGroup>
 
 </Project>

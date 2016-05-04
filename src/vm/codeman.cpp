@@ -73,7 +73,7 @@ CrstStatic ExecutionManager::m_RangeCrst;
 // Support for new style unwind information (to allow OS to stack crawl JIT compiled code).
 
 typedef NTSTATUS (WINAPI* RtlAddGrowableFunctionTableFnPtr) (
-        PVOID *DynamicTable, RUNTIME_FUNCTION* FunctionTable, ULONG EntryCount, 
+        PVOID *DynamicTable, PRUNTIME_FUNCTION FunctionTable, ULONG EntryCount, 
         ULONG MaximumEntryCount, ULONG_PTR rangeStart, ULONG_PTR rangeEnd);
 typedef VOID (WINAPI* RtlGrowFunctionTableFnPtr) (PVOID DynamicTable, ULONG NewEntryCount); 
 typedef VOID (WINAPI* RtlDeleteGrowableFunctionTableFnPtr) (PVOID DynamicTable);
@@ -92,7 +92,7 @@ Volatile<bool>      UnwindInfoTable::s_publishingActive = false;
 #if _DEBUG
 // Fake functions on Win7 checked build to excercize the code paths, they are no-ops
 NTSTATUS WINAPI FakeRtlAddGrowableFunctionTable (
-        PVOID *DynamicTable, RUNTIME_FUNCTION* FunctionTable, ULONG EntryCount, 
+        PVOID *DynamicTable, PT_RUNTIME_FUNCTION FunctionTable, ULONG EntryCount, 
         ULONG MaximumEntryCount, ULONG_PTR rangeStart, ULONG_PTR rangeEnd) { *DynamicTable = (PVOID) 1; return 0; }
 VOID WINAPI FakeRtlGrowFunctionTable (PVOID DynamicTable, ULONG NewEntryCount) { }
 VOID WINAPI FakeRtlDeleteGrowableFunctionTable (PVOID DynamicTable) {}
@@ -158,7 +158,7 @@ UnwindInfoTable::UnwindInfoTable(ULONG_PTR rangeStart, ULONG_PTR rangeEnd, ULONG
     iRangeStart = rangeStart;
     iRangeEnd = rangeEnd;
     hHandle = NULL;
-    pTable = new RUNTIME_FUNCTION[cTableMaxCount];
+    pTable = new T_RUNTIME_FUNCTION[cTableMaxCount];
 }
 
 /****************************************************************************/
@@ -221,7 +221,7 @@ void UnwindInfoTable::UnRegister()
 // Add 'data' to the linked list whose head is pointed at by 'unwindInfoPtr'
 //
 /* static */ 
-void UnwindInfoTable::AddToUnwindInfoTable(UnwindInfoTable** unwindInfoPtr, RUNTIME_FUNCTION* data,
+void UnwindInfoTable::AddToUnwindInfoTable(UnwindInfoTable** unwindInfoPtr, PT_RUNTIME_FUNCTION data,
                                           TADDR rangeStart, TADDR rangeEnd)    
 {
     CONTRACTL
@@ -377,7 +377,7 @@ void UnwindInfoTable::AddToUnwindInfoTable(UnwindInfoTable** unwindInfoPtr, RUNT
 // Publish the stack unwind data 'data' which is relative 'baseAddress' 
 // to the operating system in a way ETW stack tracing can use.
 
-/* static */ void UnwindInfoTable::PublishUnwindInfoForMethod(TADDR baseAddress, RUNTIME_FUNCTION* unwindInfo, int unwindInfoCount)
+/* static */ void UnwindInfoTable::PublishUnwindInfoForMethod(TADDR baseAddress, PT_RUNTIME_FUNCTION unwindInfo, int unwindInfoCount)
 {
     STANDARD_VM_CONTRACT;
     if (!s_publishingActive)
@@ -1354,6 +1354,14 @@ struct JIT_LOAD_DATA
 // Here's the global data for JIT load and initialization state.
 JIT_LOAD_DATA g_JitLoadData;
 
+#if defined(FEATURE_CORECLR) && !defined(FEATURE_MERGE_JIT_AND_ENGINE)
+
+// Global that holds the path to custom JIT location
+extern "C" LPCWSTR g_CLRJITPath = nullptr;
+
+#endif // defined(FEATURE_CORECLR) && !defined(FEATURE_MERGE_JIT_AND_ENGINE)
+
+
 // LoadAndInitializeJIT: load the JIT dll into the process, and initialize it (call the UtilCode initialization function,
 // check the JIT-EE interface GUID, etc.)
 //
@@ -1388,24 +1396,39 @@ static void LoadAndInitializeJIT(LPCWSTR pwzJitName, OUT HINSTANCE* phJit, OUT I
 
     HRESULT hr = E_FAIL;
 
-#ifdef FEATURE_MERGE_JIT_AND_ENGINE
+#ifdef FEATURE_CORECLR
     PathString CoreClrFolderHolder;
     extern HINSTANCE g_hThisInst;
+
+#if !defined(FEATURE_MERGE_JIT_AND_ENGINE)
+    if (g_CLRJITPath != nullptr)
+    {
+        // If we have been asked to load a specific JIT binary, load it.
+        CoreClrFolderHolder.Set(g_CLRJITPath);
+    }
+    else 
+#endif // !defined(FEATURE_MERGE_JIT_AND_ENGINE)
     if (WszGetModuleFileName(g_hThisInst, CoreClrFolderHolder))
     {
+        // Load JIT from next to CoreCLR binary
         SString::Iterator iter = CoreClrFolderHolder.End();
         BOOL findSep = CoreClrFolderHolder.FindBack(iter, DIRECTORY_SEPARATOR_CHAR_W);
         if (findSep)
         {
             SString sJitName(pwzJitName);
             CoreClrFolderHolder.Replace(iter + 1, CoreClrFolderHolder.End() - (iter + 1), sJitName);
-            *phJit = CLRLoadLibrary(CoreClrFolderHolder.GetUnicode());
-            if (*phJit != NULL)
-            {
-                hr = S_OK;
-            }
         }
     }
+
+    if (!CoreClrFolderHolder.IsEmpty())
+    {
+        *phJit = CLRLoadLibrary(CoreClrFolderHolder.GetUnicode());
+        if (*phJit != NULL)
+        {
+            hr = S_OK;
+        }
+    }
+
 #else
     hr = g_pCLRRuntime->LoadLibrary(pwzJitName, phJit);
 #endif
@@ -1557,8 +1580,8 @@ BOOL EEJitManager::LoadJIT()
     // Set as a courtesy to code:CorCompileGetRuntimeDll
     s_ngenCompilerDll = m_JITCompiler;
     
-#if defined(_TARGET_AMD64_) && !defined(CROSSGEN_COMPILE)
-    // If COMPLUS_UseLegacyJit=1, then we fall back to compatjit.dll.
+#if defined(_TARGET_AMD64_) && !defined(CROSSGEN_COMPILE) && !defined(FEATURE_CORECLR)
+    // If COMPlus_UseLegacyJit=1, then we fall back to compatjit.dll.
     //
     // This fallback mechanism was introduced for Visual Studio "14" Preview, when JIT64 (the legacy JIT) was replaced with
     // RyuJIT. It was desired to provide a fallback mechanism in case comptibility problems (or other bugs)
@@ -1567,7 +1590,7 @@ BOOL EEJitManager::LoadJIT()
     //
     // If this is a compilation process, then we don't allow specifying a fallback JIT. This is a case where, when NGEN'ing,
     // we sometimes need to JIT some things (such as when we are NGEN'ing mscorlib). In that case, we want to use exactly
-    // the same JIT as NGEN uses. And NGEN doesn't follow the COMPLUS_UseLegacyJit=1 switch -- it always uses clrjit.dll.
+    // the same JIT as NGEN uses. And NGEN doesn't follow the COMPlus_UseLegacyJit=1 switch -- it always uses clrjit.dll.
     //
     // Note that we always load and initialize the default JIT. This is to handle cases where obfuscators rely on
     // LoadLibrary("clrjit.dll") returning the module handle of the JIT, and then they call GetProcAddress("getJit") to get
@@ -1638,13 +1661,13 @@ BOOL EEJitManager::LoadJIT()
             }
         }
     }
-#endif // defined(_TARGET_AMD64_) && !defined(CROSSGEN_COMPILE)
+#endif // defined(_TARGET_AMD64_) && !defined(CROSSGEN_COMPILE) && !defined(FEATURE_CORECLR)
 
 #endif // !FEATURE_MERGE_JIT_AND_ENGINE
 
 #ifdef ALLOW_SXS_JIT
 
-    // Do not load altjit.dll unless COMPLUS_AltJit is set.
+    // Do not load altjit.dll unless COMPlus_AltJit is set.
     // Even if the main JIT fails to load, if the user asks for an altjit we try to load it.
     // This allows us to display load error messages for loading altjit.
 
@@ -2093,7 +2116,7 @@ HeapList* LoaderCodeHeap::CreateCodeHeap(CodeHeapRequestInfo *pInfo, LoaderHeap 
          ));
 
 #ifdef _WIN64
-    emitJump(pHp->CLRPersonalityRoutine, (void *)ProcessCLRException);
+    emitJump((LPBYTE)pHp->CLRPersonalityRoutine, (void *)ProcessCLRException);
 #endif
 
     pCodeHeap.SuppressRelease();
@@ -2139,16 +2162,16 @@ void CodeHeapRequestInfo::Init()
 #ifdef WIN64EXCEPTIONS
 
 #ifdef _WIN64
-extern "C" PRUNTIME_FUNCTION GetRuntimeFunctionCallback(IN ULONG64   ControlPc,
+extern "C" PT_RUNTIME_FUNCTION GetRuntimeFunctionCallback(IN ULONG64   ControlPc,
                                                         IN PVOID     Context)
 #else
-extern "C" PRUNTIME_FUNCTION GetRuntimeFunctionCallback(IN ULONG     ControlPc,
+extern "C" PT_RUNTIME_FUNCTION GetRuntimeFunctionCallback(IN ULONG     ControlPc,
                                                         IN PVOID     Context)
 #endif
 {
     WRAPPER_NO_CONTRACT;
 
-    PRUNTIME_FUNCTION prf = NULL;
+    PT_RUNTIME_FUNCTION prf = NULL;
 
     // We must preserve this so that GCStress=4 eh processing doesnt kill last error.
     BEGIN_PRESERVE_LAST_ERROR;
@@ -2492,7 +2515,7 @@ CodeHeader* EEJitManager::allocCode(MethodDesc* pMD, size_t blockSize, CorJitAll
     SIZE_T totalSize = blockSize;
 
 #if defined(USE_INDIRECT_CODEHEADER)
-    SIZE_T realHeaderSize = offsetof(RealCodeHeader, unwindInfos[0]) + (sizeof(RUNTIME_FUNCTION) * nUnwindInfos); 
+    SIZE_T realHeaderSize = offsetof(RealCodeHeader, unwindInfos[0]) + (sizeof(T_RUNTIME_FUNCTION) * nUnwindInfos); 
 
     // if this is a LCG method then we will be allocating the RealCodeHeader
     // following the code so that the code block can be removed easily by 
@@ -3913,13 +3936,13 @@ void GetUnmanagedStackWalkInfo(IN  ULONG64   ControlPc,
                 T_RUNTIME_FUNCTION functionEntry;
 
                 DWORD dwLow  = 0;
-                DWORD dwHigh = cbSize / sizeof(RUNTIME_FUNCTION);
+                DWORD dwHigh = cbSize / sizeof(T_RUNTIME_FUNCTION);
                 DWORD dwMid  = 0;
 
                 while (dwLow <= dwHigh)
                 {
                     dwMid = (dwLow + dwHigh) >> 1;
-                    taFuncEntry = pExceptionDir + dwMid * sizeof(RUNTIME_FUNCTION);
+                    taFuncEntry = pExceptionDir + dwMid * sizeof(T_RUNTIME_FUNCTION);
                     hr = DacReadAll(taFuncEntry, &functionEntry, sizeof(functionEntry), false);
                     if (FAILED(hr))
                     {
@@ -4285,15 +4308,17 @@ BOOL ExecutionManager::IsCacheCleanupRequired( void )
 /*********************************************************************/
 // This static method returns the name of the jit dll
 //
-LPWSTR ExecutionManager::GetJitName()
+LPCWSTR ExecutionManager::GetJitName()
 {
     STANDARD_VM_CONTRACT;
 
-    LPWSTR  pwzJitName;
+    LPCWSTR  pwzJitName = NULL;
 
+#if !defined(FEATURE_CORECLR)
     // Try to obtain a name for the jit library from the env. variable
-    IfFailThrow(CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_JitName, &pwzJitName));
-
+    IfFailThrow(CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_JitName, const_cast<LPWSTR *>(&pwzJitName)));
+#endif // !FEATURE_CORECLR
+    
     if (NULL == pwzJitName)
     {
         pwzJitName = MAKEDLLNAME_W(W("clrjit"));
@@ -4301,7 +4326,7 @@ LPWSTR ExecutionManager::GetJitName()
 
     return pwzJitName;
 }
-#endif // FEATURE_MERGE_JIT_AND_ENGINE
+#endif // !FEATURE_MERGE_JIT_AND_ENGINE
 
 #endif // #ifndef DACCESS_COMPILE
 
@@ -5688,7 +5713,7 @@ static void EnumRuntimeFunctionEntriesToFindEntry(PTR_RUNTIME_FUNCTION pRtf, PTR
     IMAGE_DATA_DIRECTORY * pProgramExceptionsDirectory = pNativeLayout->GetDirectoryEntry(IMAGE_DIRECTORY_ENTRY_EXCEPTION);
     if (!pProgramExceptionsDirectory || 
         (pProgramExceptionsDirectory->Size == 0) ||
-        (pProgramExceptionsDirectory->Size % sizeof(RUNTIME_FUNCTION) != 0))
+        (pProgramExceptionsDirectory->Size % sizeof(T_RUNTIME_FUNCTION) != 0))
     {
         // Program exceptions directory malformatted
         return;
@@ -5698,7 +5723,7 @@ static void EnumRuntimeFunctionEntriesToFindEntry(PTR_RUNTIME_FUNCTION pRtf, PTR
     PTR_RUNTIME_FUNCTION firstFunctionEntry(moduleBase + pProgramExceptionsDirectory->VirtualAddress);
 
     if (pRtf < firstFunctionEntry ||
-        ((dac_cast<TADDR>(pRtf) - dac_cast<TADDR>(firstFunctionEntry)) % sizeof(RUNTIME_FUNCTION) != 0))
+        ((dac_cast<TADDR>(pRtf) - dac_cast<TADDR>(firstFunctionEntry)) % sizeof(T_RUNTIME_FUNCTION) != 0))
     {
         // Program exceptions directory malformatted
         return;
@@ -5717,7 +5742,7 @@ static void EnumRuntimeFunctionEntriesToFindEntry(PTR_RUNTIME_FUNCTION pRtf, PTR
 #endif // defined(_MSC_VER)
 
     ULONG low = 0; // index in the function entry table of low end of search range
-    ULONG high = (pProgramExceptionsDirectory->Size)/sizeof(RUNTIME_FUNCTION) - 1; // index of high end of search range
+    ULONG high = (pProgramExceptionsDirectory->Size)/sizeof(T_RUNTIME_FUNCTION) - 1; // index of high end of search range
     ULONG mid = (low + high) /2; // index of entry to be compared
 
     if (indexToLocate > high)

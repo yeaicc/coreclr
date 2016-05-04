@@ -246,8 +246,12 @@ DECLARE_TYPED_ENUM(emitAttr,unsigned)
                 EA_32BYTE        = 0x020,
                 EA_SIZE_MASK     = 0x03F,
 
-                EA_PTRSIZE       = NOT_WIN64(EA_4BYTE)
-                                   WIN64_ONLY(EA_8BYTE),
+#ifdef _TARGET_64BIT_
+                EA_PTRSIZE       = EA_8BYTE,
+#else
+                EA_PTRSIZE       = EA_4BYTE,
+#endif
+
                 EA_OFFSET_FLG    = 0x040,
                 EA_OFFSET        = EA_OFFSET_FLG | EA_PTRSIZE,       /* size ==  0 */
                 EA_GCREF_FLG     = 0x080,
@@ -259,23 +263,24 @@ DECLARE_TYPED_ENUM(emitAttr,unsigned)
 }
 END_DECLARE_TYPED_ENUM(emitAttr,unsigned)
 
-# define EA_ATTR(x)          ((emitAttr) (x))
-# define EA_SIZE(x)          ((emitAttr) ( ((unsigned) (x)) &  EA_SIZE_MASK)      )
-# define EA_SIZE_IN_BYTES(x) ((UNATIVE_OFFSET)   (EA_SIZE(x)))
-# define EA_SET_SIZE(x,sz)   ((emitAttr) ((((unsigned) (x)) & ~EA_SIZE_MASK) | sz))
-# define EA_SET_FLG(x,flg)   ((emitAttr) ( ((unsigned) (x)) |  flg  )      )
-# define EA_4BYTE_DSP_RELOC  (EA_SET_FLG(EA_4BYTE,EA_DSP_RELOC_FLG)        )
-# define EA_PTR_DSP_RELOC    (EA_SET_FLG(EA_PTRSIZE,EA_DSP_RELOC_FLG)      )
-# define EA_HANDLE_CNS_RELOC (EA_SET_FLG(EA_PTRSIZE,EA_CNS_RELOC_FLG)      )
-# define EA_IS_OFFSET(x)     ((((unsigned) (x)) & ((unsigned) EA_OFFSET_FLG)) != 0)
-# define EA_IS_GCREF(x)      ((((unsigned) (x)) & ((unsigned) EA_GCREF_FLG )) != 0)
-# define EA_IS_BYREF(x)      ((((unsigned) (x)) & ((unsigned) EA_BYREF_FLG )) != 0)
-# define EA_IS_DSP_RELOC(x)  ((((unsigned) (x)) & ((unsigned) EA_DSP_RELOC_FLG )) != 0)
-# define EA_IS_CNS_RELOC(x)  ((((unsigned) (x)) & ((unsigned) EA_CNS_RELOC_FLG )) != 0)
-# define EA_IS_RELOC(x)      (EA_IS_DSP_RELOC(x) || EA_IS_CNS_RELOC(x))
-# define EA_TYPE(x)          ((emitAttr) ( ((unsigned) (x)) & ~(EA_OFFSET_FLG | EA_DSP_RELOC_FLG | EA_CNS_RELOC_FLG) ) )
+#define EA_ATTR(x)                  ((emitAttr)(x))
+#define EA_SIZE(x)                  ((emitAttr)(((unsigned)(x)) &  EA_SIZE_MASK))
+#define EA_SIZE_IN_BYTES(x)         ((UNATIVE_OFFSET)(EA_SIZE(x)))
+#define EA_SET_SIZE(x, sz)          ((emitAttr)((((unsigned)(x)) & ~EA_SIZE_MASK) | sz))
+#define EA_SET_FLG(x, flg)          ((emitAttr)(((unsigned)(x)) | flg))
+#define EA_4BYTE_DSP_RELOC          (EA_SET_FLG(EA_4BYTE, EA_DSP_RELOC_FLG))
+#define EA_PTR_DSP_RELOC            (EA_SET_FLG(EA_PTRSIZE, EA_DSP_RELOC_FLG))
+#define EA_HANDLE_CNS_RELOC         (EA_SET_FLG(EA_PTRSIZE, EA_CNS_RELOC_FLG))
+#define EA_IS_OFFSET(x)             ((((unsigned)(x)) & ((unsigned)EA_OFFSET_FLG)) != 0)
+#define EA_IS_GCREF(x)              ((((unsigned)(x)) & ((unsigned)EA_GCREF_FLG)) != 0)
+#define EA_IS_BYREF(x)              ((((unsigned)(x)) & ((unsigned)EA_BYREF_FLG)) != 0)
+#define EA_IS_GCREF_OR_BYREF(x)     ((((unsigned)(x)) & ((unsigned)(EA_BYREF_FLG | EA_GCREF_FLG))) != 0)
+#define EA_IS_DSP_RELOC(x)          ((((unsigned)(x)) & ((unsigned)EA_DSP_RELOC_FLG)) != 0)
+#define EA_IS_CNS_RELOC(x)          ((((unsigned)(x)) & ((unsigned)EA_CNS_RELOC_FLG)) != 0)
+#define EA_IS_RELOC(x)              (EA_IS_DSP_RELOC(x) || EA_IS_CNS_RELOC(x))
+#define EA_TYPE(x)                  ((emitAttr)(((unsigned)(x)) & ~(EA_OFFSET_FLG | EA_DSP_RELOC_FLG | EA_CNS_RELOC_FLG)))
 
-#define EmitSize(x) (EA_ATTR(genTypeSize(TypeGet(x))))
+#define EmitSize(x)                 (EA_ATTR(genTypeSize(TypeGet(x))))
 
 // Enum specifying the instruction set for generating floating point or SIMD code.
 enum InstructionSet

@@ -10,19 +10,14 @@
 #endif
 
 class Compiler;
-class LogEnv {
+class LogEnv
+{
 public:
     LogEnv(ICorJitInfo* aCompHnd);
-    ~LogEnv();
-    static LogEnv* cur();           // get current logging environement
-    static void cleanup();          // clean up cached information (TLS ID)
     void setCompiler(Compiler* val) { const_cast<Compiler*&>(compiler) = val; }
 
     ICorJitInfo* const compHnd;
     Compiler* const compiler;
-private:
-    static int tlsID;
-    LogEnv* next;
 };
 
 BOOL vlogf(unsigned level, const char* fmt, va_list args);
@@ -51,13 +46,7 @@ extern  "C"
 void    __cdecl     assertAbort(const char *why, const char *file, unsigned line);
 
 #undef  assert
-// TODO-ARM64-NYI: Temporarily make all asserts in the JIT use the NYI code path
-#ifdef _TARGET_ARM64_
-extern void notYetImplemented(const char * msg, const char * file, unsigned line);
-#define assert(p)   (void)((p) || (notYetImplemented("assert: " #p, __FILE__, __LINE__),0))
-#else
 #define assert(p)   (void)((p) || (assertAbort(#p, __FILE__, __LINE__),0))
-#endif
 
 #else // DEBUG
 

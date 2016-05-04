@@ -15,6 +15,8 @@ Visual Studio must be installed. Supported versions:
 
 - [Visual Studio 2015](https://www.visualstudio.com/downloads/visual-studio-2015-downloads-vs) (Community, Professional, Enterprise)
 
+Make sure that you install "VC++ Tools". By default they will not be installed.
+
 Visual Studio Express is not supported.
 
 CMake
@@ -35,6 +37,9 @@ any recent (2.4+) version of Python should work, including Python 3.
 PowerShell
 ----------
 PowerShell is used in the build system. Ensure that it is accessible via the PATH environment variable. Typically this is %SYSTEMROOT%\System32\WindowsPowerShell\v1.0\.
+
+Powershell version must be 3.0 or higher. This should be the case for Windows 8 and later builds.
+- Windows 7 SP1 can install Powershell version 4 [here](https://www.microsoft.com/en-us/download/details.aspx?id=40855).
 
 Git Setup
 ---------

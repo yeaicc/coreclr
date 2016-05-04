@@ -29,7 +29,10 @@
     
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="arglist64.il" />
+    <Compile Condition="'$(BuildArch)' == 'x86'" Include="arglist.il" />
+    <Compile Condition="'$(BuildArch)' == 'x64'" Include="arglist64.il" />
+    <Compile Condition="'$(BuildArch)' == 'arm'" Include="arglistARM.il" />
+    <Compile Condition="'$(BuildArch)' == 'arm64'" Include="arglist64.il" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />

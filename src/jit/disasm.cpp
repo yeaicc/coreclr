@@ -1314,7 +1314,9 @@ void DisAssembler::DisasmBuffer(FILE*         pfile,
         return;
     }
 
-    WIN64_ONLY(pdis->SetAddr64(true));
+#ifdef _TARGET_64BIT_
+    pdis->SetAddr64(true);
+#endif
 
     // Store a pointer to the DisAssembler so that the callback functions
     // can get to it.
@@ -1531,9 +1533,7 @@ void    DisAssembler::disAsmCode(BYTE* hotCodePtr, size_t hotCodeSize, BYTE* col
 #endif // !DEBUG
 
 #ifdef DEBUG
-    static ConfigString fJITLateDisasmTo;
-
-    LPWSTR fileName = fJITLateDisasmTo.val(CLRConfig::INTERNAL_JITLateDisasmTo);
+    const wchar_t* fileName = JitConfig.JitLateDisasmTo();
     if (fileName != nullptr)
     {
         errno_t ec = _wfopen_s(&disAsmFile, fileName, W("a+"));

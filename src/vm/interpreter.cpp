@@ -10837,7 +10837,7 @@ Interpreter::AddrToMDMap* Interpreter::GetAddrToMdMap()
 
     if (s_addrToMDMap == NULL)
     {
-        s_addrToMDMap = new AddrToMDMap(/* use default allocator */ NULL);
+        s_addrToMDMap = new AddrToMDMap();
     }
     return s_addrToMDMap;
 }
@@ -10859,7 +10859,7 @@ void Interpreter::RecordInterpreterStubForMethodDesc(CORINFO_METHOD_HANDLE md, v
     CORINFO_METHOD_HANDLE dummy;
     assert(!map->Lookup(addr, &dummy));
 #endif // DEBUG
-    map->Set(addr, md);
+    map->AddOrReplace(KeyValuePair<void*,CORINFO_METHOD_HANDLE>(addr, md));
 }
 
 MethodDesc* Interpreter::InterpretationStubToMethodInfo(PCODE addr)
@@ -10899,7 +10899,7 @@ Interpreter::MethodHandleToInterpMethInfoPtrMap* Interpreter::GetMethodHandleToI
 
     if (s_methodHandleToInterpMethInfoPtrMap == NULL)
     {
-        s_methodHandleToInterpMethInfoPtrMap = new MethodHandleToInterpMethInfoPtrMap(/* use default allocator */ NULL);
+        s_methodHandleToInterpMethInfoPtrMap = new MethodHandleToInterpMethInfoPtrMap();
     }
     return s_methodHandleToInterpMethInfoPtrMap;
 }
@@ -10935,8 +10935,8 @@ InterpreterMethodInfo* Interpreter::RecordInterpreterMethodInfoForMethodHandle(C
     mi.m_thread = GetThread();
 #endif
 
-    bool b = map->Set(md, mi);
-    _ASSERTE_MSG(!b, "Multiple InterpMethInfos for method desc.");
+    _ASSERTE_MSG(map->LookupPtr(md) == NULL, "Multiple InterpMethInfos for method desc.");
+    map->Add(md, mi);
     return methInfo;
 }
 

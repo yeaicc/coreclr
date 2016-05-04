@@ -695,23 +695,34 @@ const   char *      refCntWtd2str(unsigned refCntWtd)
     return  temp;
 }
 
-#define MAX_RANGE 0xfffff
+#endif // DEBUG
 
-/**************************************************************************/
-bool ConfigMethodRange::contains(ICorJitInfo* info, CORINFO_METHOD_HANDLE method) 
+#if defined(DEBUG) || defined(INLINE_DATA)
+
+//------------------------------------------------------------------------
+// Contains: check if the range includes a particular method
+//
+// Arguments:
+//    info   -- jit interface pointer
+//    method -- method handle for the method of interest
+
+bool ConfigMethodRange::Contains(ICorJitInfo* info, CORINFO_METHOD_HANDLE method)
 {
     _ASSERT(m_inited == 1);
 
-    if (m_lastRange == 0)   // no range mean everything
-        return true;
-
-    unsigned hash = info->getMethodHash(method)%MAX_RANGE;
-    assert(hash < MAX_RANGE);
-    int i = 0;
-
-    for (i=0 ; i<m_lastRange ; i+=2) 
+    // No ranges specified means all methods included.
+    if (m_lastRange == 0)
     {
-        if (m_ranges[i]<=hash && hash<=m_ranges[i+1])
+        return true;
+    }
+
+    // Check the hash. Note we can't use the cached hash here since
+    // we may not be asking about the method currently being jitted.
+    const unsigned hash = info->getMethodHash(method);
+
+    for (unsigned i = 0; i < m_lastRange; i++)
+    {
+        if ((m_ranges[i].m_low <= hash) && (hash <= m_ranges[i].m_high))
         {
             return true;
         }        
@@ -720,57 +731,127 @@ bool ConfigMethodRange::contains(ICorJitInfo* info, CORINFO_METHOD_HANDLE method
     return false;
 }
 
-/**************************************************************************/
-void ConfigMethodRange::init(const CLRConfig::ConfigStringInfo & info)
-{
-    // make sure that the memory was zero initialized
-    _ASSERTE(m_inited == 0 || m_inited == 1);
+//------------------------------------------------------------------------
+// InitRanges: parse the range string and set up the range info
+//
+// Arguments:
+//    rangeStr -- string to parse (may be nullptr)
+//    capacity -- number ranges to allocate in the range array
+//
+// Notes:
+//    Does some internal error checking; clients can use Error()
+//    to determine if the range string couldn't be fully parsed
+//    because of bad characters or too many entries, or had values
+//    that were too large to represent.
 
-    LPWSTR str = CLRConfig::GetConfigValue(info);
-    initRanges(str);
-    CLRConfig::FreeConfigString(str);
-    m_inited = true;
-}
-
-/**************************************************************************/
-void ConfigMethodRange::initRanges(__in_z LPCWSTR rangeStr)
+void ConfigMethodRange::InitRanges(const wchar_t* rangeStr, unsigned capacity)
 {
-    if (rangeStr == 0)
+    // Make sure that the memory was zero initialized
+    assert(m_inited == 0 || m_inited == 1);
+    assert(m_entries == 0);
+    assert(m_ranges == nullptr);
+    assert(m_lastRange == 0);
+
+    // Flag any crazy-looking requests
+    assert(capacity < 100000);
+
+    if (rangeStr == nullptr)
+    {
+        m_inited = 1;
         return;
-
-    LPCWSTR p = rangeStr;
-    unsigned char lastRange = 0;
-    while (*p) {
-        while (*p == ' ')       //skip blanks
-            p++;
-        int i = 0;
-        while ('0' <= *p && *p <= '9')
-        {
-            i = 10*i + ((*p++) - '0');
-        }
-        m_ranges[lastRange++] = i;
-
-        while (*p == ' ')
-            p++;
-
-        // Have we read only the first part of a (possible) pair?
-        if (lastRange & 1) 
-        {
-            // Is this entry of the form "beg-end" or simply "num"?
-            if (*p == '-')
-                p++; // Skip over the '-' to get to "end"
-            else
-                m_ranges[lastRange++] = i; // This is just "num".
-        }
     }
-    if (lastRange & 1) 
-        m_ranges[lastRange++] = MAX_RANGE;
-    assert(lastRange < 100);
+
+    // Allocate some persistent memory
+    ICorJitHost* jitHost = JitHost::getJitHost();
+    m_ranges = (Range*)jitHost->allocateMemory(capacity * sizeof(Range));
+    m_entries = capacity;
+
+    const wchar_t* p = rangeStr;
+    unsigned lastRange = 0;
+    bool setHighPart = false;
+
+    while ((*p != 0) && (lastRange < m_entries))
+    {
+        while (*p == L' ')
+        {
+            p++;
+        }
+
+        int i = 0;
+
+        while (L'0' <= *p && *p <= L'9')
+        {
+            int j = 10 * i + ((*p++) - L'0');
+
+            // Check for overflow
+            if ((m_badChar != 0) && (j <= i))
+            {
+                m_badChar = (p - rangeStr) + 1;
+            }
+
+            i = j;
+        }
+
+        // Was this the high part of a low-high pair?
+        if (setHighPart)
+        {
+            // Yep, set it and move to the next range
+            m_ranges[lastRange].m_high = i;
+
+            // Sanity check that range is proper
+            if ((m_badChar != 0) &&
+                (m_ranges[lastRange].m_high < m_ranges[lastRange].m_low))
+            {
+                m_badChar = (p - rangeStr) + 1;
+            }
+
+            lastRange++;
+            setHighPart = false;
+            continue;
+        }
+
+        // Must have been looking for the low part of a range
+        m_ranges[lastRange].m_low = i;
+
+        while (*p == L' ')
+        {
+            p++;
+        }
+
+        // Was that the low part of a low-high pair?
+        if (*p == L'-')
+        {
+            // Yep, skip the dash and set high part next time around.
+            p++;
+            setHighPart = true;
+            continue;
+        }
+
+        // Else we have a point range, so set high = low
+        m_ranges[lastRange].m_high = i;
+        lastRange++;
+    }
+
+    // If we didn't parse the full range string, note index of the the
+    // first bad char.
+    if ((m_badChar != 0) && (*p != 0))
+    {
+        m_badChar = (p - rangeStr) + 1;
+    }
+
+    // Finish off any remaining open range
+    if (setHighPart)
+    {
+        m_ranges[lastRange].m_high = UINT_MAX;
+        lastRange++;
+    }
+
+    assert(lastRange <= m_entries);
     m_lastRange = lastRange;
+    m_inited = 1;
 }
 
-#endif // DEBUG
-
+#endif // defined(DEBUG) || defined(INLINE_DATA)
 
 #if CALL_ARG_STATS || COUNT_BASIC_BLOCKS || COUNT_LOOPS || EMITTER_STATS || MEASURE_NODE_SIZE
 
@@ -778,109 +859,92 @@ void ConfigMethodRange::initRanges(__in_z LPCWSTR rangeStr)
  *  Histogram class.
  */
 
-histo::histo(IAllocator* alloc, unsigned * sizeTab, unsigned sizeCnt) :
-    histoAlloc(alloc),
-    histoCounts(nullptr)
+Histogram::Histogram(IAllocator* allocator, const unsigned* const sizeTable)
+    : m_allocator(allocator)
+    , m_sizeTable(sizeTable)
+    , m_counts(nullptr)
 {
-    if (sizeCnt == 0)
+    unsigned sizeCount = 0;
+    do
     {
-        do
+        sizeCount++;
+    }
+    while ((sizeTable[sizeCount] != 0) && (sizeCount < 1000));
+
+    m_sizeCount = sizeCount;
+}
+
+Histogram::~Histogram()
+{
+    m_allocator->Free(m_counts);
+}
+
+// We need to lazy allocate the histogram data so static `Histogram` variables don't try to
+// call the host memory allocator in the loader lock, which doesn't work.
+void Histogram::ensureAllocated()
+{
+    if (m_counts == nullptr)
+    {
+        m_counts = new (m_allocator) unsigned[m_sizeCount + 1];
+        memset(m_counts, 0, (m_sizeCount + 1) * sizeof(*m_counts));
+    }
+}
+
+void Histogram::dump(FILE* output)
+{
+    ensureAllocated();
+
+    unsigned t = 0;
+    for (unsigned i = 0; i < m_sizeCount; i++)
+    {
+        t += m_counts[i];
+    }
+
+    for (unsigned c = 0, i = 0; i <= m_sizeCount; i++)
+    {
+        if (i == m_sizeCount)
         {
-            sizeCnt++;
-        }
-        while ((sizeTab[sizeCnt] != 0) && (sizeCnt < 1000));
-    }
-
-    histoSizCnt = sizeCnt;
-    histoSizTab = sizeTab;
-}
-
-histo::~histo()
-{
-    histoAlloc->Free(histoCounts);
-}
-
-// We need to lazy allocate the histogram data so static "histo" variables don't try to call the CLR memory allocator
-// in the loader lock, which doesn't work.
-void                histo::histoEnsureAllocated()
-{
-    if (histoCounts == nullptr)
-    {
-        histoCounts = new (histoAlloc) unsigned[histoSizCnt + 1];
-        histoClr();
-    }
-}
-
-void                histo::histoClr()
-{
-    histoEnsureAllocated();
-    memset(histoCounts, 0, (histoSizCnt + 1) * sizeof(*histoCounts));
-}
-
-void                histo::histoDsp(FILE* fout)
-{
-    histoEnsureAllocated();
-
-    unsigned        i;
-    unsigned        c;
-    unsigned        t;
-
-    for (i = t = 0; i <= histoSizCnt; i++)
-    {
-        t += histoCounts[i];
-    }
-
-    for (i = c = 0; i <= histoSizCnt; i++)
-    {
-        if  (i == histoSizCnt)
-        {
-            if  (!histoCounts[i])
+            if (m_counts[i] == 0)
+            {
                 break;
+            }
 
-            fprintf(fout, "      >    %7u", histoSizTab[i-1]);
+            fprintf(output, "      >    %7u", m_sizeTable[i - 1]);
         }
         else
         {
             if (i == 0)
             {
-                fprintf(fout, "     <=    ");
+                fprintf(output, "     <=    ");
             }
             else
             {
-                fprintf(fout, "%7u .. ", histoSizTab[i-1]+1);
+                fprintf(output, "%7u .. ", m_sizeTable[i - 1] + 1);
             }
 
-            fprintf(fout, "%7u", histoSizTab[i]);
+            fprintf(output, "%7u", m_sizeTable[i]);
         }
 
-        c += histoCounts[i];
+        c += m_counts[i];
 
-        fprintf(fout, " ===> %7u count (%3u%% of total)\n", histoCounts[i], (int)(100.0 * c / t));
+        fprintf(output, " ===> %7u count (%3u%% of total)\n", m_counts[i], (int)(100.0 * c / t));
     }
 }
 
-void                histo::histoRec(unsigned __int64 siz, unsigned cnt)
+void Histogram::record(unsigned size)
 {
-    assert(FitsIn<unsigned>(siz));
-    histoRec((unsigned)siz, cnt);
-}
+    ensureAllocated();
 
-void                histo::histoRec(unsigned siz, unsigned cnt)
-{
-    histoEnsureAllocated();
-
-    unsigned        i;
-    unsigned    *   t;
-
-    for (i = 0, t = histoSizTab;
-         i < histoSizCnt;
-         i++  , t++)
+    unsigned i;
+    for (i = 0; i < m_sizeCount; i++)
     {
-        if  (*t >= siz)
+        if (m_sizeTable[i] >= size)
+        {
             break;
+        }
     }
 
-    histoCounts[i] += cnt;
+    m_counts[i]++;
 }
 
 #endif // CALL_ARG_STATS || COUNT_BASIC_BLOCKS || COUNT_LOOPS || EMITTER_STATS || MEASURE_NODE_SIZE
@@ -1073,10 +1137,10 @@ int SimpleSprintf_s(__in_ecount(cbBufSize - (pWriteStart- pBufStart)) char * pWr
                     __in_ecount(cbBufSize) char * pBufStart, size_t cbBufSize,
                     __in_z const char * fmt, ...)
 {
-    _ASSERTE(fmt);
-    _ASSERTE(pBufStart);
-    _ASSERTE(pWriteStart);
-    _ASSERTE((size_t)pBufStart <= (size_t)pWriteStart);
+    assert(fmt);
+    assert(pBufStart);
+    assert(pWriteStart);
+    assert((size_t)pBufStart <= (size_t)pWriteStart);
     int ret;
 
     //compute the space left in the buffer.
@@ -1194,6 +1258,7 @@ void HelperCallProperties::init()
 
         case CORINFO_HELP_NEW_CROSSCONTEXT:
         case CORINFO_HELP_NEWFAST:
+        case CORINFO_HELP_READYTORUN_NEW:
 
             mayFinalize   = true;  // These may run a finalizer
             isAllocator   = true;
@@ -1215,7 +1280,7 @@ void HelperCallProperties::init()
         case CORINFO_HELP_NEW_MDARR:
         case CORINFO_HELP_NEWARR_1_DIRECT:
         case CORINFO_HELP_NEWARR_1_OBJ:
-
+        case CORINFO_HELP_READYTORUN_NEWARR_1:
 
             mayFinalize   = true;  // These may run a finalizer
             isAllocator   = true;
@@ -1263,7 +1328,8 @@ void HelperCallProperties::init()
         case CORINFO_HELP_ISINSTANCEOFARRAY:
         case CORINFO_HELP_ISINSTANCEOFCLASS:
         case CORINFO_HELP_ISINSTANCEOFANY:
-            
+        case CORINFO_HELP_READYTORUN_ISINSTANCEOF:
+
             isPure   = true;
             noThrow  = true;   // These return null for a failing cast
             break;
@@ -1274,7 +1340,8 @@ void HelperCallProperties::init()
         case CORINFO_HELP_CHKCASTCLASS:
         case CORINFO_HELP_CHKCASTANY:
         case CORINFO_HELP_CHKCASTCLASS_SPECIAL:
-            
+        case CORINFO_HELP_READYTORUN_CHKCAST:
+
             // These throw for a failing cast
             // But if given a null input arg will return null
             isPure = true;
@@ -1314,6 +1381,7 @@ void HelperCallProperties::init()
         case CORINFO_HELP_GETSTATICFIELDADDR_TLS:
         case CORINFO_HELP_GETGENERICS_GCSTATIC_BASE:
         case CORINFO_HELP_GETGENERICS_NONGCSTATIC_BASE:
+        case CORINFO_HELP_READYTORUN_STATIC_BASE:
 
             // These may invoke static class constructors
             // These can throw InvalidProgram exception if the class can not be constructed
@@ -1412,7 +1480,7 @@ void HelperCallProperties::init()
 // MyAssembly;mscorlib;System
 // MyAssembly;mscorlib System
 
-AssemblyNamesList2::AssemblyNamesList2(__in LPWSTR list, IAllocator* alloc)
+AssemblyNamesList2::AssemblyNamesList2(const wchar_t* list, IAllocator* alloc)
     : m_alloc(alloc)
 {
     assert(m_alloc != nullptr);
@@ -1421,7 +1489,7 @@ AssemblyNamesList2::AssemblyNamesList2(__in LPWSTR list, IAllocator* alloc)
     LPWSTR nameStart = nullptr; // start of the name currently being processed. nullptr if no current name
     AssemblyName** ppPrevLink = &m_pNames;
     
-    for (LPWSTR listWalk = list; prevChar != '\0'; prevChar = *listWalk, listWalk++)
+    for (LPWSTR listWalk = const_cast<LPWSTR>(list); prevChar != '\0'; prevChar = *listWalk, listWalk++)
     {
         WCHAR curChar = *listWalk;
         
@@ -1485,7 +1553,7 @@ AssemblyNamesList2::~AssemblyNamesList2()
     }
 }
 
-bool AssemblyNamesList2::IsInList(LPCUTF8 assemblyName)
+bool AssemblyNamesList2::IsInList(const char* assemblyName)
 {
     for (AssemblyName* pName = m_pNames; pName != nullptr; pName = pName->m_next)
     {
@@ -1561,3 +1629,99 @@ unsigned            CountDigits(unsigned num, unsigned base /* = 10 */)
 }
 
 #endif // DEBUG
+
+
+double FloatingPointUtils::convertUInt64ToDouble(unsigned __int64 uIntVal) {
+    __int64 s64 = uIntVal; 
+    double d;
+    if (s64 < 0) {
+#if defined(_TARGET_XARCH_)
+        // RyuJIT codegen and clang (or gcc) may produce different results for casting uint64 to 
+        // double, and the clang result is more accurate. For example,
+        //    1) (double)0x84595161401484A0UL --> 43e08b2a2c280290  (RyuJIT codegen or VC++)
+        //    2) (double)0x84595161401484A0UL --> 43e08b2a2c280291  (clang or gcc)
+        // If the folding optimization below is implemented by simple casting of (double)uint64_val
+        // and it is compiled by clang, casting result can be inconsistent, depending on whether
+        // the folding optimization is triggered or the codegen generates instructions for casting.                        //
+        // The current solution is to force the same math as the codegen does, so that casting
+        // result is always consistent.
+
+        // d = (double)(int64_t)uint64 + 0x1p64
+        uint64_t adjHex = 0x43F0000000000000UL;
+        d = (double)s64 + *(double*)&adjHex;
+#else
+        d = (double)uIntVal;
+#endif
+    }
+    else 
+    {
+        d = (double)uIntVal;
+    }
+    return d;
+}
+
+float FloatingPointUtils::convertUInt64ToFloat(unsigned __int64 u64) {
+    double d = convertUInt64ToDouble(u64);
+    return (float)d;
+}
+
+unsigned __int64 FloatingPointUtils::convertDoubleToUInt64(double d) {
+    unsigned __int64 u64;
+    if (d >= 0.0)
+    {
+        // Work around a C++ issue where it doesn't properly convert large positive doubles
+        const double two63 = 2147483648.0 * 4294967296.0;
+        if (d < two63) {
+            u64 = UINT64(d);
+        }
+        else {
+            // subtract 0x8000000000000000, do the convert then add it back again
+            u64 = INT64(d - two63) + I64(0x8000000000000000);
+        }
+        return u64;
+    }
+
+#ifdef _TARGET_XARCH_
+
+    // While the Ecma spec does not specifically call this out,
+    // the case of conversion from negative double to unsigned integer is
+    // effectively an overflow and therefore the result is unspecified.
+    // With MSVC for x86/x64, such a conversion results in the bit-equivalent
+    // unsigned value of the conversion to integer. Other compilers convert
+    // negative doubles to zero when the target is unsigned.
+    // To make the behavior consistent across OS's on TARGET_XARCH,
+    // this double cast is needed to conform MSVC behavior.
+
+    u64 = UINT64(INT64(d));
+#else
+    u64 = UINT64(d);
+#endif // _TARGET_XARCH_
+
+    return u64;
+}
+
+// Rounds a double-precision floating-point value to the nearest integer,
+// and rounds midpoint values to the nearest even number.
+// Note this should align with classlib in floatnative.cpp
+// Specializing for x86 using a x87 instruction is optional since
+// this outcome is identical across targets.
+double FloatingPointUtils::round(double d)
+{
+    // If the number has no fractional part do nothing
+    // This shortcut is necessary to workaround precision loss in borderline cases on some platforms
+    if (d == (double)(__int64)d)
+        return d;
+
+    double tempVal = (d + 0.5);
+    //We had a number that was equally close to 2 integers.
+    //We need to return the even one.
+    double flrTempVal = floor(tempVal);
+    if (flrTempVal == tempVal) {
+        if (fmod(tempVal, 2.0) != 0) {
+            flrTempVal -= 1.0;
+        }
+    }
+
+    flrTempVal = _copysign(flrTempVal, d);
+    return flrTempVal;
+}

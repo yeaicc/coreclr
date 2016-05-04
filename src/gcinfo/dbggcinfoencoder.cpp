@@ -43,38 +43,51 @@ void GcInfoEncoder::LifetimeTransitionAllocator::Free (void *context, void *pv)
 }
 
 
+BitStreamWriter::MemoryBlockList::MemoryBlockList()
+    : m_head(nullptr),
+      m_tail(nullptr)
+{
+}
+
+BitStreamWriter::MemoryBlock* BitStreamWriter::MemoryBlockList::AppendNew(IJitAllocator* allocator, size_t bytes)
+{
+    auto* memBlock = reinterpret_cast<MemoryBlock*>(allocator->Alloc(sizeof(MemoryBlock) + bytes));
+    memBlock->m_next = nullptr;
+
+    if (m_tail != nullptr)
+    {
+        _ASSERTE(m_head != nullptr);
+        m_tail->m_next = memBlock;
+    }
+    else
+    {
+        _ASSERTE(m_head == nullptr);
+        m_head = memBlock;
+    }
+
+    m_tail = memBlock;
+    return memBlock;
+}
+
+void BitStreamWriter::MemoryBlockList::Dispose(IJitAllocator* allocator)
+{
+#ifdef MUST_CALL_JITALLOCATOR_FREE
+    for (MemoryBlock* block = m_head, *next; block != nullptr; block = next)
+    {
+        next = block->m_next;
+        allocator->Free(block);
+    }
+    m_head = nullptr;
+    m_tail = nullptr;
+#endif
+}
+
+
 void BitStreamWriter::AllocMemoryBlock()
 {
     _ASSERTE( IS_ALIGNED( m_MemoryBlockSize, sizeof( size_t ) ) );
-    m_pCurrentSlot = (size_t*) m_pAllocator->Alloc( m_MemoryBlockSize );
-    m_OutOfBlockSlot = m_pCurrentSlot + m_MemoryBlockSize / sizeof( size_t );
-
-    MemoryBlockDesc* pMemBlockDesc = (MemoryBlockDesc*) m_pAllocator->Alloc( sizeof( MemoryBlockDesc ) );
-    _ASSERTE( IS_ALIGNED( pMemBlockDesc, sizeof( void* ) ) );
-
-    pMemBlockDesc->Init();
-    pMemBlockDesc->StartAddress = m_pCurrentSlot;
-    m_MemoryBlocks.InsertTail( pMemBlockDesc );
-
-#ifdef _DEBUG
-       m_MemoryBlocksCount++;
-#endif
-
-}
-
-GcInfoEncoder::GcInfoEncoder(
-            ICorJitInfo*                pCorJitInfo,
-            CORINFO_METHOD_INFO*        pMethodInfo,
-            IJitAllocator*              pJitAllocator
-            )
-    :   m_HeaderInfoWriter( pJitAllocator ),
-#if 0
-#ifdef PARTIALLY_INTERRUPTIBLE_GC_SUPPORTED
-        m_PartiallyInterruptibleInfoWriter( pJitAllocator ),
-#endif
-#endif
         m_FullyInterruptibleInfoWriter( pJitAllocator ),
-        m_LifetimeTransitions()
+        m_LifetimeTransitions( pJitAllocator )
 {
     _ASSERTE( pCorJitInfo != NULL );
     _ASSERTE( pMethodInfo != NULL );
@@ -354,7 +367,7 @@ void GcInfoEncoder::SetSlotState(
     transition.CodeOffset = instructionOffset;
     transition.BecomesLive = ( slotState == GC_SLOT_LIVE );
 
-    *( m_LifetimeTransitions.AppendThrowing() ) = transition;
+    *( m_LifetimeTransitions.Append() ) = transition;
 }
 
 
@@ -420,56 +433,48 @@ void GcInfoEncoder::SetSizeOfStackOutgoingAndScratchArea( UINT32 size )
 #endif // FIXED_STACK_PARAMETER_SCRATCH_AREA
 
 
-class LifetimeTransitionsQuickSort : public CQuickSort<GcInfoEncoder::LifetimeTransition>
+int __cdecl CompareLifetimeTransitionsForQsort(const void* p1, const void* p2)
 {
-public:
-    LifetimeTransitionsQuickSort(
-        GcInfoEncoder::LifetimeTransition*   pBase,
-        size_t               count
-        )
-        : CQuickSort<GcInfoEncoder::LifetimeTransition>( pBase, count )
-    {}
+    const GcInfoEncoder::LifetimeTransition* pFirst = (const GcInfoEncoder::LifetimeTransition*) p1;
+    const GcInfoEncoder::LifetimeTransition* pSecond = (const GcInfoEncoder::LifetimeTransition*) p2;
 
-    int Compare( GcInfoEncoder::LifetimeTransition* pFirst, GcInfoEncoder::LifetimeTransition* pSecond )
+    // All registers come before all stack slots
+    if( pFirst->SlotDesc.IsRegister && !pSecond->SlotDesc.IsRegister ) return -1;
+    if( !pFirst->SlotDesc.IsRegister && pSecond->SlotDesc.IsRegister ) return 1;
+
+    // Then sort them by slot
+    if( pFirst->SlotDesc.IsRegister )
     {
-        // All registers come before all stack slots
-        if( pFirst->SlotDesc.IsRegister && !pSecond->SlotDesc.IsRegister ) return -1;
-        if( !pFirst->SlotDesc.IsRegister && pSecond->SlotDesc.IsRegister ) return 1;
-
-        // Then sort them by slot
-        if( pFirst->SlotDesc.IsRegister )
-        {
-            _ASSERTE( pSecond->SlotDesc.IsRegister );
-            if( pFirst->SlotDesc.Slot.RegisterNumber < pSecond->SlotDesc.Slot.RegisterNumber ) return -1;
-            if( pFirst->SlotDesc.Slot.RegisterNumber > pSecond->SlotDesc.Slot.RegisterNumber ) return 1;
-        }
-        else
-        {
-            _ASSERTE( !pSecond->SlotDesc.IsRegister );
-            if( pFirst->SlotDesc.Slot.Stack.SpOffset < pSecond->SlotDesc.Slot.Stack.SpOffset ) return -1;
-            if( pFirst->SlotDesc.Slot.Stack.SpOffset > pSecond->SlotDesc.Slot.Stack.SpOffset ) return 1;
-
-            // This is arbitrary, but we want to make sure they are considered separate slots
-            if( pFirst->SlotDesc.Slot.Stack.Base < pSecond->SlotDesc.Slot.Stack.Base ) return -1;
-            if( pFirst->SlotDesc.Slot.Stack.Base > pSecond->SlotDesc.Slot.Stack.Base ) return 1;
-        }
-
-        // Then sort them by code offset
-        size_t firstOffset  = pFirst->CodeOffset;
-        size_t secondOffset = pSecond->CodeOffset;
-        if( firstOffset < secondOffset ) return -1;
-        if( firstOffset > secondOffset ) return 1;
-
-        //
-        // Same slot and offset. We put all the going-live transition first
-        //  so that the encoder will skip the remaining transitions and 
-        //  the going-live transitions take precedence
-        //
-        _ASSERTE( ( pFirst->BecomesLive == 0 ) || ( pFirst->BecomesLive == 1 ) );
-        _ASSERTE( ( pSecond->BecomesLive == 0 ) || ( pSecond->BecomesLive == 1 ) );
-        return ( pSecond->BecomesLive - pFirst->BecomesLive );
+        _ASSERTE( pSecond->SlotDesc.IsRegister );
+        if( pFirst->SlotDesc.Slot.RegisterNumber < pSecond->SlotDesc.Slot.RegisterNumber ) return -1;
+        if( pFirst->SlotDesc.Slot.RegisterNumber > pSecond->SlotDesc.Slot.RegisterNumber ) return 1;
     }
-};
+    else
+    {
+        _ASSERTE( !pSecond->SlotDesc.IsRegister );
+        if( pFirst->SlotDesc.Slot.Stack.SpOffset < pSecond->SlotDesc.Slot.Stack.SpOffset ) return -1;
+        if( pFirst->SlotDesc.Slot.Stack.SpOffset > pSecond->SlotDesc.Slot.Stack.SpOffset ) return 1;
+
+        // This is arbitrary, but we want to make sure they are considered separate slots
+        if( pFirst->SlotDesc.Slot.Stack.Base < pSecond->SlotDesc.Slot.Stack.Base ) return -1;
+        if( pFirst->SlotDesc.Slot.Stack.Base > pSecond->SlotDesc.Slot.Stack.Base ) return 1;
+    }
+
+    // Then sort them by code offset
+    size_t firstOffset  = pFirst->CodeOffset;
+    size_t secondOffset = pSecond->CodeOffset;
+    if( firstOffset < secondOffset ) return -1;
+    if( firstOffset > secondOffset ) return 1;
+
+    //
+    // Same slot and offset. We put all the going-live transition first
+    //  so that the encoder will skip the remaining transitions and 
+    //  the going-live transitions take precedence
+    //
+    _ASSERTE( ( pFirst->BecomesLive == 0 ) || ( pFirst->BecomesLive == 1 ) );
+    _ASSERTE( ( pSecond->BecomesLive == 0 ) || ( pSecond->BecomesLive == 1 ) );
+    return ( pSecond->BecomesLive - pFirst->BecomesLive );
+}
 
 
 void GcInfoEncoder::Build()
@@ -585,13 +590,8 @@ void GcInfoEncoder::Build()
     m_LifetimeTransitions.CopyTo(m_rgSortedTransitions);
 
     // Sort them first
-    LifetimeTransitionsQuickSort lifetimeTransitionsQSort(
-        m_rgSortedTransitions,
-        m_LifetimeTransitions.Count()
-        );
-    lifetimeTransitionsQSort.Sort();
-
     size_t numTransitions = m_LifetimeTransitions.Count();
+    qsort(m_rgSortedTransitions, numTransitions, sizeof(LifetimeTransition), CompareLifetimeTransitionsForQsort);
 
     //------------------------------------------------------------------
     // Count registers and stack slots
@@ -944,22 +944,21 @@ void BitStreamWriter::CopyTo( BYTE* buffer )
     int i,c;
     BYTE* source = NULL;
 
-    MemoryBlockDesc* pMemBlockDesc = m_MemoryBlocks.GetHead();
+    MemoryBlock* pMemBlock = m_MemoryBlocks.Head();
     _ASSERTE( pMemBlockDesc != NULL );
-    while( m_MemoryBlocks.GetNext( pMemBlockDesc ) != NULL )
+    while (pMemBlock->Next() != NULL)
     {
-        source = (BYTE*) pMemBlockDesc->StartAddress;
+        source = (BYTE*) pMemBlock->Contents;
         // @TODO: use memcpy instead
         for( i = 0; i < m_MemoryBlockSize; i++ )
         {
             *( buffer++ ) = *( source++ );
         }
 
-        pMemBlockDesc = m_MemoryBlocks.GetNext( pMemBlockDesc );
-        _ASSERTE( pMemBlockDesc != NULL );
+        pMemBlock = pMemBlock->Next();
     }
 
-    source = (BYTE*) pMemBlockDesc->StartAddress;
+    source = (BYTE*) pMemBlock->Contents;
     // The number of bytes to copy in the last block
     c = (int) ((BYTE*) ( m_pCurrentSlot + 1 ) - source - m_FreeBitsInCurrentSlot/8);
     _ASSERTE( c >= 0 );
@@ -973,16 +972,7 @@ void BitStreamWriter::CopyTo( BYTE* buffer )
 
 void BitStreamWriter::Dispose()
 {
-#ifdef MUST_CALL_JITALLOCATOR_FREE
-    MemoryBlockDesc* pMemBlockDesc;
-    while( NULL != ( pMemBlockDesc = m_MemoryBlocks.RemoveHead() ) )
-    {
-        m_pAllocator->Free( pMemBlockDesc->StartAddress );
-        m_pAllocator->Free( pMemBlockDesc );
-    }
-
-    m_pAllocator->Free( m_SlotMappings );
-#endif
+    m_MemoryBlocks.Dispose(m_pAllocator);
 }
 
 }

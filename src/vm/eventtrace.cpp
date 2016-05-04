@@ -6805,15 +6805,38 @@ VOID ETW::MethodLog::SendEventsForNgenMethods(Module *pModule, DWORD dwEventOpti
     } CONTRACTL_END;
 
 #ifdef FEATURE_PREJIT
-    if(!pModule || !pModule->HasNativeImage())
+    if (!pModule)
         return;
 
-    MethodIterator mi(pModule);
+    PEImageLayout * pLoadedLayout = pModule->GetFile()->GetLoaded();
+    _ASSERTE(pLoadedLayout != NULL);
 
-    while(mi.Next())
+#ifdef FEATURE_READYTORUN
+    if (pLoadedLayout->HasReadyToRunHeader())
     {
-        MethodDesc *hotDesc = (MethodDesc *)mi.GetMethodDesc();
-        ETW::MethodLog::SendMethodEvent(hotDesc, dwEventOptions, FALSE);
+        ReadyToRunInfo::MethodIterator mi(pModule->GetReadyToRunInfo());
+        while (mi.Next())
+        {
+            // Call GetMethodDesc_NoRestore instead of GetMethodDesc to avoid restoring methods at shutdown.
+            MethodDesc *hotDesc = (MethodDesc *)mi.GetMethodDesc_NoRestore();
+            if (hotDesc != NULL)
+            {
+                ETW::MethodLog::SendMethodEvent(hotDesc, dwEventOptions, FALSE);
+            }
+        }
+
+        return;
+    }
+#endif // FEATURE_READYTORUN
+    if (pModule->HasNativeImage())
+    {
+        MethodIterator mi(pModule);
+
+        while (mi.Next())
+        {
+            MethodDesc *hotDesc = (MethodDesc *)mi.GetMethodDesc();
+            ETW::MethodLog::SendMethodEvent(hotDesc, dwEventOptions, FALSE);
+        }
     }
 #endif // FEATURE_PREJIT
 }
@@ -7388,32 +7411,5 @@ VOID ETW::EnumerationLog::EnumerationHelper(Module *moduleFilter, BaseDomain *do
         }    
     }    
 }
-
-#if defined(FEATURE_EVENTSOURCE_XPLAT)
-
-void QCALLTYPE XplatEventSourceLogger::LogEventSource(__in_z int eventID, __in_z LPCWSTR eventName, __in_z LPCWSTR eventSourceName, __in_z LPCWSTR payload)
-{
-    QCALL_CONTRACT;
-
-    BEGIN_QCALL;
-    FireEtwEventSource(eventID, eventName, eventSourceName, payload);
-    END_QCALL;
-}
-
-BOOL QCALLTYPE XplatEventSourceLogger::IsEventSourceLoggingEnabled()
-{
-    QCALL_CONTRACT;
-
-    BOOL retVal = FALSE;
-
-    BEGIN_QCALL;
-    retVal = XplatEventLogger::IsEventLoggingEnabled();
-    END_QCALL;
-    
-    return retVal;
-
-}
-
-#endif //defined(FEATURE_EVENTSOURCE_XPLAT)
 
 #endif // !FEATURE_REDHAWK

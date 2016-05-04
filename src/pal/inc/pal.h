@@ -582,6 +582,13 @@ PALAPI
 PAL_NotifyRuntimeStarted();
 
 PALIMPORT
+VOID
+PALAPI
+PAL_CleanupTargetProcess(
+    IN int pid, 
+    IN UINT64 disambiguationKey);
+
+PALIMPORT
 void
 PALAPI
 PAL_InitializeDebug(
@@ -604,15 +611,7 @@ BOOL
 PALAPI
 PAL_GetPALDirectoryW(
     OUT LPWSTR lpDirectoryName,
-    IN UINT cchDirectoryName);
-
-PALIMPORT
-BOOL
-PALAPI
-PAL_GetPALDirectoryA(
-    OUT LPSTR lpDirectoryName,
-    IN UINT cchDirectoryName);
-
+    IN OUT UINT* cchDirectoryName);
 #ifdef UNICODE
 #define PAL_GetPALDirectory PAL_GetPALDirectoryW
 #else
@@ -735,6 +734,7 @@ wsprintfW(
 #define IDYES                   6
 #define IDNO                    7
 
+
 PALIMPORT
 int
 PALAPI
@@ -744,14 +744,6 @@ MessageBoxW(
         IN LPCWSTR lpCaption,
         IN UINT uType);
 
-PALIMPORT
-int
-PALAPI
-MessageBoxA(
-        IN LPVOID hWnd,  // NOTE: diff from winuser.h
-        IN LPCSTR lpText,
-        IN LPCSTR lpCaption,
-        IN UINT uType);
 
 #ifdef UNICODE
 #define MessageBox MessageBoxW
@@ -849,17 +841,6 @@ typedef struct _SECURITY_ATTRIBUTES {
 
 #define INVALID_SET_FILE_POINTER   ((DWORD)-1)
 
-PALIMPORT
-HANDLE
-PALAPI
-CreateFileA(
-        IN LPCSTR lpFileName,
-        IN DWORD dwDesiredAccess,
-        IN DWORD dwShareMode,
-        IN LPSECURITY_ATTRIBUTES lpSecurityAttributes,
-        IN DWORD dwCreationDisposition,
-        IN DWORD dwFlagsAndAttributes,
-        IN HANDLE hTemplateFile);
 
 PALIMPORT
 HANDLE
@@ -901,17 +882,6 @@ UnlockFile(
     IN DWORD nNumberOfBytesToUnlockHigh
     );
 
-PALIMPORT
-DWORD
-PALAPI
-SearchPathA(
-    IN LPCSTR lpPath,
-    IN LPCSTR lpFileName,
-    IN LPCSTR lpExtension,
-    IN DWORD nBufferLength,
-    OUT LPSTR lpBuffer,
-    OUT LPSTR *lpFilePart
-    );
 
 PALIMPORT
 DWORD
@@ -931,13 +901,6 @@ SearchPathW(
 #endif // !UNICODE
 
 
-PALIMPORT
-BOOL
-PALAPI
-CopyFileA(
-      IN LPCSTR lpExistingFileName,
-      IN LPCSTR lpNewFileName,
-      IN BOOL bFailIfExists);
 
 PALIMPORT
 BOOL
@@ -953,11 +916,6 @@ CopyFileW(
 #define CopyFile CopyFileA
 #endif
 
-PALIMPORT
-BOOL
-PALAPI
-DeleteFileA(
-        IN LPCSTR lpFileName);
 
 PALIMPORT
 BOOL
@@ -972,12 +930,6 @@ DeleteFileW(
 #endif
 
 
-PALIMPORT
-BOOL
-PALAPI
-MoveFileA(
-     IN LPCSTR lpExistingFileName,
-     IN LPCSTR lpNewFileName);
 
 PALIMPORT
 BOOL
@@ -995,13 +947,6 @@ MoveFileW(
 #define MOVEFILE_REPLACE_EXISTING      0x00000001
 #define MOVEFILE_COPY_ALLOWED          0x00000002
 
-PALIMPORT
-BOOL
-PALAPI
-MoveFileExA(
-        IN LPCSTR lpExistingFileName,
-        IN LPCSTR lpNewFileName,
-        IN DWORD dwFlags);
 
 PALIMPORT
 BOOL
@@ -1016,13 +961,6 @@ MoveFileExW(
 #else
 #define MoveFileEx MoveFileExA
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-CreateDirectoryA(
-         IN LPCSTR lpPathName,
-         IN LPSECURITY_ATTRIBUTES lpSecurityAttributes);
 
 PALIMPORT
 BOOL
@@ -1042,12 +980,6 @@ BOOL
 PALAPI
 RemoveDirectoryW(
          IN LPCWSTR lpPathName);
-
-PALIMPORT
-BOOL
-PALAPI
-RemoveDirectoryA(
-         IN LPCSTR lpPathName);
 
 #ifdef UNICODE
 #define RemoveDirectory RemoveDirectoryW
@@ -1107,13 +1039,6 @@ typedef LPWIN32_FIND_DATAA LPWIN32_FIND_DATA;
 PALIMPORT
 HANDLE
 PALAPI
-FindFirstFileA(
-           IN LPCSTR lpFileName,
-           OUT LPWIN32_FIND_DATAA lpFindFileData);
-
-PALIMPORT
-HANDLE
-PALAPI
 FindFirstFileW(
            IN LPCWSTR lpFileName,
            OUT LPWIN32_FIND_DATAW lpFindFileData);
@@ -1123,13 +1048,6 @@ FindFirstFileW(
 #else
 #define FindFirstFile FindFirstFileA
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-FindNextFileA(
-          IN HANDLE hFindFile,
-          OUT LPWIN32_FIND_DATAA lpFindFileData);
 
 PALIMPORT
 BOOL
@@ -1149,12 +1067,6 @@ BOOL
 PALAPI
 FindClose(
       IN OUT HANDLE hFindFile);
-
-PALIMPORT
-DWORD
-PALAPI
-GetFileAttributesA(
-           IN LPCSTR lpFileName);
 
 PALIMPORT
 DWORD
@@ -1205,13 +1117,6 @@ GetFileAttributesExW(
 #ifdef UNICODE
 #define GetFileAttributesEx GetFileAttributesExW
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-SetFileAttributesA(
-           IN LPCSTR lpFileName,
-           IN DWORD dwFileAttributes);
 
 PALIMPORT
 BOOL
@@ -1401,15 +1306,6 @@ GetConsoleOutputCP(
 PALIMPORT
 DWORD
 PALAPI
-GetFullPathNameA(
-         IN LPCSTR lpFileName,
-         IN DWORD nBufferLength,
-         OUT LPSTR lpBuffer,
-         OUT LPSTR *lpFilePart);
-
-PALIMPORT
-DWORD
-PALAPI
 GetFullPathNameW(
          IN LPCWSTR lpFileName,
          IN DWORD nBufferLength,
@@ -1450,15 +1346,6 @@ GetShortPathNameW(
 PALIMPORT
 UINT
 PALAPI
-GetTempFileNameA(
-         IN LPCSTR lpPathName,
-         IN LPCSTR lpPrefixString,
-         IN UINT uUnique,
-         OUT LPSTR lpTempFileName);
-
-PALIMPORT
-UINT
-PALAPI
 GetTempFileNameW(
          IN LPCWSTR lpPathName,
          IN LPCWSTR lpPrefixString,
@@ -1470,13 +1357,6 @@ GetTempFileNameW(
 #else
 #define GetTempFileName GetTempFileNameA
 #endif
-
-PALIMPORT
-DWORD
-PALAPI
-GetTempPathA(
-         IN DWORD nBufferLength,
-         OUT LPSTR lpBuffer);
 
 PALIMPORT
 DWORD
@@ -1494,13 +1374,6 @@ GetTempPathW(
 PALIMPORT
 DWORD
 PALAPI
-GetCurrentDirectoryA(
-             IN DWORD nBufferLength,
-             OUT LPSTR lpBuffer);
-
-PALIMPORT
-DWORD
-PALAPI
 GetCurrentDirectoryW(
              IN DWORD nBufferLength,
              OUT LPWSTR lpBuffer);
@@ -1510,12 +1383,6 @@ GetCurrentDirectoryW(
 #else
 #define GetCurrentDirectory GetCurrentDirectoryA
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-SetCurrentDirectoryA(
-            IN LPCSTR lpPathName);
 
 PALIMPORT
 BOOL
@@ -1554,26 +1421,6 @@ GetComputerNameW(
 #define GetUserName GetUserNameW
 #define GetComputerName GetComputerNameW
 #endif // UNICODE
-
-PALIMPORT
-HANDLE
-PALAPI
-CreateSemaphoreA(
-         IN LPSECURITY_ATTRIBUTES lpSemaphoreAttributes,
-         IN LONG lInitialCount,
-         IN LONG lMaximumCount,
-         IN LPCSTR lpName);
-
-PALIMPORT
-HANDLE
-PALAPI
-CreateSemaphoreExA(
-         IN LPSECURITY_ATTRIBUTES lpSemaphoreAttributes,
-         IN LONG lInitialCount,
-         IN LONG lMaximumCount,
-         IN LPCSTR lpName,
-         IN /*_Reserved_*/  DWORD dwFlags,
-         IN DWORD dwDesiredAccess);
 
 PALIMPORT
 HANDLE
@@ -1622,15 +1469,6 @@ ReleaseSemaphore(
 PALIMPORT
 HANDLE
 PALAPI
-CreateEventA(
-         IN LPSECURITY_ATTRIBUTES lpEventAttributes,
-         IN BOOL bManualReset,
-         IN BOOL bInitialState,
-         IN LPCSTR lpName);
-
-PALIMPORT
-HANDLE
-PALAPI
 CreateEventW(
          IN LPSECURITY_ATTRIBUTES lpEventAttributes,
          IN BOOL bManualReset,
@@ -1675,14 +1513,6 @@ CreateMutexW(
     IN BOOL bInitialOwner,
     IN LPCWSTR lpName);
 
-PALIMPORT
-HANDLE
-PALAPI
-CreateMutexA(
-    IN LPSECURITY_ATTRIBUTES lpMutexAttributes,
-    IN BOOL bInitialOwner,
-    IN LPCSTR lpName);
-
 #ifdef UNICODE
 #define CreateMutex  CreateMutexW
 #else
@@ -1697,13 +1527,6 @@ OpenMutexW(
        IN BOOL bInheritHandle,
        IN LPCWSTR lpName);
 
-PALIMPORT
-HANDLE
-PALAPI
-OpenMutexA(
-       IN DWORD dwDesiredAccess,
-       IN BOOL bInheritHandle,
-       IN LPCSTR lpName);
 
 #ifdef UNICODE
 #define OpenMutex  OpenMutexW
@@ -1806,21 +1629,6 @@ typedef struct _PROCESS_INFORMATION {
     DWORD dwProcessId;
     DWORD dwThreadId_PAL_Undefined;
 } PROCESS_INFORMATION, *PPROCESS_INFORMATION, *LPPROCESS_INFORMATION;
-
-PALIMPORT
-BOOL
-PALAPI
-CreateProcessA(
-           IN LPCSTR lpApplicationName,
-           IN LPSTR lpCommandLine,
-           IN LPSECURITY_ATTRIBUTES lpProcessAttributes,
-           IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
-           IN BOOL bInheritHandles,
-           IN DWORD dwCreationFlags,
-           IN LPVOID lpEnvironment,
-           IN LPCSTR lpCurrentDirectory,
-           IN LPSTARTUPINFOA lpStartupInfo,
-           OUT LPPROCESS_INFORMATION lpProcessInformation);
 
 PALIMPORT
 BOOL
@@ -3488,11 +3296,11 @@ PALIMPORT BOOL PALAPI PAL_VirtualUnwindOutOfProc(CONTEXT *context,
 #define PAL_CS_NATIVE_DATA_SIZE 24
 #elif defined(__hpux__) && (defined(__hppa__) || defined (__ia64__))
 #define PAL_CS_NATIVE_DATA_SIZE 148
-#elif defined(__LINUX__) && defined(_ARM_)
+#elif defined(__linux__) && defined(_ARM_)
 #define PAL_CS_NATIVE_DATA_SIZE 80
-#elif defined(__LINUX__) && defined(_ARM64_)
+#elif defined(__linux__) && defined(_ARM64_)
 #define PAL_CS_NATIVE_DATA_SIZE 116
-#elif defined(__LINUX__) && defined(__x86_64__)
+#elif defined(__linux__) && defined(__x86_64__)
 #define PAL_CS_NATIVE_DATA_SIZE 96
 #elif defined(__NetBSD__) && defined(__amd64__)
 #define PAL_CS_NATIVE_DATA_SIZE 96
@@ -3576,17 +3384,6 @@ SetErrorMode(
 PALIMPORT
 HANDLE
 PALAPI
-CreateFileMappingA(
-           IN HANDLE hFile,
-           IN LPSECURITY_ATTRIBUTES lpFileMappingAttributes,
-           IN DWORD flProtect,
-           IN DWORD dwMaximumSizeHigh,
-           IN DWORD dwMaximumSizeLow,
-           IN LPCSTR lpName);
-
-PALIMPORT
-HANDLE
-PALAPI
 CreateFileMappingW(
            IN HANDLE hFile,
            IN LPSECURITY_ATTRIBUTES lpFileMappingAttributes,
@@ -3610,14 +3407,6 @@ CreateFileMappingW(
 #define FILE_MAP_READ       SECTION_MAP_READ
 #define FILE_MAP_ALL_ACCESS SECTION_ALL_ACCESS
 #define FILE_MAP_COPY       SECTION_QUERY
-
-PALIMPORT
-HANDLE
-PALAPI
-OpenFileMappingA(
-         IN DWORD dwDesiredAccess,
-         IN BOOL bInheritHandle,
-         IN LPCSTR lpName);
 
 PALIMPORT
 HANDLE
@@ -3667,25 +3456,12 @@ PALAPI
 UnmapViewOfFile(
         IN LPCVOID lpBaseAddress);
 
-PALIMPORT
-HMODULE
-PALAPI
-LoadLibraryA(
-        IN LPCSTR lpLibFileName);
 
 PALIMPORT
 HMODULE
 PALAPI
 LoadLibraryW(
         IN LPCWSTR lpLibFileName);
-
-PALIMPORT
-HMODULE
-PALAPI
-LoadLibraryExA(
-        IN LPCSTR lpLibFileName,
-        IN /*Reserved*/ HANDLE hFile,
-        IN DWORD dwFlags);
 
 PALIMPORT
 HMODULE
@@ -3779,14 +3555,6 @@ BOOL
 PALAPI
 DisableThreadLibraryCalls(
     IN HMODULE hLibModule);
-
-PALIMPORT
-DWORD
-PALAPI
-GetModuleFileNameA(
-    IN HMODULE hModule,
-    OUT LPSTR lpFileName,
-    IN DWORD nSize);
 
 PALIMPORT
 DWORD
@@ -4048,17 +3816,6 @@ typedef struct nlsversioninfo {
 
 #if ENABLE_DOWNLEVEL_FOR_NLS
 
-
-PALIMPORT
-int
-PALAPI
-CompareStringA(
-    IN LCID     Locale,
-    IN DWORD    dwCmpFlags,
-    IN LPCSTR   lpString1,
-    IN int      cchCount1,
-    IN LPCSTR   lpString2,
-    IN int      cchCount2);
 
 PALIMPORT
 int
@@ -5095,14 +4852,6 @@ lstrcpynW(
 PALIMPORT
 DWORD
 PALAPI
-GetEnvironmentVariableA(
-            IN LPCSTR lpName,
-            OUT LPSTR lpBuffer,
-            IN DWORD nSize);
-
-PALIMPORT
-DWORD
-PALAPI
 GetEnvironmentVariableW(
             IN LPCWSTR lpName,
             OUT LPWSTR lpBuffer,
@@ -5113,13 +4862,6 @@ GetEnvironmentVariableW(
 #else
 #define GetEnvironmentVariable GetEnvironmentVariableA
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-SetEnvironmentVariableA(
-            IN LPCSTR lpName,
-            IN LPCSTR lpValue);
 
 PALIMPORT
 BOOL
@@ -5135,12 +4877,6 @@ SetEnvironmentVariableW(
 #endif
 
 PALIMPORT
-LPSTR
-PALAPI
-GetEnvironmentStringsA(
-               VOID);
-
-PALIMPORT
 LPWSTR
 PALAPI
 GetEnvironmentStringsW(
@@ -5151,12 +4887,6 @@ GetEnvironmentStringsW(
 #else
 #define GetEnvironmentStrings GetEnvironmentStringsA
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-FreeEnvironmentStringsA(
-            IN LPSTR);
 
 PALIMPORT
 BOOL
@@ -5744,7 +5474,7 @@ PALAPI
 FlushProcessWriteBuffers();
 
 typedef void (*PAL_ActivationFunction)(CONTEXT *context);
-typedef BOOL (*PAL_SafeActivationCheckFunction)(SIZE_T ip);
+typedef BOOL (*PAL_SafeActivationCheckFunction)(SIZE_T ip, BOOL checkingCurrentThread);
 
 PALIMPORT
 VOID
@@ -5830,12 +5560,6 @@ typedef OSVERSIONINFOEXA OSVERSIONINFOEX;
 typedef POSVERSIONINFOEXA POSVERSIONINFOEX;
 typedef LPOSVERSIONINFOEXA LPOSVERSIONINFOEX;
 #endif
-
-PALIMPORT
-BOOL
-PALAPI
-GetVersionExA(
-          IN OUT LPOSVERSIONINFOA lpVersionInformation);
 
 PALIMPORT
 BOOL
@@ -5972,6 +5696,9 @@ HRESULT
 PALAPI
 CoCreateGuid(OUT GUID * pguid);
 
+#if defined FEATURE_PAL_ANSI
+#include "palprivate.h"
+#endif //FEATURE_PAL_ANSI
 /******************* C Runtime Entrypoints *******************************/
 
 /* Some C runtime functions needs to be reimplemented by the PAL.
@@ -6070,6 +5797,7 @@ CoCreateGuid(OUT GUID * pguid);
 #define _close        PAL__close
 #define _wcstoui64    PAL__wcstoui64
 #define _flushall     PAL__flushall
+#define _vsnprintf    PAL__vsnprintf
 
 #ifdef _AMD64_ 
 #define _mm_getcsr    PAL__mm_getcsr
@@ -6200,6 +5928,7 @@ PALIMPORT WCHAR * __cdecl PAL_wcstok(WCHAR *, const WCHAR *);
 PALIMPORT size_t __cdecl PAL_wcscspn(const WCHAR *, const WCHAR *);
 PALIMPORT int __cdecl PAL_swprintf(WCHAR *, const WCHAR *, ...);
 PALIMPORT int __cdecl PAL_vswprintf(WCHAR *, const WCHAR *, va_list);
+PALIMPORT int __cdecl PAL__vsnprintf(LPSTR Buffer, size_t Count, LPCSTR Format, va_list ap);
 PALIMPORT int __cdecl _snwprintf(WCHAR *, size_t, const WCHAR *, ...);
 PALIMPORT int __cdecl PAL_swscanf(const WCHAR *, const WCHAR *, ...);
 PALIMPORT LONG __cdecl PAL_wcstol(const WCHAR *, WCHAR **, int);
@@ -6767,19 +6496,35 @@ public:
 };
 
 typedef VOID (PALAPI *PHARDWARE_EXCEPTION_HANDLER)(PAL_SEHException* ex);
+typedef BOOL (PALAPI *PHARDWARE_EXCEPTION_SAFETY_CHECK_FUNCTION)(PCONTEXT contextRecord, PEXCEPTION_RECORD exceptionRecord);
+typedef VOID (PALAPI *PTERMINATION_REQUEST_HANDLER)();
 typedef DWORD (PALAPI *PGET_GCMARKER_EXCEPTION_CODE)(LPVOID ip);
 
 PALIMPORT
 VOID
 PALAPI
 PAL_SetHardwareExceptionHandler(
-    IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler);
+    IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler,
+    IN PHARDWARE_EXCEPTION_SAFETY_CHECK_FUNCTION exceptionCheckFunction);
 
 PALIMPORT
 VOID
 PALAPI
 PAL_SetGetGcMarkerExceptionCode(
     IN PGET_GCMARKER_EXCEPTION_CODE getGcMarkerExceptionCode);
+
+PALIMPORT
+VOID
+PALAPI
+PAL_ThrowExceptionFromContext(
+    IN CONTEXT* context,
+    IN PAL_SEHException* ex);
+
+PALIMPORT
+VOID
+PALAPI
+PAL_SetTerminationRequestHandler(
+    IN PTERMINATION_REQUEST_HANDLER terminationRequestHandler);
 
 //
 // This holder is used to indicate that a hardware

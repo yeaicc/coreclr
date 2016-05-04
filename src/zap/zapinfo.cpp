@@ -149,8 +149,8 @@ int ZapInfo::ComputeJitFlags(CORINFO_METHOD_HANDLE handle)
     IfFailThrow(m_pEECompileInfo->GetBaseJitFlags(handle, &flags));
     jitFlags |= flags;
 
-    // COMPLUS_JitFramed specifies the default fpo setting for jitted and NGened code.
-    // You can override the behavior for NGened code using COMPLUS_NGenFramed.
+    // COMPlus_JitFramed specifies the default fpo setting for jitted and NGened code.
+    // You can override the behavior for NGened code using COMPlus_NGenFramed.
     static ConfigDWORD g_NGenFramed;
     DWORD dwNGenFramed = g_NGenFramed.val(CLRConfig::UNSUPPORTED_NGenFramed);
     if (dwNGenFramed == 0) 
@@ -397,9 +397,6 @@ void ZapInfo::ProcessReferences()
 
 void ZapInfo::CompileMethod()
 {
-#ifdef BINDER
-    _ASSERTE(!"intentionally unreachable");
-#else
     PRECONDITION(m_zapper->m_pJitCompiler != NULL);
 
     InitMethodName();
@@ -525,10 +522,8 @@ void ZapInfo::CompileMethod()
 #endif
 
     PublishCompiledMethod();
-#endif // BINDER
 }
 
-#ifndef BINDER
 #ifndef FEATURE_FULL_NGEN
 class MethodCodeComparer
 {
@@ -757,7 +752,6 @@ COUNT_T ZapImage::MethodCodeTraits::Hash(key_t k)
     return hash;
 }
 #endif
-#endif
 
 void ZapInfo::PublishCompiledMethod()
 {
@@ -787,12 +781,6 @@ void ZapInfo::PublishCompiledMethod()
     pMethod->m_pExceptionInfo = m_pExceptionInfo;
 
     pMethod->m_pFixupList = EmitFixupList();
-#ifdef BINDER
-    // in the binder, do this here instead of a later phase because of phase ordering problem (FlushPrecodesAndMethodDescs needs this)
-    // compare with the disabled code in ZapImage::OutputCodeInfo
-    if (pMethod->m_pFixupList != NULL)
-        pMethod->m_pFixupInfo = m_pImage->GetImportTable()->PlaceFixups(pMethod->m_pFixupList);
-#endif
 
     pMethod->m_pDebugInfo = EmitDebugInfo();
     pMethod->m_pGCInfo = EmitGCInfo();
@@ -813,7 +801,6 @@ void ZapInfo::PublishCompiledMethod()
 
 #endif // WIN64EXCEPTIONS
 
-#ifndef BINDER
 #ifndef FEATURE_FULL_NGEN
     //
     // Method code deduplication
@@ -831,7 +818,6 @@ void ZapInfo::PublishCompiledMethod()
 
         m_pImage->m_CodeDeduplicator.Add(pMethod);
     }
-#endif
 #endif
 
     // Remember the gc info for IL stubs associated with hot methods so they can be packed well.
@@ -1241,7 +1227,7 @@ int ZapInfo::doAssert(const char* szFile, int iLine, const char* szExpr)
     ThrowHR(COR_E_INVALIDPROGRAM);
 #else
 
-#if defined(_DEBUG) && !defined(BINDER)
+#if defined(_DEBUG)
     return(_DbgBreakCheck(szFile, iLine, szExpr));
 #else
     return(true);       // break into debugger
@@ -1500,11 +1486,7 @@ CORINFO_CLASS_HANDLE ZapInfo::embedClassHandle(CORINFO_CLASS_HANDLE handle,
             // embed it after its resolved. So use a deferred reloc
 
             *ppIndirection = NULL;
-#ifdef BINDER
-            return m_pEEJitInfo->embedClassHandle(handle, ppIndirection);
-#else
             return CORINFO_CLASS_HANDLE(m_pImage->GetWrappers()->GetClassHandle(handle));
-#endif
         }
 
         *ppIndirection = m_pImage->GetImportTable()->GetClassHandleImport(handle);
@@ -1695,7 +1677,7 @@ void ZapInfo::embedGenericSignature(CORINFO_LOOKUP * pLookup)
 
     if (IsReadyToRunCompilation())
     {
-        _ASSERTE(!"embedGenericSignature");
+        m_zapper->Warning(W("ReadyToRun: embedGenericSignature not yet supported\n"));
         ThrowHR(E_NOTIMPL);
     }
 
@@ -1802,7 +1784,7 @@ void * ZapInfo::getHelperFtn (CorInfoHelpFunc ftnNum, void **ppIndirection)
         {
             pHelperThunk = new (m_pImage->GetHeap()) ZapHelperThunk(dwHelper);
         }
-#if defined(_TARGET_ARM_) && !defined(BINDER)
+#if defined(_TARGET_ARM_)
         if ((dwHelper & CORCOMPILE_HELPER_PTR) == 0)
             pHelperThunk = m_pImage->GetInnerPtr(pHelperThunk, THUMB_CODE);
 #endif
@@ -2122,6 +2104,12 @@ void ZapInfo::getCallInfo(CORINFO_RESOLVED_TOKEN * pResolvedToken,
             m_zapper->Warning(W("ReadyToRun: Methods with security checks not supported\n"));
             ThrowHR(E_NOTIMPL);
         }
+
+        if (GetCompileInfo()->IsNativeCallableMethod(pResult->hMethod))
+        {
+            m_zapper->Warning(W("ReadyToRun: References to methods with NativeCallableAttribute not supported\n"));
+            ThrowHR(E_NOTIMPL);
+        }
     }
 #endif
 
@@ -2222,6 +2210,14 @@ void ZapInfo::getCallInfo(CORINFO_RESOLVED_TOKEN * pResolvedToken,
 #ifdef FEATURE_READYTORUN_COMPILER
         if (IsReadyToRunCompilation())
         {
+            if ((pResult->classFlags & CORINFO_FLG_SHAREDINST) != 0 ||
+                (pResult->methodFlags & CORINFO_FLG_SHAREDINST) != 0)
+            {
+                // READYTORUN: FUTURE: Generics
+                m_zapper->Warning(W("ReadyToRun: Generic dictionary lookup required\n"));
+                ThrowHR(E_NOTIMPL);
+            }
+
             DWORD fAtypicalCallsite = (flags & CORINFO_CALLINFO_ATYPICAL_CALLSITE) ? CORINFO_HELP_READYTORUN_ATYPICAL_CALLSITE : 0;
 
             ZapImport * pImport = m_pImage->GetImportTable()->GetDynamicHelperCell(
@@ -2249,7 +2245,7 @@ void ZapInfo::getCallInfo(CORINFO_RESOLVED_TOKEN * pResolvedToken,
         if (pResult->exactContextNeedsRuntimeLookup)
         {
             // READYTORUN: FUTURE: Generics
-            _ASSERTE(!"Generics");
+            m_zapper->Warning(W("ReadyToRun: Generic dictionary lookup not yet supported\n"));
             ThrowHR(E_NOTIMPL);
         }
         else
@@ -2405,11 +2401,9 @@ void ZapInfo::addActiveDependency(CORINFO_MODULE_HANDLE moduleFrom, CORINFO_MODU
         // No need to add dependency fixup since we will have an unconditional dependency
         // already
     }
-#ifndef BINDER
     else if (!GetCompileInfo()->IsInCurrentVersionBubble(moduleTo))
     {
     }
-#endif
     else
     {
         ZapImport * pImport = m_pImage->GetImportTable()->GetActiveDependencyImport(moduleFrom, moduleTo);
@@ -2483,6 +2477,8 @@ void ZapInfo::recordRelocation(void *location, void *target,
 
 #if defined(_TARGET_ARM64_)
     case IMAGE_REL_ARM64_BRANCH26:
+    case IMAGE_REL_ARM64_PAGEBASE_REL21:
+    case IMAGE_REL_ARM64_PAGEOFFSET_12A:
         break;
 #endif
 
@@ -2597,6 +2593,17 @@ void ZapInfo::recordRelocation(void *location, void *target,
             ThrowHR(COR_E_OVERFLOW);
         PutArm64Rel28((UINT32 *)location, targetOffset);
         break;
+    case IMAGE_REL_ARM64_PAGEBASE_REL21:
+        if (!FitsInRel21(targetOffset))
+            ThrowHR(COR_E_OVERFLOW);
+        PutArm64Rel21((UINT32 *)location, targetOffset);
+        break;
+
+    case IMAGE_REL_ARM64_PAGEOFFSET_12A:
+        if (!FitsInRel12(targetOffset))
+            ThrowHR(COR_E_OVERFLOW);
+        PutArm64Rel12((UINT32 *)location, targetOffset);
+        break;
 #endif
 
     default:
@@ -2627,6 +2634,8 @@ WORD ZapInfo::getRelocTypeHint(void * target)
     if (m_zapper->m_pOpt->m_fNGenLastRetry)
         return (WORD)-1;
     return IMAGE_REL_BASED_THUMB_BRANCH24;
+#elif defined(_TARGET_ARM64_)
+    return IMAGE_REL_ARM64_BRANCH26;
 #else
     // No hints
     return (WORD)-1;
@@ -2687,7 +2696,7 @@ CORINFO_METHOD_HANDLE ZapInfo::GetDelegateCtor(CORINFO_METHOD_HANDLE   methHnd,
                                                CORINFO_METHOD_HANDLE   targetMethodHnd,
                                                DelegateCtorArgs *      pCtorData)
 {
-    // For ReadyToRun, this optimization is done via ZapInfo::getReadyToRunHelper
+    // For ReadyToRun, this optimization is done via ZapInfo::getReadyToRunDelegateCtorHelper
     if (IsReadyToRunCompilation())
         return methHnd;
 
@@ -2994,7 +3003,7 @@ void ZapInfo::getFieldInfo (CORINFO_RESOLVED_TOKEN * pResolvedToken,
 
         case CORINFO_FIELD_STATIC_GENERICS_STATIC_HELPER:
             // READYTORUN: FUTURE: Generics
-            _ASSERTE(!"Generics");
+            m_zapper->Warning(W("ReadyToRun: Shared generic static field access not yet supported\n"));
             ThrowHR(E_NOTIMPL);
             break;
 
@@ -3397,11 +3406,23 @@ void ZapInfo::getReadyToRunHelper(
     switch (id)
     {
     case CORINFO_HELP_READYTORUN_NEW:
+        if ((getClassAttribs(pResolvedToken->hClass) & CORINFO_FLG_SHAREDINST) != 0)
+        {
+            // READYTORUN: FUTURE: Generics
+            m_zapper->Warning(W("ReadyToRun: Generic dictionary lookup required\n"));
+            ThrowHR(E_NOTIMPL);
+        }
         pImport = m_pImage->GetImportTable()->GetDynamicHelperCell(
             (CORCOMPILE_FIXUP_BLOB_KIND)(ENCODE_NEW_HELPER | fAtypicalCallsite), pResolvedToken->hClass);
         break;
 
     case CORINFO_HELP_READYTORUN_NEWARR_1:
+        if ((getClassAttribs(pResolvedToken->hClass) & CORINFO_FLG_SHAREDINST) != 0)
+        {
+            // READYTORUN: FUTURE: Generics
+            m_zapper->Warning(W("ReadyToRun: Generic dictionary lookup required\n"));
+            ThrowHR(E_NOTIMPL);
+        }
         pImport = m_pImage->GetImportTable()->GetDynamicHelperCell(
             (CORCOMPILE_FIXUP_BLOB_KIND)(ENCODE_NEW_ARRAY_HELPER | fAtypicalCallsite), pResolvedToken->hClass);
         break;
@@ -3430,11 +3451,6 @@ void ZapInfo::getReadyToRunHelper(
         }
         break;
 
-    case CORINFO_HELP_READYTORUN_DELEGATE_CTOR:
-        pImport = m_pImage->GetImportTable()->GetDynamicHelperCell(
-            (CORCOMPILE_FIXUP_BLOB_KIND)(ENCODE_DELEGATE_CTOR | fAtypicalCallsite), pResolvedToken->hMethod, pResolvedToken);
-        break;
-
     default:
         _ASSERTE(false);
         ThrowHR(E_NOTIMPL);
@@ -3442,6 +3458,21 @@ void ZapInfo::getReadyToRunHelper(
 
     pLookup->accessType = IAT_PVALUE;
     pLookup->addr = pImport;
+#endif
+}
+
+void ZapInfo::getReadyToRunDelegateCtorHelper(
+        CORINFO_RESOLVED_TOKEN * pTargetMethod,
+        CORINFO_CLASS_HANDLE     delegateType,
+        CORINFO_CONST_LOOKUP *   pLookup
+        )
+{
+#ifdef FEATURE_READYTORUN_COMPILER
+    _ASSERTE(IsReadyToRunCompilation());
+
+    pLookup->accessType = IAT_PVALUE;
+    pLookup->addr = m_pImage->GetImportTable()->GetDynamicHelperCell(
+            (CORCOMPILE_FIXUP_BLOB_KIND)(ENCODE_DELEGATE_CTOR), pTargetMethod->hMethod, pTargetMethod, delegateType);
 #endif
 }
 
@@ -3454,6 +3485,12 @@ void ZapInfo::getReadyToRunHelper(
 void ZapInfo::resolveToken(CORINFO_RESOLVED_TOKEN * pResolvedToken)
 {
     m_pEEJitInfo->resolveToken(pResolvedToken);
+}
+
+//-----------------------------------------------------------------------------
+bool ZapInfo::tryResolveToken(CORINFO_RESOLVED_TOKEN * pResolvedToken)
+{
+    return m_pEEJitInfo->tryResolveToken(pResolvedToken);
 }
 
 //-----------------------------------------------------------------------------
@@ -3588,7 +3625,15 @@ bool ZapInfo::canTailCall(CORINFO_METHOD_HANDLE caller,
 #ifdef FEATURE_READYTORUN_COMPILER
     // READYTORUN: FUTURE: Delay load fixups for tailcalls
     if (IsReadyToRunCompilation())
+    {
+        if (fIsTailPrefix)
+        {
+            m_zapper->Warning(W("ReadyToRun: Explicit tailcalls not supported\n"));
+            ThrowHR(E_NOTIMPL);
+        }
+
         return false;
+    }
 #endif
 
     return m_pEEJitInfo->canTailCall(caller, declaredCallee, exactCallee, fIsTailPrefix);

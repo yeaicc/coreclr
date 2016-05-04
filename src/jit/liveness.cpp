@@ -1154,16 +1154,13 @@ void                Compiler::fgExtendDbgLifetimes()
 VARSET_VALRET_TP    Compiler::fgGetHandlerLiveVars(BasicBlock *block)
 {
     noway_assert(block);
-    noway_assert(block->hasTryIndex());
+    noway_assert(ehBlockHasExnFlowDsc(block));
 
     VARSET_TP VARSET_INIT_NOCOPY(liveVars, VarSetOps::MakeEmpty(this));
-    unsigned  XTnum = block->getTryIndex();
+    EHblkDsc* HBtab = ehGetBlockExnFlowDsc(block);
 
     do
     {
-        noway_assert(XTnum < compHndBBtabCount);
-        EHblkDsc* HBtab = ehGetDsc(XTnum);
-
         /* Either we enter the filter first or the catch/finally */
 
         if (HBtab->HasFilter())
@@ -1186,11 +1183,16 @@ VARSET_VALRET_TP    Compiler::fgGetHandlerLiveVars(BasicBlock *block)
 
         /* If we have nested try's edbEnclosing will provide them */
         noway_assert((HBtab->ebdEnclosingTryIndex == EHblkDsc::NO_ENCLOSING_INDEX) ||
-                     (HBtab->ebdEnclosingTryIndex  > XTnum));
+                     (HBtab->ebdEnclosingTryIndex  > ehGetIndex(HBtab)));
 
-        XTnum = HBtab->ebdEnclosingTryIndex;
+        unsigned outerIndex = HBtab->ebdEnclosingTryIndex;
+        if (outerIndex == EHblkDsc::NO_ENCLOSING_INDEX)
+        {
+            break;
+        }
+        HBtab = ehGetDsc(outerIndex);
 
-    } while (XTnum != EHblkDsc::NO_ENCLOSING_INDEX);
+    } while (true);
 
     return liveVars;
 }
@@ -1293,9 +1295,9 @@ void                Compiler::fgLiveVarAnalysis(bool updateInternalOnly)
 
             heapLiveIn = (heapLiveOut && !block->bbHeapDef) || block->bbHeapUse;
 
-            /* Is this block part of a 'try' statement? */
+            /* Can exceptions from this block be handled (in this function)? */
 
-            if  (block->hasTryIndex())
+            if  (ehBlockHasExnFlowDsc(block))
             {
                 VARSET_TP VARSET_INIT_NOCOPY(liveVars, fgGetHandlerLiveVars(block));
 
@@ -1520,7 +1522,7 @@ VARSET_VALRET_TP    Compiler::fgUpdateLiveSet(VARSET_VALARG_TP  liveSet,
                 //
                 assert(VarSetOps::IsEmptyIntersection(this, newLiveSet, varBits) ||
                        opts.compDbgCode || lvaTable[tree->gtLclVarCommon.gtLclNum].lvAddrExposed ||
-                       (compCurBB != NULL && compCurBB->hasTryIndex()));
+                       (compCurBB != NULL && ehBlockHasExnFlowDsc(compCurBB)));
                 VarSetOps::UnionD(this, newLiveSet, varBits);
             }
         }
@@ -1847,7 +1849,7 @@ SKIP_QMARK:
                         // If it is a GC-ref type then mark it DoNotEnregister.
                         if (varTypeIsGC(varDsc->TypeGet()))
                         {
-                            lvaSetVarDoNotEnregister(lclNum DEBUG_ARG(DNER_LiveAcrossUnmanagedCall));
+                            lvaSetVarDoNotEnregister(lclNum DEBUGARG(DNER_LiveAcrossUnmanagedCall));
                         }
                     }
                 }
@@ -1859,13 +1861,13 @@ SKIP_QMARK:
 #ifdef LEGACY_BACKEND
         // Generally, the last use information is associated with the lclVar node.
         // However, for LEGACY_BACKEND, the information must be associated
-        // with the LDOBJ itself for promoted structs.
+        // with the OBJ itself for promoted structs.
         // In that case, the LDOBJ may be require an implementation that might itself allocate registers,
         // so the variable(s) should stay live until the end of the LDOBJ.
         // Note that for promoted structs lvTracked is false.
 
         GenTreePtr lclVarTree = nullptr;
-        if (tree->gtOper == GT_LDOBJ)
+        if (tree->gtOper == GT_OBJ)
         {
             // fgIsIndirOfAddrOfLocal returns nullptr if the tree is 
             // not an indir(addr(local)), in which case we will set lclVarTree
@@ -2208,7 +2210,7 @@ bool Compiler::fgRemoveDeadStore(GenTree** pTree, LclVarDsc* varDsc, VARSET_TP l
         }
         else if (asgNode == nullptr)
         {
-            // This may be followed by GT_IND/assign, GT_STOREIND or GT_LIST/block-op.
+            // This may be followed by GT_IND/assign or GT_STOREIND.
             if (nextNode == nullptr)
             {
                 return false;
@@ -2687,7 +2689,7 @@ void                Compiler::fgInterBlockLocalVarLiveness()
              VarSetOps::IsMember(this, filterVars, varDsc->lvVarIndex))
         {
             /* Mark the variable appropriately */
-            lvaSetVarDoNotEnregister(varNum DEBUG_ARG(DNER_LiveInOutOfHandler));
+            lvaSetVarDoNotEnregister(varNum DEBUGARG(DNER_LiveInOutOfHandler));
         }
 
         /* Mark all pointer variables live on exit from a 'finally'
@@ -2696,7 +2698,7 @@ void                Compiler::fgInterBlockLocalVarLiveness()
 
         if  (VarSetOps::IsMember(this, finallyVars, varDsc->lvVarIndex))
         {
-            lvaSetVarDoNotEnregister(varNum DEBUG_ARG(DNER_LiveInOutOfHandler));
+            lvaSetVarDoNotEnregister(varNum DEBUGARG(DNER_LiveInOutOfHandler));
 
             /* Don't set lvMustInit unless we have a non-arg, GC pointer */
 
@@ -2729,7 +2731,7 @@ void                Compiler::fgInterBlockLocalVarLiveness()
 
         VARSET_TP VARSET_INIT_NOCOPY(volatileVars, VarSetOps::MakeEmpty(this));
 
-        if  (block->hasTryIndex())
+        if  (ehBlockHasExnFlowDsc(block))
         {
             VarSetOps::Assign(this, volatileVars, fgGetHandlerLiveVars(block));
 

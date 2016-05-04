@@ -4,7 +4,13 @@ if (WIN32)
     list(APPEND CLR_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/coreclr.def)
 
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /ENTRY:CoreDllMain")
-
+    
+    # Delay load libraries required for WinRT as that is not supported on all platforms
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DELAYLOAD:api-ms-win-core-winrt-string-l1-1-0.dll")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DELAYLOAD:api-ms-win-core-winrt-l1-1-0.dll")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DELAYLOAD:api-ms-win-core-winrt-roparameterizediid-l1-1-0.dll")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DELAYLOAD:api-ms-win-ro-typeresolution-l1-1-0.dll")
+    
     # No library groups for Win32
     set(START_LIBRARY_GROUP)
     set(END_LIBRARY_GROUP)
@@ -59,6 +65,10 @@ if (CLR_CMAKE_PLATFORM_UNIX)
     set(LIB_UNWINDER unwinder_wks)
 endif (CLR_CMAKE_PLATFORM_UNIX)
 
+if(FEATURE_MERGE_JIT_AND_ENGINE)
+    set(CLRJIT_STATIC clrjit_static)
+endif(FEATURE_MERGE_JIT_AND_ENGINE)
+
 # IMPORTANT! Please do not rearrange the order of the libraries. The linker on Linux is
 # order dependent and changing the order can result in undefined symbols in the shared 
 # library.
@@ -76,7 +86,7 @@ set(CORECLR_LIBRARIES
     mdhotdata_full
     bcltype
     ceefgen
-    ClrJit
+    ${CLRJIT_STATIC}
     comfloat_wks
     corguids
     gcinfo # Condition="'$(TargetCpu)'=='amd64' or '$(TargetCpu)' == 'arm' or '$(TargetCpu)' == 'arm64'"
@@ -88,10 +98,10 @@ set(CORECLR_LIBRARIES
 
 if(WIN32)
     list(APPEND CORECLR_LIBRARIES
+        ${STATIC_MT_CRT_LIB}
+        ${STATIC_MT_VCRT_LIB}
         mdwinmd_wks
         comnls_wks
-        comcrypt_wks
-        msvcrt.lib
         kernel32.lib
         advapi32.lib
         ole32.lib
@@ -101,7 +111,6 @@ if(WIN32)
         version.lib
         shlwapi.lib
         bcrypt.lib
-        crypt32.lib
         RuntimeObject.lib
     )
 else()
@@ -142,7 +151,8 @@ if(WIN32)
         clr_unknown_arch()
     endif()
 
-    add_custom_command(TARGET coreclr
+    add_custom_command(
+        TARGET coreclr
         POST_BUILD
         COMMAND ${CMAKE_CXX_COMPILER} /P /EP /TP ${PREPROCESS_DEFINITIONS} ${INC_DIR} /Fi${CMAKE_CURRENT_BINARY_DIR}/daccess.i  ${CLR_DIR}/src/debug/daccess/daccess.cpp
         COMMAND ${BuildToolsDir}/dactablegen.exe /dac:${CMAKE_CURRENT_BINARY_DIR}/daccess.i /pdb:${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/coreclr.pdb /dll:$<TARGET_FILE:coreclr> /bin:${CMAKE_CURRENT_BINARY_DIR}/wks.bin
@@ -162,7 +172,4 @@ else()
 endif(WIN32)
 
 # add the install targets
-install (TARGETS coreclr DESTINATION .)
-if(WIN32)
-    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/coreclr.pdb DESTINATION PDB)
-endif(WIN32)
+install_clr(coreclr)

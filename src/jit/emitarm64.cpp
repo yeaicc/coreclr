@@ -175,6 +175,10 @@ void                emitter::emitInsSanityCheck(instrDesc *id)
         assert(isGeneralRegister(id->idReg1()));
         break;
 
+    case IF_BR_1B:    // BR_1B   ................ ......nnnnn.....         Rn
+        assert(isGeneralRegister(id->idReg3()));
+        break;
+
     case IF_LS_1A:    // LS_1A   .X......iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
         assert(isGeneralRegister(id->idReg1()) ||
                isVectorRegister(id->idReg1()));
@@ -810,7 +814,7 @@ bool           emitter::emitInsMayWriteToGCReg(instrDesc *id)
 
     // These are the load/store formats with "target" registers:
 
-    case IF_LS_1A:       // LS_1A   .X......iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
+    case IF_LS_1A:       // LS_1A   XX...V..iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
     case IF_LS_2A:       // LS_2A   .X.......X...... ......nnnnnttttt      Rt Rn
     case IF_LS_2B:       // LS_2B   .X.......Xiiiiii iiiiiinnnnnttttt      Rt Rn    imm(0-4095)
     case IF_LS_2C:       // LS_2C   .X.......X.iiiii iiiiP.nnnnnttttt      Rt Rn    imm(-256..+255) pre/post inc
@@ -1792,6 +1796,7 @@ emitter::code_t emitter::emitInsCode(instruction ins, insFormat fmt)
     case IF_BI_1A:
     case IF_BI_1B:
     case IF_BR_1A:
+    case IF_BR_1B:
     case IF_LS_1A:
     case IF_LS_2A:
     case IF_LS_2B:
@@ -3266,31 +3271,29 @@ void                emitter::emitIns_R(instruction ins,
     case INS_br:
         assert(isGeneralRegister(reg));
         id = emitNewInstrCns(attr, 0);
-        fmt = IF_BR_1A;
+        id->idReg3(reg);
+        fmt = IF_BR_1B;
         break;
 
     case INS_ret:
         assert(isGeneralRegister(reg));
         id = emitNewInstrSmall(attr);
+        id->idReg1(reg);
         fmt = IF_BR_1A;
         break;
 
     default:
-        // TODO-Cleanup: add unreached() here
-        break;
-
+        unreached();
     }
+
     assert(fmt != IF_NONE);
 
-    if (id != nullptr)
-    {
-        id->idIns(ins);
-        id->idInsFmt(fmt);
-        id->idReg1(reg);
+    id->idIns(ins);
+    id->idInsFmt(fmt);
 
-        dispIns(id);
-        appendToCurIG(id);
-    }
+    dispIns(id);
+    appendToCurIG(id);
+
 }
 
 /*****************************************************************************
@@ -6311,6 +6314,9 @@ void                emitter::emitIns_S_I (instruction ins,
 /*****************************************************************************
  *
  *  Add an instruction with a register + static member operands.
+ *  Constant is stored into JIT data which is adjacent to code.
+ *  No relocation is needed. PC-relative offset will be encoded directly into instruction.
+ *
  */
 void                emitter::emitIns_R_C (instruction  ins,
                                           emitAttr     attr,
@@ -6318,11 +6324,6 @@ void                emitter::emitIns_R_C (instruction  ins,
                                           CORINFO_FIELD_HANDLE fldHnd,
                                           int          offs)
 {
-#if RELOC_SUPPORT
-    // Static always need relocs
-    if (!jitStaticFldIsGlobAddr(fldHnd))
-        attr = EA_SET_FLG(attr, EA_DSP_RELOC_FLG);
-#endif
     assert(offs >= 0);
     assert(instrDesc::fitsInSmallCns(offs));
 
@@ -6347,7 +6348,6 @@ void                emitter::emitIns_R_C (instruction  ins,
         }
         fmt = IF_LS_1A;
         break;
-
     default:
         break;
     }
@@ -6366,7 +6366,6 @@ void                emitter::emitIns_R_C (instruction  ins,
 
     dispIns(id);
     appendToCurIG(id);
-
 }
 
 
@@ -6410,12 +6409,61 @@ void                emitter::emitIns_R_AR  (instruction ins,
     NYI("emitIns_R_AR");
 }
 
-void                emitter::emitIns_R_AI  (instruction ins,
-                                            emitAttr    attr,
-                                            regNumber   ireg,
-                                            ssize_t     disp)
+// This computes address from the immediate which is relocatable.
+void                emitter::emitIns_R_AI(instruction ins,
+                                          emitAttr    attr,
+                                          regNumber   ireg,
+                                          ssize_t     addr)
 {
-    NYI("emitIns_R_AI");
+    assert(EA_IS_RELOC(attr));
+    emitAttr   size = EA_SIZE(attr);
+    insFormat  fmt = IF_DI_1E;
+    bool       needAdd = false;
+    instrDescJmp* id = emitNewInstrJmp();
+
+    switch (ins)
+    {
+    case INS_adrp:
+        // This computes page address.
+        // page offset is needed using add.
+        needAdd = true;
+        break;
+    case INS_adr:
+        break;
+    default:
+        unreached();
+    }
+
+    id->idIns(ins);
+    id->idInsFmt(fmt);
+    id->idInsOpt(INS_OPTS_NONE);
+    id->idOpSize(size);
+    id->idAddr()->iiaAddr = (BYTE*)addr;
+    id->idReg1(ireg);
+    id->idSetIsDspReloc();
+
+    dispIns(id);
+    appendToCurIG(id);
+
+    if (needAdd)
+    {
+        // add reg, reg, imm
+        ins = INS_add;
+        fmt = IF_DI_2A;
+        instrDesc* id = emitAllocInstr(attr);
+        assert(id->idIsReloc());
+
+        id->idIns(ins);
+        id->idInsFmt(fmt);
+        id->idInsOpt(INS_OPTS_NONE);
+        id->idOpSize(size);
+        id->idAddr()->iiaAddr = (BYTE*)addr;
+        id->idReg1(ireg);
+        id->idReg2(ireg);
+
+        dispIns(id);
+        appendToCurIG(id);
+    }
 }
 
 void                emitter::emitIns_AR_R  (instruction ins,
@@ -6846,12 +6894,12 @@ void                emitter::emitIns_Call(EmitCallType  callType,
             {
                 ins = INS_blr;     // INS_blr Reg
             }
-            fmt = IF_BR_1A;
+            fmt = IF_BR_1B;
 
             id->idIns(ins);
             id->idInsFmt(fmt); 
 
-            id->idReg1(ireg);
+            id->idReg3(ireg);
             assert(xreg == REG_NA);
             break;
 
@@ -7846,6 +7894,12 @@ BYTE*               emitter::emitOutputLJ(insGroup  *ig, BYTE *dst, instrDesc *i
         dstAddr = emitDataOffsetToPtr(dataOffs);
         dstOffs = (unsigned) ((ssize_t) (dstAddr - srcAddr) + srcOffs);
         assert((dstOffs & 3) == 0);
+
+        // Failing the following assertion means the corresponding JIT data is not within +/-1MB range
+        // from the current code reference. This could happen for a large method or extremely large
+        // amount of JIT data for the method, or access it from cold method.
+        // Ideally, we should detect such case earlier to expand the code sequence using a fix-up
+        // similar to emitIns_R_AI.
         assert(isValidSimm19(dstOffs));
     }
     else
@@ -7988,19 +8042,27 @@ BYTE*               emitter::emitOutputLJ(insGroup  *ig, BYTE *dst, instrDesc *i
     }
     else if (loadLabel)
     {
-        if (fmt == IF_LS_1A)       // LS_1A   XX......iiiiiiii iiiiiiiiiiittttt      Rt simm21
+        if (fmt == IF_LS_1A)       // LS_1A   XX...V..iiiiiiii iiiiiiiiiiittttt      Rt simm21
         {
             // INS_ldr or INS_ldrsw (PC-Relative)
 
             // Is the target a vector register?
             if (isVectorRegister(id->idReg1()))
-            { 
-                code &= 0x3FFFFFFF;                                  // clear the size bits
-                code |= insEncodeDatasizeVLS(code, id->idOpSize());  // XX
+            {
+                code |= insEncodeDatasizeVLS(code, id->idOpSize());  // XX V
                 code |= insEncodeReg_Vt(id->idReg1());               // ttttt
             }
             else
             {
+                assert(isGeneralRegister(id->idReg1()));
+                // insEncodeDatasizeLS is not quite right for this case.
+                // So just specialize it.
+                if ((ins == INS_ldr) && (id->idOpSize() == EA_8BYTE))
+                {
+                    // set the operation size in bit 30
+                    code |= 0x40000000;
+                }
+
                 code |= insEncodeReg_Rt(id->idReg1());               // ttttt
             }
 
@@ -8215,21 +8277,24 @@ size_t              emitter::emitOutputInstr(insGroup  *ig,
 
     case IF_BR_1A:    // BR_1A   ................ ......nnnnn.....         Rn
         assert(insOptsNone(id->idInsOpt()));
+        assert(ins == INS_ret);
         code  = emitInsCode(ins, fmt);
         code |= insEncodeReg_Rn(id->idReg1());               // nnnnn
 
-        if (ins == INS_ret)
-        {
-            dst  += emitOutput_Instr(dst, code);
-        }
-        else  // INS_blr or INS_br
-        {
-             sz    = id->idIsLargeCall() ? sizeof(instrDescCGCA) : sizeof(instrDesc);
-             dst  += emitOutputCall(ig, dst, id, code);
-        }
+        dst  += emitOutput_Instr(dst, code);
         break;
 
-    case IF_LS_1A:    // LS_1A   XX......iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
+    case IF_BR_1B:    // BR_1B   ................ ......nnnnn.....         Rn
+        assert(insOptsNone(id->idInsOpt()));
+        assert(ins != INS_ret);
+        code = emitInsCode(ins, fmt);
+        code |= insEncodeReg_Rn(id->idReg3());               // nnnnn
+
+        sz = id->idIsLargeCall() ? sizeof(instrDescCGCA) : sizeof(instrDesc);
+        dst += emitOutputCall(ig, dst, id, code);
+        break;
+
+    case IF_LS_1A:    // LS_1A   XX...V..iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
         assert(insOptsNone(id->idInsOpt()));
         assert(id->idIsBound());
 
@@ -8422,9 +8487,19 @@ size_t              emitter::emitOutputInstr(insGroup  *ig,
 
     case IF_DI_1E:    // DI_1E   .ii.....iiiiiiii iiiiiiiiiiiddddd      Rd       simm21
         assert(insOptsNone(id->idInsOpt()));
-        assert(id->idIsBound());
-
-        dst = emitOutputLJ(ig, dst, id);
+        if (id->idIsReloc())
+        {
+            code = emitInsCode(ins, fmt);
+            code |= insEncodeReg_Rd(id->idReg1());        // ddddd
+            dst += emitOutput_Instr(dst, code);
+            emitRecordRelocation(odst, id->idAddr()->iiaAddr, IMAGE_REL_ARM64_PAGEBASE_REL21);
+        }
+        else
+        {
+            // Local jmp/load case which does not need a relocation.
+            assert(id->idIsBound());
+            dst = emitOutputLJ(ig, dst, id);
+        }
         sz = sizeof(instrDescJmp);
         break;
 
@@ -8455,6 +8530,13 @@ size_t              emitter::emitOutputInstr(insGroup  *ig,
         code |= insEncodeReg_Rd(id->idReg1());               // ddddd
         code |= insEncodeReg_Rn(id->idReg2());               // nnnnn
         dst  += emitOutput_Instr(dst, code);
+
+        if (id->idIsReloc())
+        {
+            assert(sz == sizeof(instrDesc));
+            assert(id->idAddr()->iiaAddr != nullptr);
+            emitRecordRelocation(odst, id->idAddr()->iiaAddr, IMAGE_REL_ARM64_PAGEOFFSET_12A);
+        }
         break;
 
     case IF_DI_2B:    // DI_2B   X.........Xnnnnn ssssssnnnnnddddd      Rd Rn    imm(0-63)
@@ -9167,8 +9249,7 @@ size_t              emitter::emitOutputInstr(insGroup  *ig,
     {
         // For example, set JitBreakEmitOutputInstr=a6 will break when this method is called for
         // emitting instruction a6, (i.e. IN00a6 in jitdump).
-        static ConfigDWORD fJitBreakEmitOutputInstr;
-        if ((unsigned)fJitBreakEmitOutputInstr.val(CLRConfig::INTERNAL_JitBreakEmitOutputInstr) == id->idDebugOnlyInfo()->idNum)
+        if ((unsigned)JitConfig.JitBreakEmitOutputInstr() == id->idDebugOnlyInfo()->idNum)
         {
             assert(!"JitBreakEmitOutputInstr reached");
         }
@@ -9910,7 +9991,12 @@ void                emitter::emitDispIns(instrDesc *  id,
         emitDispReg(id->idReg1(), size, false);
         break;
 
-    case IF_LS_1A:    // LS_1A   XX......iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
+    case IF_BR_1B:    // BR_1B   ................ ......nnnnn.....         Rn
+        assert(insOptsNone(id->idInsOpt()));
+        emitDispReg(id->idReg3(), size, false);
+        break;
+
+    case IF_LS_1A:    // LS_1A   XX...V..iiiiiiii iiiiiiiiiiittttt      Rt    PC imm(1MB)
         assert(insOptsNone(id->idInsOpt()));
         emitDispReg(id->idReg1(), size, true);
         imm = emitGetInsSC(id);
@@ -10824,7 +10910,6 @@ regNumber emitter::emitInsTernary(instruction ins, emitAttr attr, GenTree* dst, 
     }
     bool isMulOverflow = false;
     bool isUnsignedMul = false;
-    instruction ins2 = INS_invalid;
     regNumber extraReg = REG_NA;
     if (dst->gtOverflowEx())
     {
@@ -10840,7 +10925,6 @@ regNumber emitter::emitInsTernary(instruction ins, emitAttr attr, GenTree* dst, 
         {
             isMulOverflow = true;
             isUnsignedMul = ((dst->gtFlags & GTF_UNSIGNED) != 0);
-            ins2 = isUnsignedMul ? INS_umulh : INS_smulh;
             assert(intConst == nullptr);   // overflow format doesn't support an int constant operand
         }
         else
@@ -10856,43 +10940,66 @@ regNumber emitter::emitInsTernary(instruction ins, emitAttr attr, GenTree* dst, 
     {
         if (isMulOverflow)
         {
+            // Make sure that we have an internal register
+            assert(genCountBits(dst->gtRsvdRegs) == 2);
+
+            // There will be two bits set in tmpRegsMask.
+            // Remove the bit for 'dst->gtRegNum' from 'tmpRegsMask'
+            regMaskTP tmpRegsMask = dst->gtRsvdRegs & ~genRegMask(dst->gtRegNum);
+            assert(tmpRegsMask != RBM_NONE);
+            regMaskTP tmpRegMask = genFindLowestBit(tmpRegsMask);   // set tmpRegMsk to a one-bit mask
+            extraReg = genRegNumFromMask(tmpRegMask);               // set tmpReg from that mask
+
             if (isUnsignedMul)
             {
-                assert(genCountBits(dst->gtRsvdRegs) == 1);
-                extraReg = genRegNumFromMask(dst->gtRsvdRegs);
+                if (attr == EA_4BYTE)
+                {
+                    // Compute 8 byte results from 4 byte by 4 byte multiplication.
+                    emitIns_R_R_R(INS_umull, EA_8BYTE, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
 
-                // Compute the high result
-                emitIns_R_R_R(ins2, attr, extraReg, src1->gtRegNum, src2->gtRegNum);
+                    // Get the high result by shifting dst.
+                    emitIns_R_R_I(INS_lsr, EA_8BYTE, extraReg, dst->gtRegNum, 32);
+                }
+                else
+                {
+                    assert(attr == EA_8BYTE);
+                    // Compute the high result.
+                    emitIns_R_R_R(INS_umulh, attr, extraReg, src1->gtRegNum, src2->gtRegNum);
 
-                emitIns_R_I(INS_cmp, EA_8BYTE, extraReg, 0);
-                codeGen->genCheckOverflow(dst);
+                    // Now multiply without skewing the high result.
+                    emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
+                }
 
-                // Now multiply without skewing the high result if no overflow.
-                emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
+                // zero-sign bit comparision to detect overflow.
+                emitIns_R_I(INS_cmp, attr, extraReg, 0);
             }
             else
             {
-                // Make sure that we have an internal register
-                assert(genCountBits(dst->gtRsvdRegs) == 2);
+                int bitShift = 0;
+                if (attr == EA_4BYTE)
+                {
+                    // Compute 8 byte results from 4 byte by 4 byte multiplication.
+                    emitIns_R_R_R(INS_smull, EA_8BYTE, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
 
-                // There will be two bits set in tmpRegsMask.
-                // Remove the bit for 'dst->gtRegNum' from 'tmpRegsMask'
-                regMaskTP tmpRegsMask = dst->gtRsvdRegs & ~genRegMask(dst->gtRegNum);
-                regMaskTP tmpRegMask = genFindLowestBit(tmpRegsMask);   // set tmpRegMsk to a one-bit mask
-                extraReg = genRegNumFromMask(tmpRegMask);               // set tmpReg from that mask
+                    // Get the high result by shifting dst.
+                    emitIns_R_R_I(INS_lsr, EA_8BYTE, extraReg, dst->gtRegNum, 32);
 
-                // Make sure the two registers are not the same.
-                assert(extraReg != dst->gtRegNum);
+                    bitShift = 31;
+                }
+                else
+                {
+                    assert(attr == EA_8BYTE);
+                    // Save the high result in a temporary register.
+                    emitIns_R_R_R(INS_smulh, attr, extraReg, src1->gtRegNum, src2->gtRegNum);
 
-                // Save the high result in a temporary register
-                emitIns_R_R_R(ins2, attr, extraReg, src1->gtRegNum, src2->gtRegNum);
+                    // Now multiply without skewing the high result.
+                    emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
 
-                // Now multiply without skewing the high result.
-                emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
+                    bitShift = 63;
+                }
 
-                emitIns_R_R_I(INS_cmp, EA_8BYTE, extraReg, dst->gtRegNum, 63, INS_OPTS_ASR);
-
-                codeGen->genCheckOverflow(dst);
+                // Sign bit comparision to detect overflow.
+                emitIns_R_R_I(INS_cmp, attr, extraReg, dst->gtRegNum, bitShift, INS_OPTS_ASR);
             }
         }
         else
@@ -10902,7 +11009,7 @@ regNumber emitter::emitInsTernary(instruction ins, emitAttr attr, GenTree* dst, 
         }
     }
 
-    if (dst->gtOverflowEx() && !isMulOverflow)
+    if (dst->gtOverflowEx())
     {
         assert(!varTypeIsFloating(dst));
         codeGen->genCheckOverflow(dst);

@@ -34,7 +34,7 @@ set(ILDASM_SOURCES
     ../windasm.cpp
 )
 
-add_executable(ildasm
+_add_executable(ildasm
     ${ILDASM_SOURCES}
     ${ILDASM_RESOURCES}
 )
@@ -64,15 +64,10 @@ else()
     target_link_libraries(ildasm
         ${ILDASM_LINK_LIBRARIES}
         coreclr
-        msvcrt
         ole32
         oleaut32
         shell32
     )
-
-    # We will generate PDB only for the debug configuration
-    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/ildasm.pdb DESTINATION PDB)
-
 endif(CLR_CMAKE_PLATFORM_UNIX)
 
-install (TARGETS ildasm DESTINATION .)
+install_clr(ildasm)

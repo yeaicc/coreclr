@@ -55,10 +55,6 @@
 #include "clrprivtypecachewinrt.h"
 #endif
 
-#ifdef FEATURE_WINDOWSPHONE
-#include "thetestkey.h"
-#endif
-
 GVAL_IMPL_INIT(DWORD, g_fHostConfig, 0);
 
 #ifdef FEATURE_IMPLICIT_TLS
@@ -1306,6 +1302,8 @@ HRESULT CorHost2::ExecuteAssembly(DWORD dwAppDomainId,
 
     HRESULT hr = S_OK;
 
+    AppDomain *pCurDomain = SystemDomain::GetCurrentDomain();
+
     Thread *pThread = GetThread();
     if (pThread == NULL)
     {
@@ -1316,7 +1314,7 @@ HRESULT CorHost2::ExecuteAssembly(DWORD dwAppDomainId,
         }
     }
 
-    if(SystemDomain::GetCurrentDomain()->GetId().m_dwId != DefaultADID)
+    if(pCurDomain->GetId().m_dwId != DefaultADID)
     {
         return HOST_E_INVALIDOPERATION;
     }
@@ -1327,6 +1325,10 @@ HRESULT CorHost2::ExecuteAssembly(DWORD dwAppDomainId,
     _ASSERTE (!pThread->PreemptiveGCDisabled());
 
     Assembly *pAssembly = AssemblySpec::LoadAssembly(pwzAssemblyPath);
+
+#if defined(FEATURE_MULTICOREJIT)
+    pCurDomain->GetMulticoreJitManager().AutoStartProfile(pCurDomain);
+#endif // defined(FEATURE_MULTICOREJIT)
 
     {
         GCX_COOP();
@@ -1588,15 +1590,6 @@ HRESULT CorHost2::_CreateAppDomain(
 #ifdef FEATURE_CORECLR
     if (!m_fStarted)
         return HOST_E_INVALIDOPERATION;
-
-#if defined(FEATURE_WINDOWSPHONE) && defined(FEATURE_STRONGNAME_TESTKEY_ALLOWED)
-    if((APPDOMAIN_SET_TEST_KEY & dwFlags) && (m_dwStartupFlags & STARTUP_SINGLE_APPDOMAIN))
-    {
-        const BYTE testKey[] = { TEST_KEY_VALUE };
-        memcpy_s(g_rbTestKeyBuffer + sizeof(GUID)*2, sizeof(testKey), testKey, sizeof(testKey));
-    }
-#endif // defined(FEATURE_WINDOWSPHONE) && defined(FEATURE_STRONGNAME_TESTKEY_ALLOWED)
-
 #endif // FEATURE_CORECLR
 
     if(wszFriendlyName == NULL)
@@ -1631,30 +1624,9 @@ HRESULT CorHost2::_CreateAppDomain(
     {
         pDomain->SetIgnoreUnhandledExceptions();
     }
-
-    // Enable interop for all assemblies if the host has asked us to.
-    if (dwFlags & APPDOMAIN_ENABLE_PINVOKE_AND_CLASSIC_COMINTEROP)
-    {
-        pDomain->SetEnablePInvokeAndClassicComInterop();
-    }
-    
-    if (dwFlags & APPDOMAIN_ENABLE_PLATFORM_SPECIFIC_APPS)
-    {
-        pDomain->SetAllowPlatformSpecificAppAssemblies();
-    }
-
-    if (dwFlags & APPDOMAIN_ENABLE_ASSEMBLY_LOADFILE)
-    {
-        pDomain->SetAllowLoadFile();
-    }
-
-    if (dwFlags & APPDOMAIN_DISABLE_TRANSPARENCY_ENFORCEMENT)
-    {
-        pDomain->DisableTransparencyEnforcement();
-    }
 #endif // FEATURE_CORECLR
 
-    if (dwFlags & APPDOMAIN_SECURITY_FORBID_CROSSAD_REVERSE_PINVOKE)    
+    if (dwFlags & APPDOMAIN_SECURITY_FORBID_CROSSAD_REVERSE_PINVOKE)
         pDomain->SetReversePInvokeCannotEnter();
 
     if (dwFlags & APPDOMAIN_FORCE_TRIVIAL_WAIT_OPERATIONS)
@@ -1699,27 +1671,6 @@ HRESULT CorHost2::_CreateAppDomain(
                 
                 obj = StringObject::NewString(pPropertyValues[i]);
                 _gc.propertyValues->SetAt(i, obj);
-
-#ifdef FEATURE_LEGACYNETCF
-                // Look for the "AppDomainCompatSwitch" property and, if it exists, save its value
-                // in the AppDomain object.
-                if ((0 == _wcsicmp(pPropertyNames[i], W("AppDomainCompatSwitch"))) && (pPropertyValues[i] != NULL))
-                {
-                    if (0 == _wcsicmp(pPropertyValues[i], W("WindowsPhone_3.8.0.0")))
-                    {
-                        pDomain->SetAppDomainCompatMode(BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8);
-                    }
-                    else
-                    if (0 == _wcsicmp(pPropertyValues[i], W("WindowsPhone_3.7.0.0")))
-                    {
-                        pDomain->SetAppDomainCompatMode(BaseDomain::APPDOMAINCOMPAT_APP_EARLIER_THAN_WP8);
-                    }
-                    else
-                   {
-                        // We currently don't know any other AppDomain compatibility switches
-                    }
-                }
-#endif // FEATURE_LEGACYNETCF
             }
         }
 
@@ -2004,11 +1955,6 @@ HRESULT CorHost2::SetStartupFlags(STARTUP_FLAGS flag)
         return HOST_E_INVALIDOPERATION;
     }
 
-    if (CLRConfig::GetConfigValue(CLRConfig::UNSUPPORTED_gcServer) != 0)
-    {
-        flag = (STARTUP_FLAGS)(flag | STARTUP_SERVER_GC);
-    }
-    
     m_dwStartupFlags = flag;
 
     return S_OK;
@@ -3946,10 +3892,6 @@ LPCWSTR CorHost2::s_wszAppDomainManagerAsm = NULL;
 LPCWSTR CorHost2::s_wszAppDomainManagerType = NULL;
 EInitializeNewDomainFlags CorHost2::s_dwDomainManagerInitFlags = eInitializeNewDomainFlags_None;
 
-#ifdef FEATURE_LEGACYNETCF_DBG_HOST_CONTROL
-IHostNetCFDebugControlManager *CorHost2::m_HostNetCFDebugControlManager = NULL;
-#endif
-
 #ifndef FEATURE_CORECLR // not supported
 
 StringArrayList CorHost2::s_defaultDomainPropertyNames;
@@ -4614,16 +4556,6 @@ HRESULT CorHost2::SetHostControl(IHostControl* pHostControl)
         m_HostPolicyManager = policyManager;
     }
 #endif //!FEATURE_CORECLR
-
-#ifdef FEATURE_LEGACYNETCF_DBG_HOST_CONTROL
-    IHostNetCFDebugControlManager *hostNetCFDebugControlManager = NULL;
-    if (m_HostNetCFDebugControlManager == NULL &&
-            pHostControl->GetHostManager(__uuidof(IHostNetCFDebugControlManager),
-                                         (void**)&hostNetCFDebugControlManager) == S_OK &&
-            hostNetCFDebugControlManager != NULL) {
-            m_HostNetCFDebugControlManager = hostNetCFDebugControlManager;
-        }
-#endif
 
     if (m_HostControl == NULL)
     {
@@ -8803,7 +8735,7 @@ HRESULT STDMETHODCALLTYPE DllGetActivationFactoryImpl(LPCWSTR wszAssemblyName,
     {
         BaseDomain::LockHolder lh(pDomain);
 #ifdef FEATURE_HOSTED_BINDER
-        if (!SystemDomain::System()->DefaultDomain()->HasLoadContextHostBinder())
+        if (!pDomain->HasLoadContextHostBinder())
 #endif
         {
             // don't allow redirects

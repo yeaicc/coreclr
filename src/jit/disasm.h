@@ -27,7 +27,7 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 // free() is redefined to cause a runtime error instead of a compile time error.
 #undef free
 #ifdef DEBUG
-#define free(x) _ASSERTE(false && "Must not call free(). Use a ClrXXX function instead.")
+#define free(x) assert(false && "Must not call free(). Use a ClrXXX function instead.")
 #endif
 
 #if CHECK_STRUCT_PADDING
@@ -57,20 +57,20 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 /*****************************************************************************/
 
-#ifdef _WIN64
+#ifdef _HOST_64BIT_
 template<typename T>
 struct SizeTKeyFuncs: LargePrimitiveKeyFuncs<T>
 {
 };
-#else // !_WIN64
+#else // !_HOST_64BIT_
 template<typename T>
 struct SizeTKeyFuncs: SmallPrimitiveKeyFuncs<T>
 {
 };
-#endif // !_WIN64
+#endif // _HOST_64BIT_
 
-typedef SimplerHashTable<size_t, SizeTKeyFuncs<size_t>, CORINFO_METHOD_HANDLE, DefaultSimplerHashBehavior> AddrToMethodHandleMap;
-typedef SimplerHashTable<size_t, SizeTKeyFuncs<size_t>, size_t, DefaultSimplerHashBehavior> AddrToAddrMap;
+typedef SimplerHashTable<size_t, SizeTKeyFuncs<size_t>, CORINFO_METHOD_HANDLE, JitSimplerHashBehavior> AddrToMethodHandleMap;
+typedef SimplerHashTable<size_t, SizeTKeyFuncs<size_t>, size_t, JitSimplerHashBehavior> AddrToAddrMap;
 
 class Compiler;
 

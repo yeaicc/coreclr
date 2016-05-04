@@ -79,9 +79,11 @@ _Chutzpah*
 ipch/
 *.aps
 *.ncb
+*.opendb
 *.opensdf
 *.sdf
 *.cachefile
+*.VC.db
 
 # Visual Studio profiler
 *.psess
@@ -193,6 +195,9 @@ UpgradeLog*.htm
 # Microsoft Fakes
 FakesAssemblies/
 
+# C/C++ extension for Visual Studio Code
+browse.VC.db
+
 ### MonoDevelop ###
 
 *.pidb
@@ -258,13 +263,22 @@ Temporary Items
 # We have some checked in prebuilt generated files
 !src/pal/prebuilt/idl/*_i.c
 
-# Valid 'debug' folder, that contains CLR debuggin code
+# Valid 'debug' folder, that contains CLR debugging code
 !src/debug
 
 # Ignore folders created by the test build
-TestWrappers_x64_debug
-TestWrappers_x64_checked
-TestWrappers_x64_release
+TestWrappers_x64_[d|D]ebug
+TestWrappers_x64_[c|C]hecked
+TestWrappers_x64_[r|R]elease
+TestWrappers_x86_[d|D]ebug
+TestWrappers_x86_[c|C]hecked
+TestWrappers_x86_[r|R]elease
+TestWrappers_arm_[d|D]ebug
+TestWrappers_arm_[c|C]hecked
+TestWrappers_arm_[r|R]elease
+TestWrappers_arm64_[d|D]ebug
+TestWrappers_arm64_[c|C]hecked
+TestWrappers_arm64_[r|R]elease
 tests/src/common/test_runtime/project.json
 
 Vagrantfile
@@ -281,3 +295,6 @@ cross/rootfs/*
 
 #python import files
 *.pyc
+
+# JIT32 files
+src/jit32

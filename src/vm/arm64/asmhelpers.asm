@@ -16,6 +16,7 @@
     IMPORT PreStubWorker
     IMPORT NDirectImportWorker
     IMPORT VSD_ResolveWorker
+    IMPORT StubDispatchFixupWorker
     IMPORT JIT_InternalThrow
     IMPORT ComPreStubWorker
     IMPORT COMToCLRWorker
@@ -30,6 +31,12 @@
     IMPORT GetCurrentSavedRedirectContext
     IMPORT LinkFrameAndThrow
     IMPORT FixContextHandler
+    IMPORT OnHijackObjectWorker
+    IMPORT OnHijackInteriorPointerWorker
+    IMPORT OnHijackScalarWorker
+#ifdef FEATURE_READYTORUN
+    IMPORT DynamicHelperWorker
+#endif
 
     IMPORT  g_ephemeral_low
     IMPORT  g_ephemeral_high
@@ -64,26 +71,25 @@
 
         str     lr, [x0, #LazyMachState_captureIp]
 
-        str     fp, [x0, #LazyMachState_captureFp]
-
         ;; str instruction does not save sp register directly so move to temp register
         mov     x1, sp
         str     x1, [x0, #LazyMachState_captureSp]
 
         ;; save non-volatile registers that can contain object references
-        add     x1, x0, #LazyMachState_captureX19_X28
+        add     x1, x0, #LazyMachState_captureX19_X29
         stp     x19, x20, [x1, #(16*0)]
         stp     x21, x22, [x1, #(16*1)]
         stp     x23, x24, [x1, #(16*2)]
         stp     x25, x26, [x1, #(16*3)]
         stp     x27, x28, [x1, #(16*4)]
+        str     x29, [x1, #(16*5)]
 
         ret     lr
         LEAF_END
 
         ;
         ; If a preserved register were pushed onto the stack between
-        ; the managed caller and the H_M_F, ptrX19_X28 will point to its
+        ; the managed caller and the H_M_F, ptrX19_X29 will point to its
         ; location on the stack and it would have been updated on the
         ; stack by the GC already and it will be popped back into the
         ; appropriate register when the appropriate epilog is run.
@@ -93,7 +99,7 @@
         ; here because the GC will have updated our copies in the
         ; frame.
         ;
-        ; So, if ptrX19_X28 points into the MachState, we need to update
+        ; So, if ptrX19_X29 points into the MachState, we need to update
         ; the register here.  That's what this macro does.
         ;
 
@@ -104,16 +110,16 @@
         ;
         ; x0 = address of MachState
         ;
-        ; $regIndex: Index of the register (x19-x28). For x19, index is 19.
+        ; $regIndex: Index of the register (x19-x29). For x19, index is 19.
         ;            For x20, index is 20, and so on.
         ;
         ; $reg: Register name (e.g. x19, x20, etc)
         ;
         ; Get the address of the specified captured register from machine state
-        add     x2, x0, #(MachState__captureX19_X28 + (($regIndex-19)*8))
+        add     x2, x0, #(MachState__captureX19_X29 + (($regIndex-19)*8))
 
         ; Get the content of specified preserved register pointer from machine state
-        ldr     x3, [x0, #(MachState__ptrX19_X28 + (($regIndex-19)*8))]
+        ldr     x3, [x0, #(MachState__ptrX19_X29 + (($regIndex-19)*8))]
 
         cmp     x2, x3
         bne     %FT0
@@ -147,6 +153,7 @@
         RestoreRegMS 26, X26
         RestoreRegMS 27, X27
         RestoreRegMS 28, X28
+
 Done
         ; Its imperative that the return value of HelperMethodFrameRestoreState is zero
         ; as it is used in the state machine to loop until it becomes zero.
@@ -848,17 +855,98 @@ UM2MThunk_WrapperHelper_RegArgumentsSetup
     
     NESTED_END
 
+#ifdef FEATURE_HIJACK
+; ------------------------------------------------------------------
+; Hijack function for functions which return a reference type
+    NESTED_ENTRY OnHijackObjectTripThread
+    PROLOG_SAVE_REG_PAIR   fp, lr, #-112!
+    ; Spill callee saved registers 
+    PROLOG_SAVE_REG_PAIR   x19, x20, #16
+    PROLOG_SAVE_REG_PAIR   x21, x22, #32
+    PROLOG_SAVE_REG_PAIR   x23, x24, #48
+    PROLOG_SAVE_REG_PAIR   x25, x26, #64
+    PROLOG_SAVE_REG_PAIR   x27, x28, #80
 
+    str x0, [sp, #96]
+    mov x0, sp
+    bl OnHijackObjectWorker
+    ldr x0, [sp, #96]
+
+    EPILOG_RESTORE_REG_PAIR   x19, x20, #16
+    EPILOG_RESTORE_REG_PAIR   x21, x22, #32
+    EPILOG_RESTORE_REG_PAIR   x23, x24, #48
+    EPILOG_RESTORE_REG_PAIR   x25, x26, #64
+    EPILOG_RESTORE_REG_PAIR   x27, x28, #80
+    EPILOG_RESTORE_REG_PAIR   fp, lr,   #112!
+    EPILOG_RETURN
+    NESTED_END
+
+; ------------------------------------------------------------------
+; Hijack function for functions which return an interior pointer within an object allocated in managed heap
+    NESTED_ENTRY OnHijackInteriorPointerTripThread
+    PROLOG_SAVE_REG_PAIR   fp, lr, #-112!
+    ; Spill callee saved registers 
+    PROLOG_SAVE_REG_PAIR   x19, x20, #16
+    PROLOG_SAVE_REG_PAIR   x21, x22, #32
+    PROLOG_SAVE_REG_PAIR   x23, x24, #48
+    PROLOG_SAVE_REG_PAIR   x25, x26, #64
+    PROLOG_SAVE_REG_PAIR   x27, x28, #80
+
+    str x0, [sp, #96]
+    mov x0, sp
+    bl OnHijackInteriorPointerWorker
+    ldr x0, [sp, #96]
+
+    EPILOG_RESTORE_REG_PAIR   x19, x20, #16
+    EPILOG_RESTORE_REG_PAIR   x21, x22, #32
+    EPILOG_RESTORE_REG_PAIR   x23, x24, #48
+    EPILOG_RESTORE_REG_PAIR   x25, x26, #64
+    EPILOG_RESTORE_REG_PAIR   x27, x28, #80
+    EPILOG_RESTORE_REG_PAIR   fp, lr,   #112!
+    EPILOG_RETURN
+    NESTED_END
+
+; ------------------------------------------------------------------
+; Hijack function for functions which return a scalar type or a struct (value type)
+    NESTED_ENTRY OnHijackScalarTripThread
+    PROLOG_SAVE_REG_PAIR   fp, lr, #-144!
+    ; Spill callee saved registers 
+    PROLOG_SAVE_REG_PAIR   x19, x20, #16
+    PROLOG_SAVE_REG_PAIR   x21, x22, #32
+    PROLOG_SAVE_REG_PAIR   x23, x24, #48
+    PROLOG_SAVE_REG_PAIR   x25, x26, #64
+    PROLOG_SAVE_REG_PAIR   x27, x28, #80
+
+    str x0, [sp, #96]
+    ; HFA return value can be in d0-d3
+    stp d0, d1, [sp, #112]
+    stp d2, d3, [sp, #128]
+    mov x0, sp
+    bl OnHijackScalarWorker
+    ldr x0, [sp, #96]
+    ldp d0, d1, [sp, #112]
+    ldp d2, d3, [sp, #128]
+
+    EPILOG_RESTORE_REG_PAIR   x19, x20, #16
+    EPILOG_RESTORE_REG_PAIR   x21, x22, #32
+    EPILOG_RESTORE_REG_PAIR   x23, x24, #48
+    EPILOG_RESTORE_REG_PAIR   x25, x26, #64
+    EPILOG_RESTORE_REG_PAIR   x27, x28, #80
+    EPILOG_RESTORE_REG_PAIR   fp, lr,   #144!
+    EPILOG_RETURN
+    NESTED_END
+
+#endif ; FEATURE_HIJACK
 
 ;; ------------------------------------------------------------------
 ;; Redirection Stub for GC in fully interruptible method
-;        GenerateRedirectedHandledJITCaseStub GCThreadControl
+        GenerateRedirectedHandledJITCaseStub GCThreadControl
 ;; ------------------------------------------------------------------
-;        GenerateRedirectedHandledJITCaseStub DbgThreadControl
+        GenerateRedirectedHandledJITCaseStub DbgThreadControl
 ;; ------------------------------------------------------------------
-;        GenerateRedirectedHandledJITCaseStub UserSuspend
+        GenerateRedirectedHandledJITCaseStub UserSuspend
 ;; ------------------------------------------------------------------
-;        GenerateRedirectedHandledJITCaseStub YieldTask
+        GenerateRedirectedHandledJITCaseStub YieldTask
 
 #ifdef _DEBUG
 ; ------------------------------------------------------------------
@@ -888,7 +976,8 @@ UM2MThunk_WrapperHelper_RegArgumentsSetup
         ; X2 = address of X19 register in CONTEXT record; used to restore the non-volatile registers of CrawlFrame
         ; X3 = address of the location where the SP of funclet's caller (i.e. this helper) should be saved.
         ;
-        ; Save the SP of this function
+        ; Save the SP of this function. We cannot store SP directly.
+        mov fp, sp
         str fp, [x3]
 
         ldr fp, [x2, #80] ; offset of fp in CONTEXT relative to X19
@@ -1020,6 +1109,7 @@ FaultingExceptionFrame_FrameOffset        SETA  SIZEOF__GSCookie
 ; On Exit (to ResolveWorkerAsmStub):  
 ;   x11       contains the address of the indirection and the flags in the low two bits.
 ;   x12       contains our contract (DispatchToken)
+;   x16,x17   will be trashed
 ; 
     GBLA BACKPATCH_FLAG      ; two low bit flags used by ResolveWorkerAsmStub
     GBLA PROMOTE_CHAIN_FLAG  ; two low bit flags used by ResolveWorkerAsmStub
@@ -1037,12 +1127,11 @@ MainLoop
         cmp     x9, #0
         beq     Fail
 
-        ldr     x9,  [x9, #0]
-        cmp     x9, x13           ; compare our MT with the one in the ResolveCacheElem
+        ldp     x16, x17, [x9]
+        cmp     x16, x13          ; compare our MT with the one in the ResolveCacheElem
         bne     MainLoop
         
-        ldr     x9,  [x9, #8]
-        cmp     x8, x12           ; compare our DispatchToken with one in the ResolveCacheElem
+        cmp     x17, x12          ; compare our DispatchToken with one in the ResolveCacheElem
         bne     MainLoop
         
 Success         
@@ -1086,6 +1175,74 @@ Fail
         EPILOG_BRANCH_REG  x9
 
         NESTED_END
+
+#ifdef FEATURE_READYTORUN
+
+    NESTED_ENTRY DelayLoad_MethodCall
+    PROLOG_WITH_TRANSITION_BLOCK
+
+    add x0, sp, #__PWTB_TransitionBlock ; pTransitionBlock
+    mov x1, x11 ; Indirection cell
+    mov x2, x8 ; sectionIndex
+    mov x3, x9 ; Module*
+    bl ExternalMethodFixupWorker
+    mov x12, x0
+    
+    EPILOG_WITH_TRANSITION_BLOCK_TAILCALL
+    ; Share patch label
+    b ExternalMethodFixupPatchLabel
+    NESTED_END
+
+    MACRO
+        DynamicHelper $frameFlags, $suffix
+
+        NESTED_ENTRY DelayLoad_Helper$suffix
+        
+        PROLOG_WITH_TRANSITION_BLOCK
+
+        add x0, sp, #__PWTB_TransitionBlock ; pTransitionBlock
+        mov x1, x11 ; Indirection cell
+        mov x2, x8 ; sectionIndex
+        mov x3, x9 ; Module*		
+        mov x4, $frameFlags
+        bl DynamicHelperWorker
+        cbnz x0, %FT0
+        ldr x0, [sp, #__PWTB_ArgumentRegisters]
+        EPILOG_WITH_TRANSITION_BLOCK_RETURN
+0		
+        mov x12, x0
+        EPILOG_WITH_TRANSITION_BLOCK_TAILCALL
+        EPILOG_BRANCH_REG  x12
+        NESTED_END
+    MEND
+
+    DynamicHelper DynamicHelperFrameFlags_Default
+    DynamicHelper DynamicHelperFrameFlags_ObjectArg, _Obj
+    DynamicHelper DynamicHelperFrameFlags_ObjectArg | DynamicHelperFrameFlags_ObjectArg2, _ObjObj
+#endif // FEATURE_READYTORUN		
+        
+#ifdef FEATURE_PREJIT
+;; ------------------------------------------------------------------
+;; void StubDispatchFixupStub(args in regs x0-x7 & stack, x11:IndirectionCellAndFlags, x12:DispatchToken)
+;;
+;; The stub dispatch thunk which transfers control to StubDispatchFixupWorker.
+        NESTED_ENTRY StubDispatchFixupStub
+
+        PROLOG_WITH_TRANSITION_BLOCK
+
+        add x0, sp, #__PWTB_TransitionBlock ; pTransitionBlock
+        and x1, x11, #-4 ; Indirection cell
+        mov x2, #0 ; sectionIndex
+        mov x3, #0 ; pModule
+        bl StubDispatchFixupWorker
+        mov x9, x0
+
+        EPILOG_WITH_TRANSITION_BLOCK_TAILCALL
+
+        EPILOG_BRANCH_REG  x9
+
+        NESTED_END
+#endif
 
 ; Must be at very end of file
     END

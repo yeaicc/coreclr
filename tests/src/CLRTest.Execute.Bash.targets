@@ -19,8 +19,9 @@ WARNING:   When setting properties based on their current state (for example:
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
   <ItemGroup>
-    <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true'" Include="complus_zaprequire=2" />
-    <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true'" Include="complus_zaprequireexcludelist=corerun" />
+    <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true'" Include="export complus_zaprequire=2" />
+    <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true'" Include="export complus_zaprequireexcludelist=corerun" />
+    <CLRTestBashEnvironmentVariable Condition="'$(GCStressLevel)' != '' and '$(GCStressLevel)' != '0'" Include="export complus_gcstress=$(GCStressLevel)" />
   </ItemGroup>
 
     <!--
@@ -37,7 +38,13 @@ WARNING:   When setting properties based on their current state (for example:
       <CrossgenBashScript Condition="'$(CLRTestKind)' == 'RunOnly'">
         <![CDATA[
 if [ ! -f $([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)).Replace("\","/").Replace(".exe", ".ni.exe")) ]; then
-  "$CORE_ROOT/crossgen.exe" /Platform_Assemblies_Paths $CORE_ROOT%3B. $([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)).Replace("\","/"))
+  "$CORE_ROOT/crossgen" /Platform_Assemblies_Paths $CORE_ROOT%3A$PWD $([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)).Replace("\","/"))
+  __cgExitCode=$?
+  if [ ! $__cgExitCode == 0 ]
+  then
+    echo Crossgen failed with exitcode: $__cgExitCode
+    exit 1
+  fi
 fi
         ]]>
       </CrossgenBashScript>
@@ -45,7 +52,14 @@ fi
       <CrossgenBashScript Condition="'$(CLRTestKind)' == 'BuildAndRun'">
         <![CDATA[
 if [ ! -f $(MSBuildProjectName).ni.exe ]; then
-  "$CORE_ROOT/crossgen.exe" /Platform_Assemblies_Paths $CORE_ROOT%3B. $(MSBuildProjectName).exe
+  echo "$CORE_ROOT/crossgen" /Platform_Assemblies_Paths $CORE_ROOT%3A$PWD $(MSBuildProjectName).exe
+  "$CORE_ROOT/crossgen" /Platform_Assemblies_Paths $CORE_ROOT%3A$PWD $(MSBuildProjectName).exe
+  __cgExitCode=$?
+  if [ ! $__cgExitCode == 0 ]
+  then
+    echo Crossgen failed with exitcode: $__cgExitCode
+    exit 1
+  fi
 fi        
         ]]>        
       </CrossgenBashScript>
@@ -135,6 +149,30 @@ fi
     <Message Text="Project depends on $(_CLRTestToRunFileFullPath)." Condition="'$(_CLRTestNeedsProjectToRun)' == 'True'" />
 
     <PropertyGroup>        
+      <BashCLRTestEnvironmentCompatibilityCheck Condition="'$(GCStressIncompatible)' == 'true'"><![CDATA[
+$(BashCLRTestEnvironmentCompatibilityCheck)
+if [ ! -z "$COMPlus_GCStress" ]
+then
+  echo SKIPPING EXECUTION BECAUSE COMPlus_GCStress IS SET
+  exit 0
+fi
+      ]]></BashCLRTestEnvironmentCompatibilityCheck>
+      <BashCLRTestEnvironmentCompatibilityCheck Condition="'$(JitOptimizationSensitive)' == 'true'"><![CDATA[
+$(BashCLRTestEnvironmentCompatibilityCheck)
+if [ \( ! -z "$COMPlus_JitStress" \) -o \( ! -z "$COMPlus_JitStressRegs" \) -o \( ! -z "$COMPlus_JITMinOpts" \) ]
+then
+  echo "SKIPPING EXECUTION BECAUSE ONE OR MORE OF (COMPlus_JitStress, COMPlus_JitStressRegs, COMPlus_JITMinOpts) IS SET"
+  exit 0
+fi
+      ]]></BashCLRTestEnvironmentCompatibilityCheck>
+      <BashCLRTestGCSimulatorSkipCondition Condition="$(GCSimulatorRun) != 'true' And '$(IsGCSimulatorTest)' == 'true'"><![CDATA[
+echo "Skipping execution because GCSimulator tests are not enabled"
+exit 0
+      ]]></BashCLRTestGCSimulatorSkipCondition>
+      <BashCLRTestGCLongTestSkipCondition Condition="$(GCLongRunning) != 'true' And '$(IsLongRunningGCTest)' == 'true'"><![CDATA[
+echo "Skipping execution because long-running GC tests are not enabled"
+exit 0
+      ]]></BashCLRTestGCLongTestSkipCondition>
       <BashCLRTestExitCodePrep Condition="$(_CLRTestNeedsToRun)">
 <![CDATA[CLRTestExpectedExitCode=$(CLRTestExitCode)
 echo BEGIN EXECUTION]]>
@@ -186,8 +224,8 @@ fi
 
 
     <ItemGroup>
-      <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true' AND '$(_CLRTestNeedsProjectToRun)' == 'true'" Include="set complus_zaprequirelist=$(_CLRTestToRunFileFullPath)" />
-      <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true' AND '$(_CLRTestNeedsProjectToRun)' == 'false'" Include="set complus_zaprequirelist=$(MSBuildProjectName)" />
+      <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true' AND '$(_CLRTestNeedsProjectToRun)' == 'true'" Include="complus_zaprequirelist=$(_CLRTestToRunFileFullPath)" />
+      <CLRTestBashEnvironmentVariable Condition="'$(CrossGen)' == 'true' AND '$(_CLRTestNeedsProjectToRun)' == 'false'" Include="complus_zaprequirelist=$(MSBuildProjectName)" />
     </ItemGroup>
     
     <PropertyGroup>
@@ -212,9 +250,9 @@ CLRTestExitCode=$?
     </PropertyGroup>
 
     <PropertyGroup>
-      <BatchEnvironmentVariables>
+      <BashEnvironmentVariables>
         @(CLRTestBashEnvironmentVariable -> '%(Identity)', '%0d%0a')
-      </BatchEnvironmentVariables>
+      </BashEnvironmentVariables>
     </PropertyGroup>
      
     <Message Text="MSBuildProjectDirectory:$(MSBuildProjectDirectory)" />
@@ -280,8 +318,13 @@ cd "$%28dirname "$0")"
 # The __TestEnv variable may be used to specify something to run before the test.
 $__TestEnv
 
+$(BashEnvironmentVariables)
+$(BashCLRTestEnvironmentCompatibilityCheck)
 $(BashCLRTestArgPrep)
 $(BashCLRTestExitCodePrep)
+# Long-running GC test checks
+$(BashCLRTestGCSimulatorSkipCondition)
+$(BashCLRTestGCLongTestSkipCondition)
 # CrossGen Script (when /p:CrossGen=true)
 $(CrossgenBashScript)
 # IlasmRoundTrip Script

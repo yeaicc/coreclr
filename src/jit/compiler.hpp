@@ -38,10 +38,7 @@ inline
 bool                 getInlinePInvokeEnabled()
 {
 #ifdef DEBUG
-    static ConfigDWORD fJITPInvokeEnabled;
-    static ConfigDWORD fStressCOMCall;
-
-    return fJITPInvokeEnabled.val(CLRConfig::INTERNAL_JITPInvokeEnabled) && !fStressCOMCall.val(CLRConfig::INTERNAL_StressCOMCall);
+    return JitConfig.JitPInvokeEnabled() && !JitConfig.StressCOMCall();
 #else
     return true;
 #endif
@@ -51,8 +48,7 @@ inline
 bool                 getInlinePInvokeCheckEnabled()
 {
 #ifdef DEBUG
-    static ConfigDWORD fJITPInvokeCheckEnabled;
-    return fJITPInvokeCheckEnabled.val(CLRConfig::INTERNAL_JITPInvokeCheckEnabled) != 0;
+    return JitConfig.JitPInvokeCheckEnabled() != 0;
 #else
     return false;
 #endif
@@ -89,8 +85,7 @@ inline
 RoundLevel          getRoundFloatLevel()
 {
 #ifdef DEBUG
-    static ConfigDWORD fJITRoundFloat;
-    return (RoundLevel) fJITRoundFloat.val_DontUse_(CLRConfig::INTERNAL_JITRoundFloat, DEFAULT_ROUND_LEVEL);
+    return (RoundLevel) JitConfig.JitRoundFloat();
 #else
     return DEFAULT_ROUND_LEVEL;
 #endif
@@ -844,7 +839,7 @@ void* GenTree::operator new(size_t sz, Compiler* comp, genTreeOps oper)
 
 // GenTree constructor
 inline
-GenTree::GenTree(genTreeOps oper, var_types type DEBUG_ARG(bool largeNode))
+GenTree::GenTree(genTreeOps oper, var_types type DEBUGARG(bool largeNode))
 {
     gtOper     = oper;
     gtType     = type;
@@ -890,7 +885,7 @@ GenTree::GenTree(genTreeOps oper, var_types type DEBUG_ARG(bool largeNode))
 
 #ifdef DEBUG
     gtSeqNum   = 0;
-    gtTreeID   = GetTlsCompiler()->compGenTreeID++;
+    gtTreeID   = JitTls::GetCompiler()->compGenTreeID++;
     gtVNPair.SetBoth(ValueNumStore::NoVN);
     gtRegTag   = GT_REGTAG_NONE;
     gtOperSave = GT_NONE;
@@ -989,7 +984,7 @@ GenTreePtr          Compiler::gtNewLargeOperNode(genTreeOps     oper,
 
     assert(GenTree::s_gtNodeSizes[oper   ] == TREE_NODE_SZ_SMALL);
 
-    GenTreePtr node = new(this, LargeOpOpcode()) GenTreeOp(oper, type, op1, op2 DEBUG_ARG(/*largeNode*/true));
+    GenTreePtr node = new(this, LargeOpOpcode()) GenTreeOp(oper, type, op1, op2 DEBUGARG(/*largeNode*/true));
 #else
     GenTreePtr node = new(this, oper) GenTreeOp(oper, type, op1, op2);
 #endif
@@ -1018,7 +1013,7 @@ GenTreePtr          Compiler::gtNewIconHandleNode(size_t        value,
         fields = FieldSeqStore::NotAField();
 
 #if defined(LATE_DISASM)
-    node = new (this, LargeOpOpcode()) GenTreeIntCon(TYP_I_IMPL, value, fields DEBUG_ARG(/*largeNode*/true));
+    node = new (this, LargeOpOpcode()) GenTreeIntCon(TYP_I_IMPL, value, fields DEBUGARG(/*largeNode*/true));
 
     node->gtIntCon.gtIconHdl.gtIconHdl1 = handle1;
     node->gtIntCon.gtIconHdl.gtIconHdl2 = handle2;
@@ -1400,7 +1395,7 @@ GenTreePtr          Compiler::gtNewCastNodeL(var_types typ, GenTreePtr op1,
 
     /* Make a big node first and then change it to be GT_CAST */
 
-    GenTreePtr res = new (this, LargeOpOpcode()) GenTreeCast(typ, op1, castType DEBUG_ARG(/*largeNode*/true));
+    GenTreePtr res = new (this, LargeOpOpcode()) GenTreeCast(typ, op1, castType DEBUGARG(/*largeNode*/true));
     return res;
 
 }
@@ -1590,7 +1585,7 @@ inline unsigned     Compiler::lvaGrabTemp(bool shortLifetime
         if (pComp->lvaHaveManyLocals())
         {
             // Don't create more LclVar with inlining 
-            compInlineResult->noteFatal(InlineObservation::CALLSITE_TOO_MANY_LOCALS);
+            compInlineResult->NoteFatal(InlineObservation::CALLSITE_TOO_MANY_LOCALS);
         }
 
         unsigned tmpNum = pComp->lvaGrabTemp(shortLifetime DEBUGARG(reason));
@@ -2535,10 +2530,6 @@ var_types          Compiler::lvaGetRealType(unsigned lclNum)
     return lvaTable[lclNum].TypeGet();
 }
 
-/*****************************************************************************/
-inline void         Compiler::lvaAdjustRefCnts() {}
-
-
 /*
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -2583,7 +2574,7 @@ inline
 var_types Compiler::mangleVarArgsType(var_types type)
 {
 #ifdef _TARGET_ARMARCH_
-    if (info.compIsVarArgs)
+    if (info.compIsVarArgs || opts.compUseSoftFP)
     {
         switch (type) {
         case TYP_FLOAT:
@@ -3092,15 +3083,13 @@ void                Compiler::tmpDone()
 inline
 bool                Compiler::shouldUseVerboseTrees()
 {
-    static ConfigDWORD fVerboseTrees;
-    return (fVerboseTrees.val(CLRConfig::INTERNAL_JitDumpVerboseTrees) == 1);
+    return (JitConfig.JitDumpVerboseTrees() == 1);
 }
 
 inline
 bool                Compiler::shouldUseVerboseSsa()
 {
-    static ConfigDWORD fVerboseSsa;
-    return (fVerboseSsa.val(CLRConfig::INTERNAL_JitDumpVerboseSsa) == 1);
+    return (JitConfig.JitDumpVerboseSsa() == 1);
 }
 
 //------------------------------------------------------------------------
@@ -3112,8 +3101,7 @@ bool                Compiler::shouldUseVerboseSsa()
 inline
 bool                Compiler::shouldDumpASCIITrees()
 {
-    static ConfigDWORD fASCIITrees;
-    return (fASCIITrees.val(CLRConfig::INTERNAL_JitDumpASCII) == 1);
+    return (JitConfig.JitDumpASCII() == 1);
 }
 
 /*****************************************************************************
@@ -3126,8 +3114,7 @@ bool                Compiler::shouldDumpASCIITrees()
 inline
 DWORD               getJitStressLevel()
 {
-    static ConfigDWORD fJitStress;
-    return fJitStress.val(CLRConfig::INTERNAL_JitStress);
+    return JitConfig.JitStress();
 }
 
 /*****************************************************************************
@@ -3137,9 +3124,7 @@ DWORD               getJitStressLevel()
 inline
 DWORD               StrictCheckForNonVirtualCallToVirtualMethod()
 {
-    static ConfigDWORD fJitStrictCheckForNonVirtualCallToVirtualMethod;
-    return fJitStrictCheckForNonVirtualCallToVirtualMethod.val(
-           CLRConfig::INTERNAL_JitStrictCheckForNonVirtualCallToVirtualMethod) == 1;
+    return JitConfig.JitStrictCheckForNonVirtualCallToVirtualMethod() == 1;
 }
 
 #endif // DEBUG
@@ -4302,7 +4287,7 @@ bool                Compiler::compDonotInline()
     if (compIsForInlining())
     {
        assert(compInlineResult != nullptr);
-       return compInlineResult->isFailure();
+       return compInlineResult->IsFailure();
     }
     else
     {
@@ -4343,7 +4328,7 @@ Compiler::lvaPromotionType   Compiler::lvaGetPromotionType (const LclVarDsc *   
         return PROMOTION_TYPE_INDEPENDENT;
     }
 
-    // Has struct promotion for arguments been disabled using COMPLUS_JitNoStructPromotion=2 
+    // Has struct promotion for arguments been disabled using COMPlus_JitNoStructPromotion=2 
     if (fgNoStructParamPromotion)
     {
         // The struct parameter is not enregistered

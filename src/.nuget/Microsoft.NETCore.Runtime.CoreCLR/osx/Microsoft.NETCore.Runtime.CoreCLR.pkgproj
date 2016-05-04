@@ -11,36 +11,52 @@
   </PropertyGroup>
   
   <ItemGroup>
+    <NativeSplittableBinary Include="$(BinDir)libclrjit.dylib"/>
+    <NativeSplittableBinary Include="$(BinDir)libcoreclr.dylib"/>
+    <NativeSplittableBinary Include="$(BinDir)libdbgshim.dylib"/>
+    <NativeSplittableBinary Include="$(BinDir)libmscordaccore.dylib"/>
+    <NativeSplittableBinary Include="$(BinDir)libmscordbi.dylib"/>
+    <NativeSplittableBinary Include="$(BinDir)libsos.dylib"/>
+    <NativeSplittableBinary Include="$(BinDir)System.Globalization.Native.dylib"/>
 
-    <ArchitectureSpecificNativeFile Include="$(BinDir)libcoreclr.dylib"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)libdbgshim.dylib"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)libmscordaccore.dylib"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)libmscordbi.dylib"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)mscorlib.ni.dll"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)libsos.dylib"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)sosdocsunix.txt"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)System.Globalization.Native.dylib"/>
-
+    <ArchitectureSpecificNativeFile Include="$(BinDir)mscorlib.ni.dll"/>
     <ArchitectureSpecificLibFile Include="$(BinDir)mscorlib.dll"/>
-
     <ArchitectureSpecificToolFile Include="$(BinDir)crossgen"/>
+    <ArchitectureSpecificNativeFile Include="@(NativeSplittableBinary)"/>
 
     <File Include="@(ArchitectureSpecificNativeFile)">
       <TargetPath>runtimes/$(PackageTargetRuntime)/native</TargetPath>
     </File>
 
-    <!-- Using lib/dotnet here.  There is no TFM for this since it is a runtime itself. -->
+    <!-- Using lib/netstandard1.0 here.  There is no TFM for this since it is a runtime itself. -->
     <File Include="@(ArchitectureSpecificLibFile)">
-      <TargetPath>runtimes/$(PackageTargetRuntime)/lib/dotnet</TargetPath>
+      <TargetPath>runtimes/$(PackageTargetRuntime)/lib/netstandard1.0</TargetPath>
     </File>
 
     <!-- No reference: don't permit reference to the implementation from lib -->
     <File Include="$(PlaceholderFile)">
-      <TargetPath>ref/dotnet</TargetPath>
+      <TargetPath>ref/netstandard1.0</TargetPath>
     </File>
 
     <File Include="@(ArchitectureSpecificToolFile)">
       <TargetPath>tools</TargetPath>
+    </File>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(__BuildType)' == 'Release'">
+    <ArchitectureSpecificNativeSymbol Include="@(NativeSplittableBinary -> '%(Identity).dwarf')"/>
+
+    <AdditionalLibPackageExcludes Include="%2A%2A\%2A.dwarf"/>
+    <AdditionalSymbolPackageExcludes Include="%2A%2A\%2A.dylib"/>
+    <AdditionalSymbolPackageExcludes Include="%2A%2A\%2A.dll"/>
+    <AdditionalSymbolPackageExcludes Include="%2A%2A\sosdocsunix.txt"/>
+    <AdditionalSymbolPackageExcludes Include="%2A%2A\crossgen"/>
+    <ArchitectureSpecificNativeSymbol Include="..\_.pdb"/>
+
+    <File Include="@(ArchitectureSpecificNativeSymbol)">
+      <TargetPath>runtimes/$(PackageTargetRuntime)/native</TargetPath>
+      <IsSymbolFile>true</IsSymbolFile>
     </File>
   </ItemGroup>
 

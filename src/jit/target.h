@@ -372,6 +372,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_WRITE_BARRIER    1       // Generate the proper WriteBarrier calls for GC
   #define FEATURE_FIXED_OUT_ARGS   0       // X86 uses push instructions to pass args
   #define FEATURE_STRUCTPROMOTE    1       // JIT Optimization to promote fields of structs into registers
+  #define FEATURE_MULTIREG_STRUCT_PROMOTE  0  // True when we want to promote fields of a multireg struct into registers
   #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        0       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
@@ -411,7 +412,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define REG_PREV(reg)           ((regNumber)((unsigned)(reg) - 1))
 
   #define REG_FP_FIRST             REG_XMM0
-  #define REG_FP_LAST              REG_XMM15
+  #define REG_FP_LAST              REG_XMM7
   #define FIRST_FP_ARGREG          REG_XMM0
   #define LAST_FP_ARGREG           REG_XMM3
   #define REG_FLTARG_0             REG_XMM0
@@ -463,6 +464,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 #endif // LEGACY_BACKEND
 
   #define REGSIZE_BYTES            4       // number of bytes in one register
+  #define MIN_ARG_AREA_FOR_CALL    0       // Minimum required outgoing argument space for a call.
 
   #define CODE_ALIGN               1       // code alignment requirement
   #define STACK_ALIGN              4       // stack alignment requirement
@@ -691,6 +693,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_WRITE_BARRIER    1       // Generate the WriteBarrier calls for GC (currently not the x86-style register-customized barriers)
   #define FEATURE_FIXED_OUT_ARGS   1       // Preallocate the outgoing arg area in the prolog
   #define FEATURE_STRUCTPROMOTE    1       // JIT Optimization to promote fields of structs into registers
+  #define FEATURE_MULTIREG_STRUCT_PROMOTE  0  // True when we want to promote fields of a multireg struct into registers
   #define FEATURE_FASTTAILCALL     1       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     1       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        0       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
@@ -767,12 +770,16 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 #endif // !ETW_EBP_FRAMED
 
 #ifdef UNIX_AMD64_ABI
+  #define MIN_ARG_AREA_FOR_CALL   0       // Minimum required outgoing argument space for a call.
+
   #define RBM_INT_CALLEE_SAVED    (RBM_EBX|RBM_ETW_FRAMED_EBP|RBM_R12|RBM_R13|RBM_R14|RBM_R15)
   #define RBM_INT_CALLEE_TRASH    (RBM_EAX|RBM_RDI|RBM_RSI|RBM_EDX|RBM_ECX|RBM_R8|RBM_R9|RBM_R10|RBM_R11)
   #define RBM_FLT_CALLEE_SAVED    (0)
   #define RBM_FLT_CALLEE_TRASH    (RBM_XMM0|RBM_XMM1|RBM_XMM2|RBM_XMM3|RBM_XMM4|RBM_XMM5|RBM_XMM6|RBM_XMM7| \
                                    RBM_XMM8|RBM_XMM9|RBM_XMM10|RBM_XMM11|RBM_XMM12|RBM_XMM13|RBM_XMM14|RBM_XMM15)
 #else // !UNIX_AMD64_ABI
+#define MIN_ARG_AREA_FOR_CALL     (4 * REGSIZE_BYTES)       // Minimum required outgoing argument space for a call.
+
   #define RBM_INT_CALLEE_SAVED    (RBM_EBX|RBM_ESI|RBM_EDI|RBM_ETW_FRAMED_EBP|RBM_R12|RBM_R13|RBM_R14|RBM_R15)
   #define RBM_INT_CALLEE_TRASH    (RBM_EAX|RBM_ECX|RBM_EDX|RBM_R8|RBM_R9|RBM_R10|RBM_R11)
   #define RBM_FLT_CALLEE_SAVED    (RBM_XMM6|RBM_XMM7|RBM_XMM8|RBM_XMM9|RBM_XMM10|RBM_XMM11|RBM_XMM12|RBM_XMM13|RBM_XMM14|RBM_XMM15)
@@ -788,11 +795,6 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define RBM_CALLEE_TRASH_NOGC   RBM_CALLEE_TRASH
 
   #define RBM_ALLINT              (RBM_INT_CALLEE_SAVED | RBM_INT_CALLEE_TRASH)
-#ifdef UNIX_AMD64_ABI
-  #define RBM_LOWINT              (RBM_EAX|RBM_RDI|RBM_RSI|RBM_EDX|RBM_ECX|RBM_EBX|RBM_ETW_FRAMED_EBP)
-#else // !UNIX_AMD64_ABI
-  #define RBM_LOWINT              (RBM_EAX|RBM_ECX|RBM_EBX|RBM_ETW_FRAMED_EBP|RBM_ESI|RBM_EDI)
-#endif // !UNIX_AMD64_ABI
 
 #if 0
 #define REG_VAR_ORDER            REG_EAX,REG_EDX,REG_ECX,REG_ESI,REG_EDI,REG_EBX,REG_ETW_FRAMED_EBP_LIST \
@@ -1081,9 +1083,18 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define RBM_PROFILER_ENTER_TRASH  RBM_CALLEE_TRASH
   #define RBM_PROFILER_LEAVE_TRASH  (RBM_CALLEE_TRASH & ~(RBM_FLOATRET | RBM_INTRET))
 
-  // The registers trashed by the CORINFO_HELP_STOP_FOR_GC helper
-  // See vm\amd64\amshelpers.asm for more details.
+  // The registers trashed by the CORINFO_HELP_STOP_FOR_GC helper.
+#ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
+  // See vm\amd64\unixasmhelpers.S for more details.
+  //
+  // On Unix a struct of size >=9 and <=16 bytes in size is returned in two return registers.
+  // The return registers could be any two from the set { RAX, RDX, XMM0, XMM1 }.
+  // STOP_FOR_GC helper preserves all the 4 possible return registers.
+  #define RBM_STOP_FOR_GC_TRASH     (RBM_CALLEE_TRASH & ~(RBM_FLOATRET | RBM_INTRET | RBM_FLOATRET_1 | RBM_INTRET_1))
+#else
+  // See vm\amd64\asmhelpers.asm for more details.
   #define RBM_STOP_FOR_GC_TRASH     (RBM_CALLEE_TRASH & ~(RBM_FLOATRET | RBM_INTRET))
+#endif
 
   // What sort of reloc do we use for [disp32] address mode
   #define IMAGE_REL_BASED_DISP32   IMAGE_REL_BASED_REL32
@@ -1124,6 +1135,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_WRITE_BARRIER    1       // Generate the proper WriteBarrier calls for GC    
   #define FEATURE_FIXED_OUT_ARGS   1       // Preallocate the outgoing arg area in the prolog
   #define FEATURE_STRUCTPROMOTE    1       // JIT Optimization to promote fields of structs into registers
+  #define FEATURE_MULTIREG_STRUCT_PROMOTE  0  // True when we want to promote fields of a multireg struct into registers
   #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        1       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
@@ -1161,6 +1173,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define TINY_REGNUM_BITS         4       // number of bits we will use for a tiny instr desc (may not use float)
   #define REGMASK_BITS             64      // number of bits in a REGNUM_MASK
   #define REGSIZE_BYTES            4       // number of bytes in one register
+  #define MIN_ARG_AREA_FOR_CALL    0       // Minimum required outgoing argument space for a call.
 
   #define CODE_ALIGN               2       // code alignment requirement
   #define STACK_ALIGN              8       // stack alignment requirement
@@ -1437,6 +1450,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_WRITE_BARRIER    1       // Generate the proper WriteBarrier calls for GC    
   #define FEATURE_FIXED_OUT_ARGS   1       // Preallocate the outgoing arg area in the prolog
   #define FEATURE_STRUCTPROMOTE    1       // JIT Optimization to promote fields of structs into registers
+  #define FEATURE_MULTIREG_STRUCT_PROMOTE 1  // True when we want to promote fields of a multireg struct into registers
   #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        1       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
@@ -1476,6 +1490,8 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define REGSIZE_BYTES            8       // number of bytes in one general purpose register
   #define FP_REGSIZE_BYTES         16      // number of bytes in one FP/SIMD register
   #define FPSAVE_REGSIZE_BYTES     8       // number of bytes in one FP/SIMD register that are saved/restored, for callee-saved registers
+
+  #define MIN_ARG_AREA_FOR_CALL    0       // Minimum required outgoing argument space for a call.
 
   #define CODE_ALIGN               4       // code alignment requirement
   #define STACK_ALIGN              16      // stack alignment requirement
@@ -1644,6 +1660,8 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 
   #define REG_ARG_FIRST            REG_R0
   #define REG_ARG_LAST             REG_R7
+  #define REG_ARG_FP_FIRST         REG_V0
+  #define REG_ARG_FP_LAST          REG_V7
   #define INIT_ARG_STACK_SLOT      0                  // No outgoing reserved stack slots
 
   #define REG_ARG_0                REG_R0

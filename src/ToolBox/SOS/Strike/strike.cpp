@@ -6319,11 +6319,6 @@ public:
 #ifdef FEATURE_PAL
         if (m_breakpoints == NULL)
         {
-            ULONG32 flags = 0;
-            g_clrData->GetOtherNotificationFlags(&flags);
-            flags &= ~(CLRDATA_NOTIFY_ON_MODULE_LOAD | CLRDATA_NOTIFY_ON_MODULE_UNLOAD);
-            g_clrData->SetOtherNotificationFlags(flags);
-
             g_ExtServices->ClearExceptionCallback();
         }
 #endif
@@ -6652,6 +6647,7 @@ private:
 
         ToRelease<IXCLRDataMethodDefinition> pMeth = NULL;
         mod->GetMethodDefinitionByToken(pCur->methodToken, &pMeth);
+
         // We may not need the code notification. Maybe it was ngen'd and we
         // already have the method?
         // We can delete the current entry if ResolveMethodInstances() set all BPs
@@ -6865,8 +6861,12 @@ public:
             if(method->GetRepresentativeEntryAddress(&startAddr) == S_OK)
             {
                 CHAR buffer[100];
+#ifndef FEATURE_PAL
                 sprintf_s(buffer, _countof(buffer), "bp /1 %p", (void*) (size_t) (startAddr+catcherNativeOffset));
-                g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer ,0);
+#else
+                sprintf_s(buffer, _countof(buffer), "breakpoint set --one-shot --address 0x%p", (void*) (size_t) (startAddr+catcherNativeOffset));
+#endif
+                g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer, 0);
             }
             g_stopOnNextCatch = FALSE;
         }
@@ -7020,7 +7020,7 @@ HRESULT HandleExceptionNotification(ILLDBServices *client)
 
 DECLARE_API(bpmd)
 {
-    INIT_API();    
+    INIT_API_NOEE();    
     MINIDUMP_NOT_SUPPORTED();    
     int i;
     char buffer[1024];    
@@ -7169,9 +7169,6 @@ DECLARE_API(bpmd)
     LPWSTR Filename = (LPWSTR)alloca(MAX_LONGPATH * sizeof(WCHAR));
 
     BOOL bNeedNotificationExceptions = FALSE;
-#ifdef FEATURE_PAL
-    BOOL bNeedModuleNotificationExceptions = FALSE;
-#endif
 
     if (pMD == NULL)
     {
@@ -7190,7 +7187,7 @@ DECLARE_API(bpmd)
             MultiByteToWideChar(CP_ACP, 0, DllName.data, -1, Filename, MAX_LONGPATH);
         }
 
-        // get modules that may need a breakpoint bound
+        // Get modules that may need a breakpoint bound
         if ((Status = CheckEEDll()) == S_OK)
         {
             if ((Status = LoadClrDebugDll()) != S_OK)
@@ -7199,23 +7196,25 @@ DECLARE_API(bpmd)
                 DACMessage(Status);
                 return Status;
             }
-            else
-            {
-                // get the module list
-                moduleList = ModuleFromName(fIsFilename ? NULL : DllName.data, &numModule);
+            g_bDacBroken = FALSE;                                       \
 
-                // Its OK if moduleList is NULL
-                // There is a very normal case when checking for modules after clr is loaded
-                // but before any AppDomains or assemblies are created
-                // for example:
-                // >sxe ld:clr
-                // >g
-                // ...
-                // ModLoad: clr.dll
-                // >!bpmd Foo.dll Foo.Bar
-            }
+            // Get the module list
+            moduleList = ModuleFromName(fIsFilename ? NULL : DllName.data, &numModule);
+
+            // Its OK if moduleList is NULL
+            // There is a very normal case when checking for modules after clr is loaded
+            // but before any AppDomains or assemblies are created
+            // for example:
+            // >sxe ld:clr
+            // >g
+            // ...
+            // ModLoad: clr.dll
+            // >!bpmd Foo.dll Foo.Bar
         }
-
+        // If LoadClrDebugDll() succeeded make sure we release g_clrData
+        ToRelease<IXCLRDataProcess> spIDP(g_clrData);
+        ToRelease<ISOSDacInterface> spISD(g_sos);
+        ResetGlobals();
         
         // we can get here with EE not loaded => 0 modules
         //                      EE is loaded => 0 or more modules
@@ -7308,24 +7307,13 @@ DECLARE_API(bpmd)
                 g_bpoints.Add(Filename, lineNumber, NULL);
             }
             bNeedNotificationExceptions = TRUE;
-#ifdef FEATURE_PAL
-            bNeedModuleNotificationExceptions = TRUE;
-#endif
         }
     }
     else /* We were given a MethodDesc already */
     {
         // if we've got an explicit MD, then we better have CLR and mscordacwks loaded
-        if ((Status = CheckEEDll()) != S_OK)
-        {
-            EENotLoadedMessage(Status);
-            return Status;
-        }
-        if ((Status = LoadClrDebugDll()) != S_OK)
-        {
-            DACMessage(Status);
-            return Status;
-        } 
+        INIT_API_EE()
+        INIT_API_DAC();
 
         DacpMethodDescData MethodDescData;
         ExtOut("MethodDesc = %p\n", (ULONG64) pMD);
@@ -7371,7 +7359,6 @@ DECLARE_API(bpmd)
         else
         {
             // Must issue a pending breakpoint.
-
             if (g_sos->GetMethodDescName(pMD, mdNameLen, FunctionName, NULL) != S_OK)
             {
                 ExtOut("Unable to get method name for MethodDesc %p\n", (ULONG64)pMD);
@@ -7394,13 +7381,6 @@ DECLARE_API(bpmd)
         sprintf_s(buffer, _countof(buffer), "sxe -c \"!HandleCLRN\" clrn");
         Status = g_ExtControl->Execute(DEBUG_EXECUTE_NOT_LOGGED, buffer, 0);        
 #else
-        if (bNeedModuleNotificationExceptions)
-        {
-            ULONG32 flags = 0;
-            g_clrData->GetOtherNotificationFlags(&flags);
-            flags |= (CLRDATA_NOTIFY_ON_MODULE_LOAD | CLRDATA_NOTIFY_ON_MODULE_UNLOAD);
-            g_clrData->SetOtherNotificationFlags(flags);
-        }
         Status = g_ExtServices->SetExceptionCallback(HandleExceptionNotification);
 #endif // FEATURE_PAL
     }
@@ -12007,7 +11987,7 @@ void PrintRef(const SOSStackRefData &ref, TableOutput &out)
 class ClrStackImpl
 {
 public:
-    static void PrintThread(ULONG osID, BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC, BOOL bFull)
+    static void PrintThread(ULONG osID, BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC, BOOL bFull, BOOL bDisplayRegVals)
     {
         // Symbols variables
         ULONG symlines = 0; // symlines will be non-zero only if SYMOPT_LOAD_LINES was set in the symbol options
@@ -12086,7 +12066,7 @@ public:
             if (SUCCEEDED(frameDataResult) && FrameData.frameAddr)
             {
                 // Skip the instruction pointer because it doesn't really mean anything for method frames
-                out.WriteColumn(1, bFull ? String("") : InstructionPtr(ip));
+                out.WriteColumn(1, bFull ? String("") : NativePtr(ip));
                 
                 // This is a clr!Frame.
                 out.WriteColumn(2, GetFrameFromAddress(TO_TADDR(FrameData.frameAddr), pStackWalk, bFull));
@@ -12121,6 +12101,9 @@ public:
                     PrintArgsAndLocals(pStackWalk, bParams, bLocals);
             }
 
+            if (bDisplayRegVals)
+                PrintManagedFrameContext(pStackWalk);
+
         } while (pStackWalk->Next() == S_OK);
 
 #ifdef _TARGET_WIN64_
@@ -12131,6 +12114,63 @@ public:
             numNativeFrames--;
         }
 #endif // _TARGET_WIN64_
+    }
+    
+    static HRESULT PrintManagedFrameContext(IXCLRDataStackWalk *pStackWalk)
+    {
+        CROSS_PLATFORM_CONTEXT context;
+        HRESULT hr = pStackWalk->GetContext(DT_CONTEXT_FULL, g_targetMachine->GetContextSize(), NULL, (BYTE *)&context);
+        if (FAILED(hr) || hr == S_FALSE)
+        {
+            // GetFrameContext returns S_FALSE if the frame iterator is invalid.  That's basically an error for us.
+            ExtOut("GetFrameContext failed: %lx\n", hr);
+            return E_FAIL;
+        }
+                     
+#if defined(SOS_TARGET_AMD64)
+        String outputFormat3 = "    %3s=%016x %3s=%016x %3s=%016x\n";
+        String outputFormat2 = "    %3s=%016x %3s=%016x\n";
+        ExtOut(outputFormat3, "rsp", context.Amd64Context.Rsp, "rbp", context.Amd64Context.Rbp, "rip", context.Amd64Context.Rip);
+        ExtOut(outputFormat3, "rax", context.Amd64Context.Rax, "rbx", context.Amd64Context.Rbx, "rcx", context.Amd64Context.Rcx);
+        ExtOut(outputFormat3, "rdx", context.Amd64Context.Rdx, "rsi", context.Amd64Context.Rsi, "rdi", context.Amd64Context.Rdi);
+        ExtOut(outputFormat3, "r8", context.Amd64Context.R8, "r9", context.Amd64Context.R9, "r10", context.Amd64Context.R10);
+        ExtOut(outputFormat3, "r11", context.Amd64Context.R11, "r12", context.Amd64Context.R12, "r13", context.Amd64Context.R13);
+        ExtOut(outputFormat2, "r14", context.Amd64Context.R14, "r15", context.Amd64Context.R15);
+#elif defined(SOS_TARGET_X86)
+        String outputFormat3 = "    %3s=%08x %3s=%08x %3s=%08x\n";
+        String outputFormat2 = "    %3s=%08x %3s=%08x\n";
+        ExtOut(outputFormat3, "esp", context.X86Context.Esp, "ebp", context.X86Context.Ebp, "eip", context.X86Context.Eip);
+        ExtOut(outputFormat3, "eax", context.X86Context.Eax, "ebx", context.X86Context.Ebx, "ecx", context.X86Context.Ecx);      
+        ExtOut(outputFormat3, "edx", context.X86Context.Edx, "esi", context.X86Context.Esi, "edi", context.X86Context.Edi);
+#elif defined(SOS_TARGET_ARM)
+        String outputFormat3 = "    %3s=%08x %3s=%08x %3s=%08x\n";
+        String outputFormat2 = "    %s=%08x %s=%08x\n";
+        String outputFormat1 = "    %s=%08x\n";
+        ExtOut(outputFormat3, "r0", context.ArmContext.R0, "r1", context.ArmContext.R1, "r2", context.ArmContext.R2);
+        ExtOut(outputFormat3, "r3", context.ArmContext.R3, "r4", context.ArmContext.R4, "r5", context.ArmContext.R5);
+        ExtOut(outputFormat3, "r6", context.ArmContext.R6, "r7", context.ArmContext.R7, "r8", context.ArmContext.R8);
+        ExtOut(outputFormat3, "r9", context.ArmContext.R9, "r10", context.ArmContext.R10, "r11", context.ArmContext.R11);
+        ExtOut(outputFormat1, "r12", context.ArmContext.R12);
+        ExtOut(outputFormat3, "sp", context.ArmContext.Sp, "lr", context.ArmContext.Lr, "pc", context.ArmContext.Pc);
+        ExtOut(outputFormat2, "cpsr", context.ArmContext.Cpsr, "fpsr", context.ArmContext.Fpscr);
+#elif defined(SOS_TARGET_ARM64)
+        String outputXRegFormat3 = "    x%d=%016x x%d=%016x x%d=%016x\n";
+        String outputXRegFormat1 = "    x%d=%016x\n";
+        String outputFormat3     = "    %s=%016x %s=%016x %s=%016x\n";
+        String outputFormat2     = "    %s=%08x %s=%08x\n";
+        DWORD64 *X = context.Arm64Context.X;
+        for (int i = 0; i < 9; i++)
+        {
+            ExtOut(outputXRegFormat3, i + 0, X[i + 0], i + 1, X[i + 1], i + 2, X[i + 2]);
+        }
+        ExtOut(outputXRegFormat1, 28, X[28]);
+        ExtOut(outputFormat3, "sp", context.ArmContext.Sp, "lr", context.ArmContext.Lr, "pc", context.ArmContext.Pc);
+        ExtOut(outputFormat2, "cpsr", context.ArmContext.Cpsr, "fpsr", context.ArmContext.Fpscr);
+#else
+        ExtOut("Can't display register values for this platform\n");
+#endif
+        return S_OK;
+
     }
 
     static HRESULT GetFrameLocation(IXCLRDataStackWalk *pStackWalk, CLRDATA_ADDRESS *ip, CLRDATA_ADDRESS *sp)
@@ -12163,7 +12203,7 @@ public:
         ULONG64 ip = frame->InstructionOffset;
 
         out.WriteColumn(0, frame->StackOffset);
-        out.WriteColumn(1, InstructionPtr(ip));
+        out.WriteColumn(1, NativePtr(ip));
 
         HRESULT hr = g_ExtSymbols->GetNameByOffset(TO_CDADDR(ip), symbol, _countof(symbol), NULL, &displacement);
         if (SUCCEEDED(hr) && symbol[0] != '\0')
@@ -12198,7 +12238,7 @@ public:
         }
     }
 
-    static void PrintCurrentThread(BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC, BOOL bNative)
+    static void PrintCurrentThread(BOOL bParams, BOOL bLocals, BOOL bSuppressLines, BOOL bGC, BOOL bNative, BOOL bDisplayRegVals)
     {
         ULONG id = 0;
         ULONG osid = 0;
@@ -12208,7 +12248,7 @@ public:
         g_ExtSystem->GetCurrentThreadId(&id);
         ExtOut("(%d)\n", id);
         
-        PrintThread(osid, bParams, bLocals, bSuppressLines, bGC, bNative);
+        PrintThread(osid, bParams, bLocals, bSuppressLines, bGC, bNative, bDisplayRegVals);
     }
 private: 
 
@@ -12620,6 +12660,7 @@ DECLARE_API(ClrStack)
     BOOL bGC = FALSE;
     BOOL dml = FALSE;
     BOOL bFull = FALSE;
+    BOOL bDisplayRegVals = FALSE;
     DWORD frameToDumpVariablesFor = -1;
     StringHolder cvariableName;
     ArrayHolder<WCHAR> wvariableName = new NOTHROW WCHAR[mdNameLen];
@@ -12641,6 +12682,7 @@ DECLARE_API(ClrStack)
         {"-i", &bICorDebug, COBOOL, FALSE},
         {"-gc", &bGC, COBOOL, FALSE},
         {"-f", &bFull, COBOOL, FALSE},
+        {"-r", &bDisplayRegVals, COBOOL, FALSE },
 #ifndef FEATURE_PAL
         {"/d", &dml, COBOOL, FALSE},
 #endif
@@ -12691,7 +12733,7 @@ DECLARE_API(ClrStack)
         return ClrStackImplWithICorDebug::ClrStackFromPublicInterface(bParams, bLocals, FALSE, wvariableName, frameToDumpVariablesFor);
     }
     
-    ClrStackImpl::PrintCurrentThread(bParams, bLocals, bSuppressLines, bGC, bFull);
+    ClrStackImpl::PrintCurrentThread(bParams, bLocals, bSuppressLines, bGC, bFull, bDisplayRegVals);
     
     return S_OK;
 }
@@ -14099,9 +14141,7 @@ HRESULT SetNGENCompilerFlags(DWORD flags)
 }
 
 
-
 // This is an internal-only Apollo extension to save breakpoint/watch state
-#ifndef FEATURE_PAL
 DECLARE_API(SaveState)
 {
     INIT_API_NOEE();    
@@ -14138,16 +14178,14 @@ DECLARE_API(SaveState)
     ExtOut("Session breakpoints and watch expressions saved to %s\n", filePath.data);
     return S_OK;
 }
-#endif
 
+#endif // FEATURE_PAL
 
 DECLARE_API(StopOnCatch)
 {
     INIT_API();    
     MINIDUMP_NOT_SUPPORTED();    
 
-    CHAR buffer[100];
-    sprintf_s(buffer, _countof(buffer), "sxe -c \"!HandleCLRN\" clrn");
     g_stopOnNextCatch = TRUE;
     ULONG32 flags = 0;
     g_clrData->GetOtherNotificationFlags(&flags);
@@ -14157,7 +14195,6 @@ DECLARE_API(StopOnCatch)
     return S_OK;
 }
 
-
 // This is an undocumented SOS extension command intended to help test SOS
 // It causes the Dml output to be printed to the console uninterpretted so
 // that a test script can read the commands which are hidden in the markup
@@ -14166,8 +14203,6 @@ DECLARE_API(ExposeDML)
     Output::SetDMLExposed(true);
     return S_OK;
 }
-
-#endif // FEATURE_PAL
 
 // According to kksharma the Windows debuggers always sign-extend
 // arguments when calling externally, therefore StackObjAddr 

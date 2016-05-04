@@ -481,13 +481,6 @@ public:
         return ZapNodeType_ExternalMethodThunk;
     }
 
-#if defined(TARGET_THUMB2) && defined(BINDER)
-    virtual BOOL IsThumb2Code()
-    {
-        return TRUE;
-    }
-#endif
-
     virtual void EncodeSignature(ZapImportTable * pTable, SigBuilder * pSigBuilder)
     {
         CORINFO_METHOD_HANDLE handle = (CORINFO_METHOD_HANDLE)GetHandle();
@@ -809,13 +802,6 @@ public:
     {
         return ZapNodeType_VirtualMethodThunk;
     }
-
-#if defined(TARGET_THUMB2) && defined(BINDER)
-    virtual BOOL IsThumb2Code()
-    {
-        return TRUE;
-    }
-#endif
 
     virtual void EncodeSignature(ZapImportTable * pTable, SigBuilder * pSigBuilder)
     {
@@ -1805,12 +1791,19 @@ ZapImport * ZapImportTable::GetDynamicHelperCell(CORCOMPILE_FIXUP_BLOB_KIND kind
     return pImport;
 }
 
-ZapImport * ZapImportTable::GetDynamicHelperCell(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_METHOD_HANDLE handle, CORINFO_RESOLVED_TOKEN * pResolvedToken)
+ZapImport * ZapImportTable::GetDynamicHelperCell(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_METHOD_HANDLE handle, CORINFO_RESOLVED_TOKEN * pResolvedToken, 
+    CORINFO_CLASS_HANDLE delegateType /*=NULL*/)
 {
     SigBuilder sigBuilder;
 
     EncodeMethod((CORCOMPILE_FIXUP_BLOB_KIND)(kind & ~CORINFO_HELP_READYTORUN_ATYPICAL_CALLSITE),
         handle, &sigBuilder, pResolvedToken);
+
+    if (delegateType != NULL)
+    {
+        _ASSERTE((CORCOMPILE_FIXUP_BLOB_KIND)(kind & ~CORINFO_HELP_READYTORUN_ATYPICAL_CALLSITE) == ENCODE_DELEGATE_CTOR);
+        GetCompileInfo()->EncodeClass(m_pImage->GetModuleHandle(), delegateType, &sigBuilder, NULL, NULL);
+    }
 
     return GetImportForSignature<ZapDynamicHelperCell, ZapNodeType_DynamicHelperCell>((void *)kind, &sigBuilder);
 }
@@ -2089,6 +2082,72 @@ DWORD ZapIndirectHelperThunk::SaveWorker(ZapWriter * pZapWriter)
     // bx r12
     *(WORD *)p = 0x4760;
     p += 2;
+#elif defined(_TARGET_ARM64_)
+    if (IsDelayLoadHelper())
+    {
+        if (IsVSD())
+        {
+			// x11 contains indirection cell
+			// Do nothing x11 contains our first param
+        }
+        else
+        {
+            // mov x11, x12
+			*(DWORD*)p = 0xaa0c03eb;
+			p += 4;
+        }
+
+        //  movz x8, #index
+		DWORD index = GetSectionIndex();
+		_ASSERTE(index <= 0x7F);
+		*(DWORD*)p = 0xd2800008 | (index << 5);
+		p += 4;
+
+        // move Module* -> x9
+		// ldr x9, [PC+0x14]
+		*(DWORD*)p = 0x58000289;
+		p += 4;
+		
+		//ldr x9, [x9]
+		*(DWORD*)p = 0xf9400129;
+		p += 4;
+	}
+    else
+    if (IsLazyHelper())
+    {
+		// Move Module* -> x1
+        // ldr x1, [PC+0x14]
+		*(DWORD*)p = 0x58000289;
+		p += 4;
+
+		// ldr x1, [x1]
+		*(DWORD*)p = 0xf9400021;
+		p += 4;
+	}
+
+    // branch to helper
+	
+    // mov x12, [helper]
+	// ldr x12, [PC+0x14]
+	*(DWORD*)p = 0x58000289;
+	p += 4;
+
+    // ldr x12, [x12]
+    *(DWORD *)p = 0xf940018c;
+    p += 4;
+
+    // br x12
+    *(DWORD *)p = 0xd61f0180;
+    p += 4;	
+
+	// [Module*]
+	if (pImage != NULL)
+		pImage->WriteReloc(buffer, (int)(p - buffer), pImage->GetImportTable()->GetHelperImport(READYTORUN_HELPER_Module), 0, IMAGE_REL_BASED_PTR);
+	p += 8;
+    // [helper]
+	if (pImage != NULL)
+		pImage->WriteReloc(buffer, (int)(p - buffer), pImage->GetImportTable()->GetHelperImport(GetReadyToRunHelper()), 0, IMAGE_REL_BASED_PTR);
+	p += 8;
 #else
     PORTABILITY_ASSERT("ZapIndirectHelperThunk::SaveWorker");
 #endif
@@ -2119,7 +2178,7 @@ void ZapImportTable::PlaceIndirectHelperThunk(ZapNode * pImport)
 ZapNode * ZapImportTable::GetIndirectHelperThunk(ReadyToRunHelper helperNum, PVOID pArg)
 {
     ZapNode * pImport = GetImport<ZapIndirectHelperThunk, ZapNodeType_IndirectHelperThunk>((void *)helperNum, pArg);
-#if defined(_TARGET_ARM_) && !defined(BINDER)
+#if defined(_TARGET_ARM_)
     pImport = m_pImage->GetInnerPtr(pImport, THUMB_CODE);
 #endif
     return pImport;
@@ -2142,7 +2201,7 @@ ZapNode * ZapImportTable::GetPlacedIndirectHelperThunk(ReadyToRunHelper helperNu
     }
     if (!pImport->IsPlaced())
         PlaceIndirectHelperThunk(pImport);
-#if defined(_TARGET_ARM_) && !defined(BINDER)
+#if defined(_TARGET_ARM_)
     pImport = m_pImage->GetInnerPtr(pImport, THUMB_CODE);
 #endif
     return pImport;

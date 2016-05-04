@@ -25,13 +25,303 @@
 #ifndef STANDALONE_BUILD
 #include "log.h"
 #include "simplerhash.h"
+#include "bitposition.h"
 #endif
 
-#ifdef MDIL
-#define MUST_CALL_JITALLOCATOR_FREE 1
-#endif 
+#ifdef MEASURE_GCINFO
+#define GCINFO_WRITE(writer, val, numBits, counter) \
+    {                                               \
+        writer.Write(val, numBits);                 \
+        m_CurrentMethodSize.counter += numBits;     \
+        m_CurrentMethodSize.TotalSize += numBits;   \
+    }
+#define GCINFO_WRITE_VARL_U(writer, val, base, counter) \
+    {                                               \
+        size_t __temp =                             \
+         writer.EncodeVarLengthUnsigned(val, base); \
+        m_CurrentMethodSize.counter += __temp;      \
+        m_CurrentMethodSize.TotalSize += __temp;    \
+    }
+#define GCINFO_WRITE_VARL_S(writer, val, base, counter) \
+    {                                               \
+        size_t __temp =                             \
+         writer.EncodeVarLengthSigned(val, base);   \
+        m_CurrentMethodSize.counter += __temp;      \
+        m_CurrentMethodSize.TotalSize += __temp;    \
+    }
+#define GCINFO_WRITE_VECTOR(writer, vector, counter)   \
+    {                                               \
+        WriteSlotStateVector(writer, vector);       \
+        for(UINT32 i = 0; i < m_NumSlots; i++)      \
+        {                                           \
+            if(!m_SlotTable[i].IsDeleted() &&       \
+               !m_SlotTable[i].IsUntracked())       \
+            {                                       \
+                m_CurrentMethodSize.counter++;      \
+                m_CurrentMethodSize.TotalSize++;    \
+            }                                       \
+        }                                           \
+    }
+#define GCINFO_WRITE_VAR_VECTOR(writer, vector, baseSkip, baseRun, counter)   \
+    {                                                                         \
+        size_t __temp =                                                       \
+           WriteSlotStateVarLengthVector(writer, vector, baseSkip, baseRun);  \
+        m_CurrentMethodSize.counter += __temp;                                \
+        m_CurrentMethodSize.TotalSize += __temp;                              \
+    }
+#else
+#define GCINFO_WRITE(writer, val, numBits, counter) \
+        writer.Write(val, numBits);
 
-typedef SimplerHashTable< const BitArray *, LiveStateFuncs, UINT32, DefaultSimplerHashBehavior > LiveStateHashTable;
+#define GCINFO_WRITE_VARL_U(writer, val, base, counter) \
+        writer.EncodeVarLengthUnsigned(val, base);
+
+#define GCINFO_WRITE_VARL_S(writer, val, base, counter) \
+        writer.EncodeVarLengthSigned(val, base);
+
+#define GCINFO_WRITE_VECTOR(writer, vector, counter)   \
+        WriteSlotStateVector(writer, vector);
+
+#define GCINFO_WRITE_VAR_VECTOR(writer, vector, baseSkip, baseRun, counter)   \
+        WriteSlotStateVarLengthVector(writer, vector, baseSkip, baseRun);
+#endif
+
+#define LOG_GCSLOTDESC_FMT "%s%c%d%s%s%s"
+#define LOG_GCSLOTDESC_ARGS(pDesc) (pDesc)->IsRegister() ? "register"                                          \
+                                        : GcStackSlotBaseNames[(pDesc)->Slot.Stack.Base],                      \
+                                   (pDesc)->IsRegister() ? ' ' : (pDesc)->Slot.Stack.SpOffset < 0 ? '-' : '+', \
+                                   (pDesc)->IsRegister() ? (pDesc)->Slot.RegisterNumber                        \
+                                        : ((pDesc)->Slot.Stack.SpOffset),                                      \
+                                   (pDesc)->IsPinned() ? " pinned" : "",                                       \
+                                   (pDesc)->IsInterior() ? " interior" : "",                                   \
+                                   (pDesc)->IsUntracked() ? " untracked" : ""
+
+#define LOG_REGTRANSITION_FMT "register %u%s%s"
+#define LOG_REGTRANSITION_ARGS(RegisterNumber, Flags)           \
+                RegisterNumber,                                 \
+                (Flags & GC_SLOT_PINNED)   ? " pinned"   : "",  \
+                (Flags & GC_SLOT_INTERIOR) ? " interior" : ""
+
+#define LOG_STACKTRANSITION_FMT "%s%c%d%s%s%s"
+#define LOG_STACKTRANSITION_ARGS(BaseRegister, StackOffset, Flags)  \
+        GcStackSlotBaseNames[BaseRegister],                         \
+        ((StackOffset) < 0) ? '-' : '+',                            \
+        ((StackOffset) >= 0) ? (StackOffset)                        \
+                             : -(StackOffset),                      \
+                (Flags & GC_SLOT_PINNED)   ? " pinned"   : "",      \
+                (Flags & GC_SLOT_INTERIOR) ? " interior" : "",      \
+                (Flags & GC_SLOT_UNTRACKED) ? " untracked" : ""
+
+class BitArray
+{
+    friend class BitArrayIterator;
+public:
+    BitArray(IAllocator* pJitAllocator, size_t size_tCount)
+    {
+        m_pData = (size_t*)pJitAllocator->Alloc(size_tCount*sizeof(size_t));
+        m_pEndData = m_pData + size_tCount;
+#ifdef MUST_CALL_IALLOCATOR_FREE
+        m_pJitAllocator = pJitAllocator;
+#endif
+    }
+
+    inline size_t* DataPtr()
+    {
+        return m_pData;
+    }
+    
+    inline void SetBit( size_t pos )
+    {
+        size_t element = pos / BITS_PER_SIZE_T;
+        int bpos = (int)(pos % BITS_PER_SIZE_T);
+        m_pData[element] |= ((size_t)1 << bpos);
+    }
+
+    inline void ClearBit( size_t pos )
+    {
+        size_t element = pos / BITS_PER_SIZE_T;
+        int bpos = (int)(pos % BITS_PER_SIZE_T);
+        m_pData[element] &= ~((size_t)1 << bpos);
+    }
+
+    inline void SetAll()
+    {
+        size_t* ptr = m_pData;
+        while(ptr < m_pEndData)
+            *(ptr++) = (size_t)(SSIZE_T)(-1);
+    }
+    
+    inline void ClearAll()
+    {
+        size_t* ptr = m_pData;
+        while(ptr < m_pEndData)
+            *(ptr++) = (size_t) 0;
+    }
+    
+    inline void WriteBit( size_t pos, BOOL val)
+    {
+        if(val)
+            SetBit(pos);
+        else
+            ClearBit(pos);
+    }
+    
+    inline size_t ReadBit( size_t pos ) const
+    {
+        size_t element = pos / BITS_PER_SIZE_T;
+        int bpos = (int)(pos % BITS_PER_SIZE_T);
+        return (m_pData[element] & ((size_t)1 << bpos));
+    }
+
+    inline bool operator==(const BitArray &other) const
+    {
+        _ASSERTE(other.m_pEndData - other.m_pData == m_pEndData - m_pData);
+        size_t* dest = m_pData;
+        size_t* src = other.m_pData;
+        return 0 == memcmp(dest, src, (m_pEndData - m_pData) * sizeof(*m_pData));
+    }
+
+    inline int GetHashCode() const
+    {
+        const int* src = (const int*)m_pData;
+        int result = *src++;
+        while(src < (const int*)m_pEndData)
+            result = _rotr(result, 5) ^ *src++;
+            
+        return result;
+    }
+
+    inline BitArray& operator=(const BitArray &other)
+    {
+        _ASSERTE(other.m_pEndData - other.m_pData == m_pEndData - m_pData);
+        size_t* dest = m_pData;
+        size_t* src = other.m_pData;
+        while(dest < m_pEndData)
+            *(dest++) = *(src++);
+            
+        return *this;
+    }
+    
+    inline BitArray& operator|=(const BitArray &other)
+    {
+        _ASSERTE(other.m_pEndData - other.m_pData == m_pEndData - m_pData);
+        size_t* dest = m_pData;
+        size_t* src = other.m_pData;
+        while(dest < m_pEndData)
+            *(dest++) |= *(src++);
+            
+        return *this;
+    }
+    
+#ifdef MUST_CALL_IALLOCATOR_FREE
+    ~BitArray()
+    {
+        m_pAllocator->Free( m_pData );
+    }    
+#endif
+
+    static void* operator new(size_t size, IAllocator* allocator)
+    {
+        return allocator->Alloc(size);
+    }
+
+private:
+    size_t * m_pData;
+    size_t * m_pEndData;
+#ifdef MUST_CALL_IALLOCATOR_FREE
+    IAllocator* m_pJitAllocator;
+#endif
+};
+
+
+class BitArrayIterator
+{
+public:
+    BitArrayIterator(BitArray* bitArray)
+    {
+        m_pCurData = (unsigned *)bitArray->m_pData;
+        m_pEndData = (unsigned *)bitArray->m_pEndData;
+        m_curBits = *m_pCurData;
+        m_curBit = 0;
+        m_curBase = 0;
+        GetNext();
+    }
+    void operator++(int dummy) //int dummy is c++ for "this is postfix ++"
+    {
+        GetNext();
+    }
+
+    void operator++() // prefix ++
+    {
+        GetNext();
+    }
+    void GetNext()
+    {
+        m_curBits -= m_curBit;
+        while (m_curBits == 0)
+        {
+            m_pCurData++;
+            m_curBase += 32;
+            if (m_pCurData == m_pEndData)
+                break;
+            m_curBits = *m_pCurData;
+        }
+        m_curBit = (unsigned)((int)m_curBits & -(int)m_curBits);
+    }
+    unsigned operator*()
+    {
+        assert(!end() && (m_curBit != 0));
+        unsigned bitPosition = BitPosition(m_curBit);
+        return bitPosition + m_curBase;
+    }
+    bool end()
+    {
+        return (m_pCurData == m_pEndData);
+    }
+private:
+    unsigned*   m_pCurData;
+    unsigned*   m_pEndData;
+    unsigned    m_curBits;
+    unsigned    m_curBit;
+    unsigned    m_curBase;
+};
+
+class LiveStateFuncs
+{
+public:
+    static int GetHashCode(const BitArray * key)
+    {
+        return key->GetHashCode();
+    }
+
+    static bool Equals(const BitArray * k1, const BitArray * k2)
+    {
+        return *k1 == *k2;
+    }
+};
+
+class GcInfoNoMemoryException
+{
+};
+
+class GcInfoHashBehavior
+{
+public:
+    static const unsigned s_growth_factor_numerator = 3;
+    static const unsigned s_growth_factor_denominator = 2;
+
+    static const unsigned s_density_factor_numerator = 3;
+    static const unsigned s_density_factor_denominator = 4;
+
+    static const unsigned s_minimum_allocation = 7;
+
+    inline static void DECLSPEC_NORETURN NoMemory()
+    {
+        throw GcInfoNoMemoryException();
+    }
+};
+
+typedef SimplerHashTable<const BitArray *, LiveStateFuncs, UINT32, GcInfoHashBehavior> LiveStateHashTable;
 
 #ifdef MEASURE_GCINFO
 // Fi = fully-interruptible; we count any method that has one or more interruptible ranges
@@ -39,6 +329,53 @@ typedef SimplerHashTable< const BitArray *, LiveStateFuncs, UINT32, DefaultSimpl
 GcInfoSize g_FiGcInfoSize;
 GcInfoSize g_PiGcInfoSize;
 
+GcInfoSize::GcInfoSize()
+{
+    memset(this, 0, sizeof(*this));
+}
+
+GcInfoSize& operator+=(const GcInfoSize& other)
+{
+    TotalSize += other.TotalSize;
+
+    NumMethods += other.NumMethods;
+    NumCallSites += other.NumCallSites;
+    NumRanges += other.NumRanges;
+    NumRegs += other.NumRegs;
+    NumStack += other.NumStack;
+    NumEh += other.NumEh;
+    NumTransitions += other.NumTransitions;
+    SizeOfCode += other.SizeOfCode;
+    
+    FlagsSize += other.FlagsSize;
+    CodeLengthSize += other.CodeLengthSize;
+    ProEpilogSize += other.ProEpilogSize;
+    SecObjSize += other.SecObjSize;
+    GsCookieSize += other.GsCookieSize;
+    GenericsCtxSize += other.GenericsCtxSize;
+    PspSymSize += other.PspSymSize;
+    StackBaseSize += other.StackBaseSize;
+    FrameMarkerSize += other.FrameMarkerSize;
+    FixedAreaSize += other.FixedAreaSize;
+    NumCallSitesSize += other.NumCallSitesSize;
+    NumRangesSize += other.NumRangesSize;
+    CallSitePosSize += other.CallSitePosSize;
+    RangeSize += other.RangeSize;
+    NumRegsSize += other.NumRegsSize;
+    NumStackSize += other.NumStackSize;
+    RegSlotSize += other.RegSlotSize;
+    StackSlotSize += other.StackSlotSize;
+    CallSiteStateSize += other.CallSiteStateSize;
+    NumEhSize += other.NumEhSize;
+    EhPosSize += other.EhPosSize;
+    EhStateSize += other.EhStateSize;
+    ChunkPtrSize += other.ChunkPtrSize;
+    ChunkMaskSize += other.ChunkMaskSize;
+    ChunkFinalStateSize += other.ChunkFinalStateSize;
+    ChunkTransitionSize += other.ChunkTransitionSize;
+
+    return *this;
+}
 
 void GcInfoSize::Log(DWORD level, const char * header)
 {
@@ -102,12 +439,13 @@ inline BOOL IsEssential(EE_ILEXCEPTION_CLAUSE *pClause)
 GcInfoEncoder::GcInfoEncoder(
             ICorJitInfo*                pCorJitInfo,
             CORINFO_METHOD_INFO*        pMethodInfo,
-            IAllocator*                 pJitAllocator
+            IAllocator*                 pJitAllocator,
+            NoMemoryFunction            pNoMem
             )
     :   m_Info1( pJitAllocator ),
         m_Info2( pJitAllocator ),
-        m_InterruptibleRanges(),
-        m_LifetimeTransitions()
+        m_InterruptibleRanges( pJitAllocator ),
+        m_LifetimeTransitions( pJitAllocator )
 #ifdef VERIFY_GCINFO
         , m_DbgEncoder(pCorJitInfo, pMethodInfo, pJitAllocator)
 #endif    
@@ -120,10 +458,12 @@ GcInfoEncoder::GcInfoEncoder(
     _ASSERTE( pCorJitInfo != NULL );
     _ASSERTE( pMethodInfo != NULL );
     _ASSERTE( pJitAllocator != NULL );
+    _ASSERTE( pNoMem != NULL );
 
     m_pCorJitInfo = pCorJitInfo;
     m_pMethodInfo = pMethodInfo;
     m_pAllocator = pJitAllocator;
+    m_pNoMem = pNoMem;
 
 #ifdef _DEBUG
     CORINFO_METHOD_HANDLE methodHandle = pMethodInfo->ftn;
@@ -167,6 +507,28 @@ GcInfoEncoder::GcInfoEncoder(
 #endif // FIXED_STACK_PARAMETER_SCRATCH_AREA
 #endif //_DEBUG
 }
+
+#ifdef PARTIALLY_INTERRUPTIBLE_GC_SUPPORTED
+void GcInfoEncoder::DefineCallSites(UINT32* pCallSites, BYTE* pCallSiteSizes, UINT32 numCallSites)
+{
+    m_pCallSites = pCallSites;
+    m_pCallSiteSizes = pCallSiteSizes;
+    m_NumCallSites = numCallSites;
+#ifdef _DEBUG
+    for(UINT32 i=0; i<numCallSites; i++)
+    {
+        _ASSERTE(pCallSiteSizes[i] > 0);
+        _ASSERTE(DENORMALIZE_CODE_OFFSET(NORMALIZE_CODE_OFFSET(pCallSites[i])) == pCallSites[i]);
+        if(i > 0)
+        {
+            UINT32 prevEnd = pCallSites[i-1] + pCallSiteSizes[i-1];
+            UINT32 curStart = pCallSites[i];
+            _ASSERTE(curStart >= prevEnd);
+        }
+    }
+#endif
+}
+#endif
 
 GcSlotId GcInfoEncoder::GetRegisterSlotId( UINT32 regNum, GcSlotFlags flags )
 {
@@ -249,6 +611,17 @@ void GcInfoEncoder::GrowSlotTable()
     m_SlotTable = newSlotTable;
 }
 
+void GcInfoEncoder::WriteSlotStateVector(BitStreamWriter &writer, const BitArray& vector)
+{
+    for(UINT32 i = 0; i < m_NumSlots && !m_SlotTable[i].IsUntracked(); i++)
+    {
+        if(!m_SlotTable[i].IsDeleted())
+            writer.Write(vector.ReadBit(i) ? 1 : 0, 1);
+        else
+            _ASSERTE(vector.ReadBit(i) == 0);
+    }
+}
+
 void GcInfoEncoder::DefineInterruptibleRange( UINT32 startInstructionOffset, UINT32 length )
 {
 #ifdef VERIFY_GCINFO
@@ -280,7 +653,7 @@ void GcInfoEncoder::DefineInterruptibleRange( UINT32 startInstructionOffset, UIN
             InterruptibleRange range;
             range.NormStartOffset = normStartOffset;
             range.NormStopOffset = normStopOffset;
-            m_pLastInterruptibleRange = m_InterruptibleRanges.AppendThrowing();
+            m_pLastInterruptibleRange = m_InterruptibleRanges.Append();
             *m_pLastInterruptibleRange = range;
         }
     }
@@ -312,7 +685,7 @@ void GcInfoEncoder::SetSlotState(
     transition.BecomesLive = ( slotState == GC_SLOT_LIVE );
     transition.IsDeleted = FALSE;
 
-    *( m_LifetimeTransitions.AppendThrowing() ) = transition;
+    *( m_LifetimeTransitions.Append() ) = transition;
 
     LOG((LF_GCINFO, LL_INFO1000000, LOG_GCSLOTDESC_FMT " %s at %x\n", LOG_GCSLOTDESC_ARGS(&m_SlotTable[slotId]), slotState == GC_SLOT_LIVE ? "live" : "dead", instructionOffset));
 }
@@ -442,58 +815,52 @@ void GcInfoEncoder::SetSizeOfStackOutgoingAndScratchArea( UINT32 size )
 }
 #endif // FIXED_STACK_PARAMETER_SCRATCH_AREA
 
-class SlotTableIndexesQuickSort : public CQuickSort<UINT32>
+
+struct GcSlotDescAndId
 {
-    GcSlotDesc* m_SlotTable;
-    
-public:
-    SlotTableIndexesQuickSort(
-        GcSlotDesc*   slotTable,
-        UINT32*   pBase,
-        size_t               count
-        )
-        : CQuickSort<UINT32>( pBase, count ), m_SlotTable(slotTable)
-    {}
-
-    int Compare( UINT32* a, UINT32* b )
-    {
-        GcSlotDesc* pFirst = &(m_SlotTable[*a]);
-        GcSlotDesc* pSecond = &(m_SlotTable[*b]);
-
-        int firstFlags = pFirst->Flags ^ GC_SLOT_UNTRACKED;
-        int secondFlags = pSecond->Flags ^ GC_SLOT_UNTRACKED;
-
-        // All registers come before all stack slots
-        // All untracked come last
-        // Then sort them by flags, ensuring that the least-frequent interior/pinned flag combinations are first
-        // This is accomplished in the comparison of flags, since we encode IsRegister in the highest flag bit
-        // And we XOR the UNTRACKED flag to place them last in the second highest flag bit
-        if( firstFlags > secondFlags ) return -1;
-        if( firstFlags < secondFlags ) return 1;
-        
-        // Then sort them by slot
-        if( pFirst->IsRegister() )
-        {
-            _ASSERTE( pSecond->IsRegister() );
-            if( pFirst->Slot.RegisterNumber < pSecond->Slot.RegisterNumber ) return -1;
-            if( pFirst->Slot.RegisterNumber > pSecond->Slot.RegisterNumber ) return 1;
-        }
-        else
-        {
-            _ASSERTE( !pSecond->IsRegister() );
-            if( pFirst->Slot.Stack.SpOffset < pSecond->Slot.Stack.SpOffset ) return -1;
-            if( pFirst->Slot.Stack.SpOffset > pSecond->Slot.Stack.SpOffset ) return 1;
-
-            // This is arbitrary, but we want to make sure they are considered separate slots
-            if( pFirst->Slot.Stack.Base < pSecond->Slot.Stack.Base ) return -1;
-            if( pFirst->Slot.Stack.Base > pSecond->Slot.Stack.Base ) return 1;
-        }
-
-        // If we get here, the slots are identical
-        _ASSERTE(!"Duplicate slots definitions found in GC information!");
-        return 0;
-    }
+    GcSlotDesc m_SlotDesc;
+    UINT32 m_SlotId;
 };
+
+
+int __cdecl CompareSlotDescAndIdBySlotDesc(const void* p1, const void* p2)
+{
+    const GcSlotDesc* pFirst = &reinterpret_cast<const GcSlotDescAndId*>(p1)->m_SlotDesc;
+    const GcSlotDesc* pSecond = &reinterpret_cast<const GcSlotDescAndId*>(p2)->m_SlotDesc;
+
+    int firstFlags = pFirst->Flags ^ GC_SLOT_UNTRACKED;
+    int secondFlags = pSecond->Flags ^ GC_SLOT_UNTRACKED;
+
+    // All registers come before all stack slots
+    // All untracked come last
+    // Then sort them by flags, ensuring that the least-frequent interior/pinned flag combinations are first
+    // This is accomplished in the comparison of flags, since we encode IsRegister in the highest flag bit
+    // And we XOR the UNTRACKED flag to place them last in the second highest flag bit
+    if( firstFlags > secondFlags ) return -1;
+    if( firstFlags < secondFlags ) return 1;
+    
+    // Then sort them by slot
+    if( pFirst->IsRegister() )
+    {
+        _ASSERTE( pSecond->IsRegister() );
+        if( pFirst->Slot.RegisterNumber < pSecond->Slot.RegisterNumber ) return -1;
+        if( pFirst->Slot.RegisterNumber > pSecond->Slot.RegisterNumber ) return 1;
+    }
+    else
+    {
+        _ASSERTE( !pSecond->IsRegister() );
+        if( pFirst->Slot.Stack.SpOffset < pSecond->Slot.Stack.SpOffset ) return -1;
+        if( pFirst->Slot.Stack.SpOffset > pSecond->Slot.Stack.SpOffset ) return 1;
+
+        // This is arbitrary, but we want to make sure they are considered separate slots
+        if( pFirst->Slot.Stack.Base < pSecond->Slot.Stack.Base ) return -1;
+        if( pFirst->Slot.Stack.Base > pSecond->Slot.Stack.Base ) return 1;
+    }
+
+    // If we get here, the slots are identical
+    _ASSERTE(!"Duplicate slots definitions found in GC information!");
+    return 0;
+}
 
 
 int __cdecl CompareLifetimeTransitionsByOffsetThenSlot(const void* p1, const void* p2)
@@ -537,6 +904,45 @@ int __cdecl CompareLifetimeTransitionsBySlot(const void* p1, const void* p2)
         _ASSERTE(( firstOffset > secondOffset ) && "Redundant transitions found in GC info!");
         return 1;
     }
+}
+
+BitStreamWriter::MemoryBlockList::MemoryBlockList()
+    : m_head(nullptr),
+      m_tail(nullptr)
+{
+}
+
+BitStreamWriter::MemoryBlock* BitStreamWriter::MemoryBlockList::AppendNew(IAllocator* allocator, size_t bytes)
+{
+    auto* memBlock = reinterpret_cast<MemoryBlock*>(allocator->Alloc(sizeof(MemoryBlock) + bytes));
+    memBlock->m_next = nullptr;
+
+    if (m_tail != nullptr)
+    {
+        _ASSERTE(m_head != nullptr);
+        m_tail->m_next = memBlock;
+    }
+    else
+    {
+        _ASSERTE(m_head == nullptr);
+        m_head = memBlock;
+    }
+
+    m_tail = memBlock;
+    return memBlock;
+}
+
+void BitStreamWriter::MemoryBlockList::Dispose(IAllocator* allocator)
+{
+#ifdef MUST_CALL_JITALLOCATOR_FREE
+    for (MemoryBlock* block = m_head, *next; block != nullptr; block = next)
+    {
+        next = block->m_next;
+        allocator->Free(block);
+    }
+    m_head = nullptr;
+    m_tail = nullptr;
+#endif
 }
 
 void BitStreamWriter::Write(BitArray& a, UINT32 count)
@@ -673,6 +1079,7 @@ void GcInfoEncoder::Build()
     }
 
     _ASSERTE( m_CodeLength > 0 );
+    _ASSERTE(DENORMALIZE_CODE_LENGTH(NORMALIZE_CODE_LENGTH(m_CodeLength)) == m_CodeLength);
     GCINFO_WRITE_VARL_U(m_Info1, NORMALIZE_CODE_LENGTH(m_CodeLength), CODE_LENGTH_ENCBASE, CodeLengthSize);
 
     if(hasGSCookie)
@@ -810,6 +1217,7 @@ void GcInfoEncoder::Build()
         // (after, of course, adding the size of the call instruction to get the return PC).
         callSite += m_pCallSiteSizes[callSiteIndex] - 1;
 
+        _ASSERTE(DENORMALIZE_CODE_OFFSET(NORMALIZE_CODE_OFFSET(callSite)) == callSite);
         UINT32 normOffset = NORMALIZE_CODE_OFFSET(callSite);
 
         BOOL keepIt = TRUE;
@@ -935,31 +1343,26 @@ void GcInfoEncoder::Build()
     ///////////////////////////////////////////////////////////////////////
 
     {
-        UINT32* sortedSlotIndexes = (UINT32*) m_pAllocator->Alloc(m_NumSlots * sizeof(UINT32));
+        GcSlotDescAndId* sortedSlots = (GcSlotDescAndId*) m_pAllocator->Alloc(m_NumSlots * sizeof(GcSlotDescAndId));
         UINT32* sortOrder = (UINT32*) m_pAllocator->Alloc(m_NumSlots * sizeof(UINT32));
 
         for(UINT32 i = 0; i < m_NumSlots; i++)
         {
-            sortedSlotIndexes[i] = i;
+            sortedSlots[i].m_SlotDesc = m_SlotTable[i];
+            sortedSlots[i].m_SlotId = i;
         }
-        
-        SlotTableIndexesQuickSort slotTableIndexesQuickSort(
-            m_SlotTable,
-            sortedSlotIndexes,
-            m_NumSlots
-            );
-        slotTableIndexesQuickSort.Sort();
+
+        qsort(sortedSlots, m_NumSlots, sizeof(GcSlotDescAndId), CompareSlotDescAndIdBySlotDesc);
 
         for(UINT32 i = 0; i < m_NumSlots; i++)
         {
-            sortOrder[sortedSlotIndexes[i]] = i;
+            sortOrder[sortedSlots[i].m_SlotId] = i;
         }
 
         // Re-order the slot table
-        GcSlotDesc* pNewSlotTable = (GcSlotDesc*) m_pAllocator->Alloc(sizeof(GcSlotDesc) * m_NumSlots);
         for(UINT32 i = 0; i < m_NumSlots; i++)
         {
-            pNewSlotTable[i] = m_SlotTable[sortedSlotIndexes[i]];
+            m_SlotTable[i] = sortedSlots[i].m_SlotDesc;
         }
 
         // Update transitions to assign new slot ids
@@ -970,12 +1373,9 @@ void GcInfoEncoder::Build()
         }
 
 #ifdef MUST_CALL_JITALLOCATOR_FREE
-        m_pAllocator->Free( m_SlotTable );
-        m_pAllocator->Free( sortedSlotIndexes );
+        m_pAllocator->Free( sortedSlots );
         m_pAllocator->Free( sortOrder );
 #endif
-
-        m_SlotTable = pNewSlotTable;
     }
 
 
@@ -1430,48 +1830,61 @@ void GcInfoEncoder::Build()
         // Create a hash table for storing the locations of the live sets
         LiveStateHashTable hashMap(m_pAllocator);
 
-        for(pCurrent = pTransitions; pCurrent < pEndTransitions; )
+        bool outOfMemory = false;
+        try
         {
-            if(pCurrent->CodeOffset > callSite)
+            for(pCurrent = pTransitions; pCurrent < pEndTransitions; )
             {
-                // Time to record the call site
+                if(pCurrent->CodeOffset > callSite)
+                {
+                    // Time to record the call site
 
-                // Add it to the table if it doesn't exist
+                    // Add it to the table if it doesn't exist
+                    UINT32 liveStateOffset = 0;
+                    if (!hashMap.Lookup(&liveState, &liveStateOffset))
+                    {
+                        BitArray * newLiveState = new (m_pAllocator) BitArray(m_pAllocator, size_tCount);
+                        *newLiveState = liveState;
+                        hashMap.Set(newLiveState, (UINT32)(-1));
+                    }
+
+
+                    if(++callSiteIndex == m_NumCallSites)
+                        break;
+                
+                    callSite = m_pCallSites[callSiteIndex];
+                }
+                else
+                {
+                    UINT32 slotIndex = pCurrent->SlotId;
+                    BYTE becomesLive = pCurrent->BecomesLive;
+                    _ASSERTE((liveState.ReadBit(slotIndex) && !becomesLive)
+                            || (!liveState.ReadBit(slotIndex) && becomesLive));
+                    liveState.WriteBit(slotIndex, becomesLive);
+                    pCurrent++;
+                }
+            }
+
+            // Check for call sites at offsets past the last transition
+            if (callSiteIndex < m_NumCallSites)
+            {
                 UINT32 liveStateOffset = 0;
                 if (!hashMap.Lookup(&liveState, &liveStateOffset))
                 {
-                    BitArray * newLiveState = new (m_pAllocator->Alloc(sizeof(BitArray))) BitArray(m_pAllocator, size_tCount);
+                    BitArray * newLiveState = new (m_pAllocator) BitArray(m_pAllocator, size_tCount);
                     *newLiveState = liveState;
                     hashMap.Set(newLiveState, (UINT32)(-1));
                 }
-
-
-                if(++callSiteIndex == m_NumCallSites)
-                    break;
-            
-                callSite = m_pCallSites[callSiteIndex];
-            }
-            else
-            {
-                UINT32 slotIndex = pCurrent->SlotId;
-                BYTE becomesLive = pCurrent->BecomesLive;
-                _ASSERTE((liveState.ReadBit(slotIndex) && !becomesLive)
-                        || (!liveState.ReadBit(slotIndex) && becomesLive));
-                liveState.WriteBit(slotIndex, becomesLive);
-                pCurrent++;
             }
         }
-
-        // Check for call sites at offsets past the last transition
-        if (callSiteIndex < m_NumCallSites)
+        catch (GcInfoNoMemoryException& e)
         {
-            UINT32 liveStateOffset = 0;
-            if (!hashMap.Lookup(&liveState, &liveStateOffset))
-            {
-                BitArray * newLiveState = new (m_pAllocator->Alloc(sizeof(BitArray))) BitArray(m_pAllocator, size_tCount);
-                *newLiveState = liveState;
-                hashMap.Set(newLiveState, (UINT32)(-1));
-            }
+            outOfMemory = true;
+        }
+
+        if (outOfMemory)
+        {
+            m_pNoMem();
         }
 
         // Figure out the largest offset, and total size of the sets
@@ -1621,7 +2034,7 @@ void GcInfoEncoder::Build()
 
         if(!IsEssential(pClause))
             continue;
-        
+
         UINT32 normStartOffset = NORMALIZE_CODE_OFFSET(pClause->TryStartPC);
         UINT32 normStopOffset = NORMALIZE_CODE_OFFSET(pClause->TryEndPC);
         _ASSERTE(normStopOffset > normStartOffset);        
@@ -2343,24 +2756,23 @@ void BitStreamWriter::CopyTo( BYTE* buffer )
     int i,c;
     BYTE* source = NULL;
 
-    MemoryBlockDesc* pMemBlockDesc = m_MemoryBlocks.GetHead();
-    if( pMemBlockDesc == NULL )
+    MemoryBlock* pMemBlock = m_MemoryBlocks.Head();
+    if( pMemBlock == NULL )
         return;
         
-    while( m_MemoryBlocks.GetNext( pMemBlockDesc ) != NULL )
+    while (pMemBlock->Next() != NULL)
     {
-        source = (BYTE*) pMemBlockDesc->StartAddress;
+        source = (BYTE*) pMemBlock->Contents;
         // @TODO: use memcpy instead
         for( i = 0; i < m_MemoryBlockSize; i++ )
         {
             *( buffer++ ) = *( source++ );
         }
 
-        pMemBlockDesc = m_MemoryBlocks.GetNext( pMemBlockDesc );
-        _ASSERTE( pMemBlockDesc != NULL );
+        pMemBlock = pMemBlock->Next();
     }
 
-    source = (BYTE*) pMemBlockDesc->StartAddress;
+    source = (BYTE*) pMemBlock->Contents;
     // The number of bytes to copy in the last block
     c = (int) ((BYTE*) ( m_pCurrentSlot + 1 ) - source - m_FreeBitsInCurrentSlot/8);
     _ASSERTE( c >= 0 );
@@ -2374,13 +2786,73 @@ void BitStreamWriter::CopyTo( BYTE* buffer )
 
 void BitStreamWriter::Dispose()
 {
-#ifdef MUST_CALL_JITALLOCATOR_FREE
-    MemoryBlockDesc* pMemBlockDesc;
-    while( NULL != ( pMemBlockDesc = m_MemoryBlocks.RemoveHead() ) )
+    m_MemoryBlocks.Dispose(m_pAllocator);
+}
+
+int BitStreamWriter::SizeofVarLengthUnsigned( size_t n, UINT32 base)
+{
+    // If a value gets so big we are probably doing something wrong
+    _ASSERTE(((INT32)(UINT32)n) >= 0);
+    _ASSERTE((base > 0) && (base < BITS_PER_SIZE_T));
+    size_t numEncodings = 1 << base;
+    int bitsUsed;
+    for(bitsUsed = base+1; ; bitsUsed += base+1)
     {
-        m_pAllocator->Free( pMemBlockDesc->StartAddress );
-        m_pAllocator->Free( pMemBlockDesc );
+        if( n < numEncodings )
+        {
+            return bitsUsed;
+        }
+        else
+        {
+            n >>= base;
+        }
     }
-#endif
+    return bitsUsed;
+}
+
+int BitStreamWriter::EncodeVarLengthUnsigned( size_t n, UINT32 base)
+{
+    // If a value gets so big we are probably doing something wrong
+    _ASSERTE(((INT32)(UINT32)n) >= 0);
+    _ASSERTE((base > 0) && (base < BITS_PER_SIZE_T));
+    size_t numEncodings = 1 << base;
+    int bitsUsed;
+    for(bitsUsed = base+1; ; bitsUsed += base+1)
+    {
+        if( n < numEncodings )
+        {
+            Write( n, base+1 ); // This sets the extension bit to zero
+            return bitsUsed;
+        }
+        else
+        {
+            size_t currentChunk = n & (numEncodings-1);
+            Write( currentChunk | numEncodings, base+1 );
+            n >>= base;
+        }
+    }
+    return bitsUsed;
+}
+
+int BitStreamWriter::EncodeVarLengthSigned( SSIZE_T n, UINT32 base )
+{
+    _ASSERTE((base > 0) && (base < BITS_PER_SIZE_T));
+    size_t numEncodings = 1 << base;
+    for(int bitsUsed = base+1; ; bitsUsed += base+1)
+    {
+        size_t currentChunk = ((size_t) n) & (numEncodings-1);
+        size_t topmostBit = currentChunk & (numEncodings >> 1);
+        n >>= base; // signed arithmetic shift
+        if((topmostBit && (n == (SSIZE_T)-1)) || (!topmostBit && (n == 0)))
+        {
+            // The topmost bit correctly represents the sign
+            Write( currentChunk, base+1 ); // This sets the extension bit to zero
+            return bitsUsed;
+        }
+        else
+        {
+            Write( currentChunk | numEncodings, base+1 );
+        }
+    }
 }
 

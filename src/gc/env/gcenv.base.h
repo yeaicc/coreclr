@@ -244,6 +244,8 @@ typedef uintptr_t TADDR;
     extern type var
 #define GVAL_IMPL(type, var) \
     type var
+#define GVAL_IMPL_INIT(type, var, init) \
+    type var = init
 
 #define GPTR_DECL(type, var) \
     extern type* var
@@ -543,8 +545,8 @@ void LogSpewAlways(const char *fmt, ...);
 
 // -----------------------------------------------------------------------------------------------------------
 
-void StompWriteBarrierEphemeral();
-void StompWriteBarrierResize(bool bReqUpperBoundsCheck);
+void StompWriteBarrierEphemeral(bool isRuntimeSuspended);
+void StompWriteBarrierResize(bool isRuntimeSuspended, bool bReqUpperBoundsCheck);
 
 class CLRConfig
 {
@@ -568,7 +570,7 @@ public:
     typedef CLRConfigTypes ConfigStringInfo;
 
     static uint32_t GetConfigValue(ConfigDWORDInfo eType);
-    static HRESULT GetConfigValue(ConfigStringInfo /*eType*/, TCHAR * * outVal);
+    static HRESULT GetConfigValue(ConfigStringInfo /*eType*/, __out_z TCHAR * * outVal);
 };
 
 inline bool FitsInU1(uint64_t val)

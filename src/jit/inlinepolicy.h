@@ -9,7 +9,17 @@
 //
 // -- CLASSES --
 //
-// LegacyPolicy        - policy to provide legacy inline behavior
+// LegalPolicy         - partial class providing common legality checks
+// LegacyPolicy        - policy that provides legacy inline behavior
+//
+// These experimental policies are available only in
+// DEBUG or release+INLINE_DATA builds of the jit.
+//
+// RandomPolicy        - randomized inlining
+// DiscretionaryPolicy - legacy variant with uniform size policy
+// ModelPolicy         - policy based on statistical modelling
+// FullPolicy          - inlines everything up to size and depth limits
+// SizePolicy          - tries not to increase method sizes
 
 #ifndef _INLINE_POLICY_H_
 #define _INLINE_POLICY_H_
@@ -17,104 +27,318 @@
 #include "jit.h"
 #include "inline.h"
 
+// LegalPolicy is a partial policy that encapsulates the common
+// legality and ability checks the inliner must make.
+//
+// Generally speaking, the legal policy expects the inlining attempt
+// to fail fast when a fatal or equivalent observation is made. So
+// once an observation causes failure, no more observations are
+// expected. However for the prejit scan case (where the jit is not
+// actually inlining, but is assessing a method's general
+// inlinability) the legal policy allows multiple failing
+// observations provided they have the same impact. Only the first
+// observation that puts the policy into a failing state is
+// remembered. Transitions from failing states to candidate or success
+// states are not allowed.
+
+class LegalPolicy : public InlinePolicy
+{
+
+public:
+
+    // Constructor
+    LegalPolicy(bool isPrejitRoot)
+        : InlinePolicy(isPrejitRoot)
+    {
+        // empty
+    }
+
+    // Handle an observation that must cause inlining to fail.
+    void NoteFatal(InlineObservation obs) override;
+
+protected:
+
+    // Helper methods
+    void NoteInternal(InlineObservation obs);
+    void SetCandidate(InlineObservation obs);
+    void SetFailure(InlineObservation obs);
+    void SetNever(InlineObservation obs);
+};
+
+// Forward declaration for the state machine class used by the
+// LegacyPolicy
+
+class CodeSeqSM;
+
 // LegacyPolicy implements the inlining policy used by the jit in its
 // initial release.
 
-class LegacyPolicy : public InlinePolicy
+class LegacyPolicy : public LegalPolicy
 {
 public:
 
     // Construct a LegacyPolicy
-    LegacyPolicy(Compiler* compiler)
-        : InlinePolicy()
-        , inlCompiler(compiler)
-        , inlIsForceInline(false)
+    LegacyPolicy(Compiler* compiler, bool isPrejitRoot)
+        : LegalPolicy(isPrejitRoot)
+        , m_RootCompiler(compiler)
+        , m_StateMachine(nullptr)
+        , m_CodeSize(0)
+        , m_CallsiteFrequency(InlineCallsiteFrequency::UNUSED)
+        , m_InstructionCount(0)
+        , m_LoadStoreCount(0)
+        , m_CalleeNativeSizeEstimate(0)
+        , m_CallsiteNativeSizeEstimate(0)
+        , m_Multiplier(0.0)
+        , m_IsForceInline(false)
+        , m_IsForceInlineKnown(false)
+        , m_IsInstanceCtor(false)
+        , m_IsFromPromotableValueClass(false)
+        , m_HasSimd(false)
+        , m_LooksLikeWrapperMethod(false)
+        , m_ArgFeedsConstantTest(false)
+        , m_MethodIsMostlyLoadStore(false)
+        , m_ArgFeedsRangeCheck(false)
+        , m_ConstantFeedsConstantTest(false)
     {
         // empty
     }
 
     // Policy observations
-    void noteCandidate(InlineObservation obs) override;
-    void noteSuccess() override;
-    void note(InlineObservation obs) override;
-    void noteFatal(InlineObservation obs) override;
-    void noteInt(InlineObservation obs, int value) override;
-    void noteDouble(InlineObservation obs, double value) override;
+    void NoteSuccess() override;
+    void NoteBool(InlineObservation obs, bool value) override;
+    void NoteInt(InlineObservation obs, int value) override;
 
-    // Policy decisions
-    bool propagateNeverToRuntime() const override { return true; }
+    // Policy determinations
+    void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
+
+    // Policy policies
+    bool PropagateNeverToRuntime() const override { return true; }
+
+    // Policy estimates
+    int CodeSizeEstimate() override;
+
+#if defined(DEBUG) || defined(INLINE_DATA)
+
+    const char* GetName() const override { return "LegacyPolicy"; }
+
+#endif // (DEBUG) || defined(INLINE_DATA)
+
+protected:
+
+    // Constants
+    enum { MAX_BASIC_BLOCKS = 5, SIZE_SCALE = 10 };
+
+    // Helper methods
+    double DetermineMultiplier();
+    int DetermineNativeSizeEstimate();
+    int DetermineCallsiteNativeSizeEstimate(CORINFO_METHOD_INFO* methodInfo);
+
+    // Data members
+    Compiler*               m_RootCompiler;                      // root compiler instance
+    CodeSeqSM*              m_StateMachine;
+    unsigned                m_CodeSize;
+    InlineCallsiteFrequency m_CallsiteFrequency;
+    unsigned                m_InstructionCount;
+    unsigned                m_LoadStoreCount;
+    int                     m_CalleeNativeSizeEstimate;
+    int                     m_CallsiteNativeSizeEstimate;
+    double                  m_Multiplier;
+    bool                    m_IsForceInline :1;
+    bool                    m_IsForceInlineKnown :1;
+    bool                    m_IsInstanceCtor :1;
+    bool                    m_IsFromPromotableValueClass :1;
+    bool                    m_HasSimd :1;
+    bool                    m_LooksLikeWrapperMethod :1;
+    bool                    m_ArgFeedsConstantTest :1;
+    bool                    m_MethodIsMostlyLoadStore :1;
+    bool                    m_ArgFeedsRangeCheck :1;
+    bool                    m_ConstantFeedsConstantTest :1;
+};
 
 #ifdef DEBUG
-    const char* getName() const override { return "LegacyPolicy"; }
-#endif
+
+// RandomPolicy implements a policy that inlines at random.
+// It is mostly useful for stress testing.
+
+class RandomPolicy : public LegalPolicy
+{
+public:
+
+    // Construct a RandomPolicy
+    RandomPolicy(Compiler* compiler, bool isPrejitRoot, unsigned seed);
+
+    // Policy observations
+    void NoteSuccess() override;
+    void NoteBool(InlineObservation obs, bool value) override;
+    void NoteInt(InlineObservation obs, int value) override;
+
+    // Policy determinations
+    void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
+
+    // Policy policies
+    bool PropagateNeverToRuntime() const override { return true; }
+
+    // Policy estimates
+    int CodeSizeEstimate() override
+    {
+        return 0;
+    }
+
+    const char* GetName() const override { return "RandomPolicy"; }
 
 private:
 
-    // Helper methods
-    void noteInternal(InlineObservation obs, InlineImpact impact);
-    void setFailure(InlineObservation obs);
-    void setNever(InlineObservation obs);
-    void setCommon(InlineDecision decision, InlineObservation obs);
-
-    // Constants
-    const unsigned MAX_BASIC_BLOCKS = 5;
-
     // Data members
-    Compiler* inlCompiler;
-    bool      inlIsForceInline;
+    Compiler*               m_RootCompiler;
+    CLRRandom*              m_Random;
+    unsigned                m_CodeSize;
+    bool                    m_IsForceInline :1;
+    bool                    m_IsForceInlineKnown :1;
 };
 
-//
-// Enums are used throughout to provide various descriptions.
-//
-// Classes are used as follows. There are 5 sitations where inline
-// candidacy is evaluated.  In each case an InlineResult is allocated
-// on the stack to collect information about the inline candidate.
-//
-// 1. Importer Candidate Screen (impMarkInlineCandidate)
-//
-// Creates: InlineCandidateInfo
-//
-// During importing, the IL being imported is scanned to identify
-// inline candidates. This happens both when the root method is being
-// imported as well as when prospective inlines are being imported.
-// Candidates are marked in the IL and given an InlineCandidateInfo.
-//
-// 2. Inlining Optimization Pass -- candidates (fgInline)
-//
-// Creates / Uses: InlineContext
-// Creates: InlineInfo, InlArgInfo, InlLocalVarInfo
-//
-// During the inlining optimation pass, each candidate is further
-// analyzed. Viable candidates will eventually inspire creation of an
-// InlineInfo and a set of InlArgInfos (for call arguments) and 
-// InlLocalVarInfos (for callee locals).
-//
-// The analysis will also examine InlineContexts from relevant prior
-// inlines. If the inline is successful, a new InlineContext will be
-// created to remember this inline. In DEBUG builds, failing inlines
-// also create InlineContexts.
-//
-// 3. Inlining Optimization Pass -- non-candidates (fgNoteNotInlineCandidate)
-//
-// Creates / Uses: InlineContext
-//
-// In DEBUG, the jit also searches for non-candidate calls to try
-// and get a complete picture of the set of failed inlines.
-//
-// 4 & 5. Prejit suitability screens (compCompileHelper)
-//
-// When prejitting, each method is scanned to see if it is a viable
-// inline candidate. The scanning happens in two stages.
-//
-// A note on InlinePolicy
-//
-// In the current code base, the inlining policy is distributed across
-// the various parts of the code that drive the inlining process
-// forward. Subsequent refactoring will extract some or all of this
-// policy into a separate InlinePolicy object, to make it feasible to
-// create and experiment with alternative policies, while preserving
-// the existing policy as a baseline and fallback.
+#endif // DEBUG
 
+#if defined(DEBUG) || defined(INLINE_DATA)
+
+// DiscretionaryPolicy is a variant of the legacy policy.  It differs
+// in that there is no ALWAYS_INLINE class, there is no IL size limit,
+// and in prejit mode, discretionary failures do not set the "NEVER"
+// inline bit.
+//
+// It is useful for gathering data about inline costs.
+
+class DiscretionaryPolicy : public LegacyPolicy
+{
+public:
+
+    // Construct a DiscretionaryPolicy
+    DiscretionaryPolicy(Compiler* compiler, bool isPrejitRoot);
+
+    // Policy observations
+    void NoteBool(InlineObservation obs, bool value) override;
+    void NoteInt(InlineObservation obs, int value) override;
+
+    // Policy policies
+    bool PropagateNeverToRuntime() const override;
+
+    // Policy determinations
+    void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
+
+    // Policy estimates
+    int CodeSizeEstimate() override;
+
+    // Externalize data
+    void DumpData(FILE* file) const override;
+    void DumpSchema(FILE* file) const override;
+
+    // Miscellaneous
+    const char* GetName() const override { return "DiscretionaryPolicy"; }
+
+protected:
+
+    void ComputeOpcodeBin(OPCODE opcode);
+    void EstimateCodeSize();
+    void MethodInfoObservations(CORINFO_METHOD_INFO* methodInfo);
+    enum { MAX_ARGS = 6 };
+
+    unsigned    m_Depth;
+    unsigned    m_BlockCount;
+    unsigned    m_Maxstack;
+    unsigned    m_ArgCount;
+    CorInfoType m_ArgType[MAX_ARGS];
+    size_t      m_ArgSize[MAX_ARGS];
+    unsigned    m_LocalCount;
+    CorInfoType m_ReturnType;
+    size_t      m_ReturnSize;
+    unsigned    m_ArgAccessCount;
+    unsigned    m_LocalAccessCount;
+    unsigned    m_IntConstantCount;
+    unsigned    m_FloatConstantCount;
+    unsigned    m_IntLoadCount;
+    unsigned    m_FloatLoadCount;
+    unsigned    m_IntStoreCount;
+    unsigned    m_FloatStoreCount;
+    unsigned    m_SimpleMathCount;
+    unsigned    m_ComplexMathCount;
+    unsigned    m_OverflowMathCount;
+    unsigned    m_IntArrayLoadCount;
+    unsigned    m_FloatArrayLoadCount;
+    unsigned    m_RefArrayLoadCount;
+    unsigned    m_StructArrayLoadCount;
+    unsigned    m_IntArrayStoreCount;
+    unsigned    m_FloatArrayStoreCount;
+    unsigned    m_RefArrayStoreCount;
+    unsigned    m_StructArrayStoreCount;
+    unsigned    m_StructOperationCount;
+    unsigned    m_ObjectModelCount;
+    unsigned    m_FieldLoadCount;
+    unsigned    m_FieldStoreCount;
+    unsigned    m_StaticFieldLoadCount;
+    unsigned    m_StaticFieldStoreCount;
+    unsigned    m_LoadAddressCount;
+    unsigned    m_ThrowCount;
+    unsigned    m_CallCount;
+    int         m_ModelCodeSizeEstimate;
+};
+
+// ModelPolicy is an experimental policy that uses the results
+// of data modelling to make estimates.
+
+class ModelPolicy : public DiscretionaryPolicy
+{
+public:
+
+    // Construct a ModelPolicy
+    ModelPolicy(Compiler* compiler, bool isPrejitRoot);
+
+    // Policy determinations
+    void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
+
+    // Miscellaneous
+    const char* GetName() const override { return "ModelPolicy"; }
+};
+
+// FullPolicy is an experimental policy that will always inline if
+// possible, subject to externally settable depth and size limits.
+//
+// It's useful for unconvering the full set of possible inlines for
+// methods.
+
+class FullPolicy : public DiscretionaryPolicy
+{
+public:
+
+    // Construct a FullPolicy
+    FullPolicy(Compiler* compiler, bool isPrejitRoot);
+
+    // Policy determinations
+    void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
+
+    // Miscellaneous
+    const char* GetName() const override { return "FullPolicy"; }
+};
+
+// SizePolicy is an experimental policy that will inline as much
+// as possible without increasing the (estimated) method size.
+//
+// It may be useful down the road as a policy to use for methods
+// that are rarely executed (eg class constructors).
+
+class SizePolicy : public DiscretionaryPolicy
+{
+public:
+
+    // Construct a SizePolicy
+    SizePolicy(Compiler* compiler, bool isPrejitRoot);
+
+    // Policy determinations
+    void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
+
+    // Miscellaneous
+    const char* GetName() const override { return "SizePolicy"; }
+};
+
+
+#endif // defined(DEBUG) || defined(INLINE_DATA)
 
 #endif // _INLINE_POLICY_H_

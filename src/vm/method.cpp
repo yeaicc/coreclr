@@ -5393,18 +5393,17 @@ BOOL MethodDesc::HasNativeCallableAttribute()
     }
     CONTRACTL_END;
 
-// enable only for amd64 now, other platforms are not tested.
-#if defined(_TARGET_AMD64_) 
-
 #ifdef FEATURE_CORECLR
     HRESULT hr = GetMDImport()->GetCustomAttributeByName(GetMemberDef(),
         g_NativeCallableAttribute,
         NULL,
         NULL);
-    return (hr == S_OK);
+    if (hr == S_OK)
+    {
+        return TRUE;
+    }
 #endif //FEATURE_CORECLR
 
-#endif //_TARGET_AMD64_
     return FALSE;
 }
 

@@ -2512,7 +2512,6 @@ bool MethodTable::ClassifyEightBytesWithManagedLayout(SystemVStructRegisterPassi
                     GetSystemVClassificationTypeName(helperPtr->fieldClassifications[helperPtr->currentUniqueOffsetField])));
 
                 helperPtr->currentUniqueOffsetField++;
-                _ASSERTE(helperPtr->currentUniqueOffsetField < SYSTEMV_MAX_NUM_FIELDS_IN_REGISTER_PASSED_STRUCT);
 #ifdef _DEBUG
                 ++fieldNum;
 #endif // _DEBUG
@@ -2601,8 +2600,8 @@ bool MethodTable::ClassifyEightBytesWithManagedLayout(SystemVStructRegisterPassi
                GetSystemVClassificationTypeName(fieldClassificationType),
                GetSystemVClassificationTypeName(helperPtr->fieldClassifications[helperPtr->currentUniqueOffsetField])));
 
-        helperPtr->currentUniqueOffsetField++;
         _ASSERTE(helperPtr->currentUniqueOffsetField < SYSTEMV_MAX_NUM_FIELDS_IN_REGISTER_PASSED_STRUCT);
+        helperPtr->currentUniqueOffsetField++;
     } // end per-field for loop
 
     AssignClassifiedEightByteTypes(helperPtr, nestingLevel);
@@ -2921,15 +2920,17 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
             case NFT_ANSICHAR:
             case NFT_WINBOOL:
             case NFT_CBOOL:
+            case NFT_DELEGATE:
+            case NFT_SAFEHANDLE:
+            case NFT_CRITICALHANDLE:
                 fieldClassificationType = SystemVClassificationTypeInteger;
                 break;
 
-            case NFT_DELEGATE:
+            // It's not clear what the right behavior for NTF_DECIMAL and NTF_DATE is
+            // But those two types would only make sense on windows. We can revisit this later
             case NFT_DECIMAL:
             case NFT_DATE:
             case NFT_ILLEGAL:
-            case NFT_SAFEHANDLE:
-            case NFT_CRITICALHANDLE:
             default:
                 return false;
             }
@@ -3007,10 +3008,9 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
             GetSystemVClassificationTypeName(fieldClassificationType),
             GetSystemVClassificationTypeName(helperPtr->fieldClassifications[helperPtr->currentUniqueOffsetField])));
 
+        _ASSERTE(helperPtr->currentUniqueOffsetField < SYSTEMV_MAX_NUM_FIELDS_IN_REGISTER_PASSED_STRUCT);
         helperPtr->currentUniqueOffsetField++;
         ((BYTE*&)pFieldMarshaler) += MAXFIELDMARSHALERSIZE;
-        _ASSERTE(helperPtr->currentUniqueOffsetField < SYSTEMV_MAX_NUM_FIELDS_IN_REGISTER_PASSED_STRUCT);
-
     } // end per-field for loop
 
     AssignClassifiedEightByteTypes(helperPtr, nestingLevel);
@@ -7732,25 +7732,6 @@ BOOL MethodTable::IsStructRequiringStackAllocRetBuf()
     // Disable this optimization. It has limited value (only kicks in on x86, and only for less common structs),
     // causes bugs and introduces odd ABI differences not compatible with ReadyToRun.
     return FALSE;
-
-#if 0
-
-#if defined(_WIN64)
-    // We have not yet updated the 64-bit JIT compiler to follow this directive, so there's
-    // no reason to stack-allocate the return buffers.
-    return FALSE;
-#elif defined(MDIL) || defined(_TARGET_ARM_) 
-    // WPB 481466 RetBuf GC hole (When jitting on ARM32 CoreCLR.dll MDIL is not defined)
-    // 
-    // This optimization causes versioning problems for MDIL which we haven't addressed yet
-    return FALSE;
-#else
-    return IsValueType()
-        && ContainsPointers()
-        && GetNumInstanceFieldBytes() <= MaxStructBytesForLocalVarRetBuffBytes;
-#endif
-
-#endif
 }
 
 //==========================================================================================

@@ -163,10 +163,6 @@ namespace System.IO {
             if (path != null) {
                 CheckInvalidPathChars(path);
 
-#if FEATURE_LEGACYNETCF
-                if (!CompatibilitySwitches.IsAppEarlierThanWindowsPhone8) {
-#endif
-
                 string normalizedPath = NormalizePath(path, false);
 
                 // If there are no permissions for PathDiscovery to this path, we should NOT expand the short paths
@@ -207,24 +203,13 @@ namespace System.IO {
 
                 path = normalizedPath;
 
-#if FEATURE_LEGACYNETCF
-                }
-#endif
-
                 int root = GetRootLength(path);
                 int i = path.Length;
                 if (i > root) {
                     i = path.Length;
                     if (i == root) return null;
                     while (i > root && path[--i] != DirectorySeparatorChar && path[i] != AltDirectorySeparatorChar);                    
-                    String dir = path.Substring(0, i);
-#if FEATURE_LEGACYNETCF
-                    if (CompatibilitySwitches.IsAppEarlierThanWindowsPhone8) {                        
-                        if (dir.Length >= MaxPath - 1)
-                            throw new PathTooLongException(Environment.GetResourceString("IO.PathTooLong"));
-                    }                     
-#endif
-                    return dir;
+                    return path.Substring(0, i);
                 }
             }
             return null;
@@ -920,10 +905,10 @@ namespace System.IO {
                 return true;
         
         }
-                
+
         // Returns a cryptographically strong random 8.3 string that can be 
         // used as either a folder name or a file name.
-#if FEATURE_PAL
+#if FEATURE_CORECLR
         [System.Security.SecuritySafeCritical]
 #endif
         public static String GetRandomFileName()
@@ -932,7 +917,7 @@ namespace System.IO {
             // This gives us exactly 8 chars. We want to avoid the 8.3 short name issue
             byte[] key = new byte[10];
 
-#if FEATURE_PAL
+#if FEATURE_CORECLR
             Win32Native.Random(true, key, key.Length);
 #else
             // RNGCryptoServiceProvider is disposable in post-Orcas desktop mscorlibs, but not in CoreCLR's
@@ -996,7 +981,7 @@ namespace System.IO {
             if (r==0) __Error.WinIOError();
             return sb.ToString();
         }
-    
+
         // Tests if a path includes a file extension. The result is
         // true if the characters that follow the last directory
         // separator ('\\' or '/') or volume separator (':') in the path include 

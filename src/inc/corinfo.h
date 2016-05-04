@@ -231,11 +231,11 @@ TODO: Talk about initializing strutures before use
 #if COR_JIT_EE_VERSION > 460
 
 // Update this one
-SELECTANY const GUID JITEEVersionIdentifier = { /* 35ef98ab-fd22-4ccc-8ddb-b1156a7d94f3 */
-    0x35ef98ab,
-    0xfd22,
-    0x4ccc,
-    { 0x8d, 0xdb, 0xb1, 0x15, 0x6a, 0x7d, 0x94, 0xf3 }
+SELECTANY const GUID JITEEVersionIdentifier = { /* 8c8e61ca-2b88-4bc5-b03f-d390acdc7fc3 */
+    0x8c8e61ca,
+    0x2b88,
+    0x4bc5,
+    { 0xb0, 0x3f, 0xd3, 0x90, 0xac, 0xdc, 0x7f, 0xc3 }
 };
 
 #else
@@ -2153,8 +2153,18 @@ public:
     //
     /**********************************************************************************/
 
-    // Resolve metadata token into runtime method handles.
+    // Resolve metadata token into runtime method handles. This function may not
+    // return normally (e.g. it may throw) if it encounters invalid metadata or other
+    // failures during token resolution.
     virtual void resolveToken(/* IN, OUT */ CORINFO_RESOLVED_TOKEN * pResolvedToken) = 0;
+
+#if COR_JIT_EE_VERSION > 460
+    // Attempt to resolve a metadata token into a runtime method handle. Returns true
+    // if resolution succeeded and false otherwise (e.g. if it encounters invalid metadata
+    // during token reoslution). This method should be used instead of `resolveToken` in
+    // situations that need to be resilient to invalid metadata.
+    virtual bool tryResolveToken(/* IN, OUT */ CORINFO_RESOLVED_TOKEN * pResolvedToken) = 0;
+#endif
 
     // Signature information about the call sig
     virtual void findSig (
@@ -2389,6 +2399,14 @@ public:
             CorInfoHelpFunc          id,
             CORINFO_CONST_LOOKUP *   pLookup
             ) = 0;
+
+#if COR_JIT_EE_VERSION > 460
+    virtual void getReadyToRunDelegateCtorHelper(
+            CORINFO_RESOLVED_TOKEN * pTargetMethod,
+            CORINFO_CLASS_HANDLE     delegateType,
+            CORINFO_CONST_LOOKUP *   pLookup
+            ) = 0;
+#endif
 
     virtual const char* getHelperName(
             CorInfoHelpFunc

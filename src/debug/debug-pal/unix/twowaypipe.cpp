@@ -15,18 +15,17 @@
 
 static const char* PipeNameFormat = "/tmp/clr-debug-pipe-%d-%llu-%s";
 
-static void GetPipeName(char *name, DWORD id, const char *suffix)
+void TwoWayPipe::GetPipeName(char *name, DWORD id, const char *suffix)
 {
-    UINT64 disambiguationKey;
-    BOOL ret = GetProcessIdDisambiguationKey(id, &disambiguationKey);
+    BOOL ret = GetProcessIdDisambiguationKey(id, &m_disambiguationKey);
 
     // If GetProcessIdDisambiguationKey failed for some reason, it should set the value 
     // to 0. We expect that anyone else making the pipe name will also fail and thus will
     // also try to use 0 as the value.
-    _ASSERTE(ret == TRUE || disambiguationKey == 0);
+    _ASSERTE(ret == TRUE || m_disambiguationKey == 0);
 
-    int chars = _snprintf(name, PATH_MAX, PipeNameFormat, id, disambiguationKey, suffix);
-    _ASSERTE(chars > 0 && chars < PATH_MAX);
+    int chars = _snprintf(name, MaxPipeNameLength, PipeNameFormat, id, m_disambiguationKey, suffix);
+    _ASSERTE(chars > 0 && chars < MaxPipeNameLength);
 }
 
 // Creates a server side of the pipe. 
@@ -39,19 +38,17 @@ bool TwoWayPipe::CreateServer(DWORD id)
         return false;
 
     m_id = id;
-    char inPipeName[PATH_MAX];
-    char outPipeName[PATH_MAX];
-    GetPipeName(inPipeName, id, "in");
-    GetPipeName(outPipeName, id, "out");
+    GetPipeName(m_inPipeName, id, "in");
+    GetPipeName(m_outPipeName, id, "out");
 
-    if (mkfifo(inPipeName, S_IRWXU) == -1)
+    if (mkfifo(m_inPipeName, S_IRWXU) == -1)
     {
         return false;
     }
 
-    if (mkfifo(outPipeName, S_IRWXU) == -1)
+    if (mkfifo(m_outPipeName, S_IRWXU) == -1)
     {
-        unlink(inPipeName);
+        unlink(m_inPipeName);
         return false;
     }
 
@@ -69,21 +66,19 @@ bool TwoWayPipe::Connect(DWORD id)
         return false;
 
     m_id = id;
-    char inPipeName[PATH_MAX];
-    char outPipeName[PATH_MAX];
     //"in" and "out" are switched deliberately, because we're on the client
-    GetPipeName(inPipeName, id, "out");
-    GetPipeName(outPipeName, id, "in");
+    GetPipeName(m_inPipeName, id, "out");
+    GetPipeName(m_outPipeName, id, "in");
 
     // Pipe opening order is reversed compared to WaitForConnection()
     // in order to avaid deadlock.
-    m_outboundPipe = open(outPipeName, O_WRONLY);
+    m_outboundPipe = open(m_outPipeName, O_WRONLY);
     if (m_outboundPipe == INVALID_PIPE)
     {
         return false;
     }
 
-    m_inboundPipe = open(inPipeName, O_RDONLY);
+    m_inboundPipe = open(m_inPipeName, O_RDONLY);
     if (m_inboundPipe == INVALID_PIPE)
     {
         close(m_outboundPipe);
@@ -104,18 +99,13 @@ bool TwoWayPipe::WaitForConnection()
     if (m_state != Created)
         return false;
 
-    char inPipeName[PATH_MAX];
-    char outPipeName[PATH_MAX];
-    GetPipeName(inPipeName, m_id, "in");
-    GetPipeName(outPipeName, m_id, "out");
-
-    m_inboundPipe = open(inPipeName, O_RDONLY);
+    m_inboundPipe = open(m_inPipeName, O_RDONLY);
     if (m_inboundPipe == INVALID_PIPE)
     {
         return false;
     }
 
-    m_outboundPipe = open(outPipeName, O_WRONLY);
+    m_outboundPipe = open(m_outPipeName, O_WRONLY);
     if (m_outboundPipe == INVALID_PIPE)
     {
         close(m_inboundPipe);
@@ -185,6 +175,10 @@ int TwoWayPipe::Write(const void *data, DWORD dataSize)
 // true - success, false - failure (use GetLastError() for more details)
 bool TwoWayPipe::Disconnect()
 {
+    // IMPORTANT NOTE: This function must not call any signal unsafe functions
+    // since it is called from signal handlers.
+    // That includes ASSERT and TRACE macros.
+
     if (m_outboundPipe != INVALID_PIPE && m_outboundPipe != 0)
     {
         close(m_outboundPipe);
@@ -199,15 +193,19 @@ bool TwoWayPipe::Disconnect()
 
     if (m_state == ServerConnected || m_state == Created)
     {
-        char inPipeName[PATH_MAX];
-        GetPipeName(inPipeName, m_id, "in");
-        unlink(inPipeName);
-
-        char outPipeName[PATH_MAX];
-        GetPipeName(outPipeName, m_id, "out");
-        unlink(outPipeName);
+        unlink(m_inPipeName);
+        unlink(m_outPipeName);
     }
 
     m_state = NotInitialized;
     return true;
+}
+
+// Used by debugger side (RS) to cleanup the target (LS) named pipes 
+// and semaphores when the debugger detects the debuggee process  exited.
+void TwoWayPipe::CleanupTargetProcess()
+{
+    unlink(m_inPipeName);
+    unlink(m_outPipeName);
+    PAL_CleanupTargetProcess(m_id, m_disambiguationKey);
 }

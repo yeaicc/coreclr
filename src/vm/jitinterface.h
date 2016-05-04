@@ -265,39 +265,50 @@ class WriteBarrierManager
 public:
     enum WriteBarrierType
     {
-        WRITE_BARRIER_UNINITIALIZED = 0,
-        WRITE_BARRIER_PREGROW32     = 1,
-        WRITE_BARRIER_PREGROW64     = 2,
-        WRITE_BARRIER_POSTGROW32    = 3,
-        WRITE_BARRIER_POSTGROW64    = 4,
-        WRITE_BARRIER_SVR32         = 5,
-        WRITE_BARRIER_SVR64         = 6,
-        WRITE_BARRIER_BUFFER        = 7,
+        WRITE_BARRIER_UNINITIALIZED,
+        WRITE_BARRIER_PREGROW64,
+        WRITE_BARRIER_POSTGROW64,
+#ifdef FEATURE_SVR_GC
+        WRITE_BARRIER_SVR64,
+#endif // FEATURE_SVR_GC
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+        WRITE_BARRIER_WRITE_WATCH_PREGROW64,
+        WRITE_BARRIER_WRITE_WATCH_POSTGROW64,
+#ifdef FEATURE_SVR_GC
+        WRITE_BARRIER_WRITE_WATCH_SVR64,
+#endif // FEATURE_SVR_GC
+#endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+        WRITE_BARRIER_BUFFER
     };
 
     WriteBarrierManager();
     void Initialize();
     
-    void UpdateEphemeralBounds();
-    void UpdateCardTableLocation(BOOL bReqUpperBoundsCheck);
+    void UpdateEphemeralBounds(bool isRuntimeSuspended);
+    void UpdateWriteWatchAndCardTableLocations(bool isRuntimeSuspended, bool bReqUpperBoundsCheck);
+
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+    void SwitchToWriteWatchBarrier(bool isRuntimeSuspended);
+    void SwitchToNonWriteWatchBarrier(bool isRuntimeSuspended);
+#endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
 
 protected:
     size_t GetCurrentWriteBarrierSize();
     size_t GetSpecificWriteBarrierSize(WriteBarrierType writeBarrier);
     PBYTE  CalculatePatchLocation(LPVOID base, LPVOID label, int offset);
     PCODE  GetCurrentWriteBarrierCode();
-    void   ChangeWriteBarrierTo(WriteBarrierType newWriteBarrier);
-    bool   NeedDifferentWriteBarrier(BOOL bReqUpperBoundsCheck, WriteBarrierType* pNewWriteBarrierType);
+    void   ChangeWriteBarrierTo(WriteBarrierType newWriteBarrier, bool isRuntimeSuspended);
+    bool   NeedDifferentWriteBarrier(bool bReqUpperBoundsCheck, WriteBarrierType* pNewWriteBarrierType);
 
 private:    
     void Validate();
     
     WriteBarrierType    m_currentWriteBarrier;
 
-    PBYTE   m_pLowerBoundImmediate;     // PREGROW32 | PREGROW64 | POSTGROW32 | POSTGROW64 |       |
-    PBYTE   m_pCardTableImmediate;      // PREGROW32 | PREGROW64 | POSTGROW32 | POSTGROW64 | SVR32 |
-    PBYTE   m_pUpperBoundImmediate;     //           |           | POSTGROW32 | POSTGROW64 |       |
-    PBYTE   m_pCardTableImmediate2;     // PREGROW32 |           | POSTGROW32 |            | SVR32 |
+    PBYTE   m_pWriteWatchTableImmediate;    // PREGROW | POSTGROW | SVR | WRITE_WATCH |
+    PBYTE   m_pLowerBoundImmediate;         // PREGROW | POSTGROW |     | WRITE_WATCH |
+    PBYTE   m_pCardTableImmediate;          // PREGROW | POSTGROW | SVR | WRITE_WATCH |
+    PBYTE   m_pUpperBoundImmediate;         //         | POSTGROW |     | WRITE_WATCH |
 };
 
 #endif // _TARGET_AMD64_
@@ -538,6 +549,12 @@ public:
             CORINFO_CONST_LOOKUP *   pLookup
             );
 
+    void getReadyToRunDelegateCtorHelper(
+            CORINFO_RESOLVED_TOKEN * pTargetMethod,
+            CORINFO_CLASS_HANDLE     delegateType,
+            CORINFO_CONST_LOOKUP *   pLookup
+            );
+
     CorInfoInitClassResult initClass(
             CORINFO_FIELD_HANDLE    field,
             CORINFO_METHOD_HANDLE   method,
@@ -624,6 +641,10 @@ public:
 
     // Resolve metadata token into runtime method handles.
     void resolveToken(/* IN, OUT */ CORINFO_RESOLVED_TOKEN * pResolvedToken);
+
+    // Attempt to resolve a metadata token into a runtime method handle. Returns true
+    // if resolution succeeded and false otherwise.
+    bool tryResolveToken(/* IN, OUT */ CORINFO_RESOLVED_TOKEN * pResolvedToken);
 
     void getFieldInfo (CORINFO_RESOLVED_TOKEN * pResolvedToken,
                        CORINFO_METHOD_HANDLE  callerHandle,

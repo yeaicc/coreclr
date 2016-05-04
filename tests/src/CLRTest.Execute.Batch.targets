@@ -21,6 +21,7 @@ WARNING:   When setting properties based on their current state (for example:
   <ItemGroup>
     <CLRTestBatchEnvironmentVariable Condition="'$(CrossGen)' == 'true'" Include="set complus_zaprequire=2" />
     <CLRTestBatchEnvironmentVariable Condition="'$(CrossGen)' == 'true'" Include="set complus_zaprequireexcludelist=corerun" />
+    <CLRTestBatchEnvironmentVariable Condition="'$(GCStressLevel)' != '' and '$(GCStressLevel)' != '0'" Include="set complus_gcstress=$(GCStressLevel)" />
   </ItemGroup>
   <!--
     Target: GetBatchCrossgenScript
@@ -35,12 +36,25 @@ WARNING:   When setting properties based on their current state (for example:
 <!-- CrossGen will create output if it needs to crossgen. Otherwise there will be silence. -->
       <CrossgenBatchScript Condition="'$(CLRTestKind)' == 'RunOnly'">
         <![CDATA[
-if not exist "$([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)).Replace(".exe", ".ni.exe"))""%CORE_ROOT%\crossgen.exe" /Platform_Assemblies_Paths %CORE_ROOT%%3B. $([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)))        
+if not exist "$([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)).Replace(".exe", ".ni.exe"))" (
+"%CORE_ROOT%\crossgen.exe" /Platform_Assemblies_Paths %CORE_ROOT%%3B%~dp0 $([MSBuild]::MakeRelative($(OutputPath), $(_CLRTestToRunFileFullPath)))
+IF NOT "!ERRORLEVEL!"=="0" (
+    ECHO Crossgen failed with exitcode - !ERRORLEVEL!
+    Exit /b 1
+    )
+)        
         ]]>
       </CrossgenBatchScript>
       <CrossgenBatchScript Condition="'$(CLRTestKind)' == 'BuildAndRun'">
         <![CDATA[
-if not exist "$(MSBuildProjectName).ni.exe" "%CORE_ROOT%\crossgen.exe" /Platform_Assemblies_Paths %CORE_ROOT%%3B. $(MSBuildProjectName).exe      
+if not exist "$(MSBuildProjectName).ni.exe" (
+    echo "%CORE_ROOT%\crossgen.exe" /Platform_Assemblies_Paths %CORE_ROOT%%3B%~dp0 $(MSBuildProjectName).exe
+    "%CORE_ROOT%\crossgen.exe" /Platform_Assemblies_Paths %CORE_ROOT%%3B%~dp0 $(MSBuildProjectName).exe
+    IF NOT "!ERRORLEVEL!"=="0" (
+    ECHO Crossgen failed with exitcode - !ERRORLEVEL!
+    Exit /b 1
+    )
+  )      
         ]]>
       </CrossgenBatchScript>
     </PropertyGroup>
@@ -125,7 +139,36 @@ IF NOT "!ERRORLEVEL!"=="0" (
     <Message Text="Project depends on $(_CLRTestToRunFileFullPath)." Condition="'$(_CLRTestNeedsProjectToRun)' == 'True'" />
 
     <PropertyGroup>
-
+      <BatchCLRTestEnvironmentCompatibilityCheck Condition="'$(GCStressIncompatible)' == 'true'"><![CDATA[
+$(BatchCLRTestEnvironmentCompatibilityCheck)
+IF NOT "%COMPlus_GCStress%"=="" (
+  ECHO SKIPPING EXECUTION BECAUSE COMPlus_GCStress IS SET
+  Exit /b 0
+)
+      ]]></BatchCLRTestEnvironmentCompatibilityCheck>
+      <BatchCLRTestEnvironmentCompatibilityCheck Condition="'$(JitOptimizationSensitive)' == 'true'"><![CDATA[
+$(BatchCLRTestEnvironmentCompatibilityCheck)
+IF "%COMPlus_JitStress%"=="" IF "%COMPlus_JitStressRegs%"=="" IF "%COMPlus_JITMinOpts%"=="" goto :Compatible1
+  ECHO SKIPPING EXECUTION BECAUSE ONE OR MORE OF (COMPlus_JitStress, COMPlus_JitStressRegs, COMPlus_JITMinOpts) IS SET
+  Exit /b 0
+:Compatible1
+      ]]></BatchCLRTestEnvironmentCompatibilityCheck>
+      <BatchCLRTestGCLongTestSkipCondition Condition="$(GCLongRunning) == 'true' And '$(IsLongRunningGCTest)' != 'true'"><![CDATA[
+echo Skipping execution because this is not a long-running GC test
+Exit /b 0
+      ]]></BatchCLRTestGCLongTestSkipCondition>
+      <BatchCLRTestGCLongTestSkipCondition Condition="$(GCLongRunning) != 'true' And '$(IsLongRunningGCTest)' == 'true'"><![CDATA[
+echo Skipping execution because long-running GC tests are not enabled
+Exit /b 0
+      ]]></BatchCLRTestGCLongTestSkipCondition>
+      <BatchCLRTestGCSimulatorSkipCondition Condition="$(GCSimulatorRun) == 'true' And '$(IsGCSimulatorTest)' != 'true'"><![CDATA[
+echo Skipping execution because this is not a GCSimulator test
+Exit /b 0
+      ]]></BatchCLRTestGCSimulatorSkipCondition>
+      <BatchCLRTestGCSimulatorSkipCondition Condition="$(GCSimulatorRun) != 'true' And '$(IsGCSimulatorTest)' == 'true'"><![CDATA[
+echo Skipping execution because GCSimulator tests are not enabled
+Exit /b 0
+      ]]></BatchCLRTestGCSimulatorSkipCondition>
       <BatchCLRTestExitCodePrep Condition="$(_CLRTestNeedsToRun)">
         <![CDATA[
 set CLRTestExpectedExitCode=$(CLRTestExitCode)
@@ -201,9 +244,17 @@ IF NOT "%CLRTestExitCode%"=="%CLRTestExpectedExitCode%" (
 
     <PropertyGroup> 
       <_CLRTestRunFile Condition="'$(CLRTestIsHosted)'=='true'">"%CORE_ROOT%\corerun.exe"</_CLRTestRunFile>
+      <BatchCLRTestLaunchCmds><![CDATA[
+IF NOT "%CLRCustomTestLauncher%"=="" (
+  set LAUNCHER=call %CLRCustomTestLauncher% %~dp0
+) ELSE (
+  set LAUNCHER=%_DebuggerFullPath% $(_CLRTestRunFile)
+)
+      ]]></BatchCLRTestLaunchCmds>
       <BatchCLRTestLaunchCmds Condition=" '$(IlasmRoundTrip)'=='true' "><![CDATA[
-ECHO $(_CLRTestRunFile) $(TargetAssemblyName) %CLRTestExecutionArguments% %Host_Args%
-$(_CLRTestRunFile) $(TargetAssemblyName) %CLRTestExecutionArguments% %Host_Args%
+$(BatchCLRTestLaunchCmds)
+ECHO %LAUNCHER% $(TargetAssemblyName) %CLRTestExecutionArguments% %Host_Args%
+%LAUNCHER% $(TargetAssemblyName) %CLRTestExecutionArguments% %Host_Args%
 
 IF NOT "!ERRORLEVEL!"=="%CLRTestExpectedExitCode%" (
   ECHO END EXECUTION OF IL{D}ASM BINARY - FAILED !ERRORLEVEL! vs %CLRTestExpectedExitCode%
@@ -213,8 +264,8 @@ IF NOT "!ERRORLEVEL!"=="%CLRTestExpectedExitCode%" (
       ]]></BatchCLRTestLaunchCmds>
       <BatchCLRTestLaunchCmds><![CDATA[
 $(BatchCLRTestLaunchCmds)
-ECHO %_DebuggerFullPath% $(_CLRTestRunFile) $(InputAssemblyName) %CLRTestExecutionArguments% %Host_Args%
-%_DebuggerFullPath% $(_CLRTestRunFile) $(InputAssemblyName) %CLRTestExecutionArguments% %Host_Args%
+ECHO %LAUNCHER% $(InputAssemblyName) %CLRTestExecutionArguments% %Host_Args%
+%LAUNCHER% $(InputAssemblyName) %CLRTestExecutionArguments% %Host_Args%
 set CLRTestExitCode=!ERRORLEVEL!
       ]]></BatchCLRTestLaunchCmds>
     </PropertyGroup>
@@ -303,11 +354,19 @@ IF NOT "%__TestEnv%"=="" call %__TestEnv%
 REM Environment Variables
 $(BatchEnvironmentVariables)
 
+$(BatchCLRTestEnvironmentCompatibilityCheck)
+
 REM CrossGen Script (when /p:CrossGen=true)
 $(CrossgenBatchScript)
 
 REM IlasmRoundTrip Script
 $(IlasmRoundTripBatchScript)
+
+REM Long GC Tests Script (when /p:GCLongRunning=true)
+$(BatchCLRTestGCLongTestSkipCondition)
+
+REM GCSimulator Tests Script (when /p:GCSimulatorRun=true)
+$(BatchCLRTestGCSimulatorSkipCondition)
 
 REM Precommands
 $(CLRTestBatchPreCommands)

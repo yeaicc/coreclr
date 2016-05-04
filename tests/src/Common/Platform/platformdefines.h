@@ -24,6 +24,8 @@
 typedef unsigned error_t;
 typedef HANDLE THREAD_ID;
 
+#define DLL_EXPORT __declspec(dllexport)
+
 #else // !WINDOWS
 #include <pthread.h>
 
@@ -41,8 +43,11 @@ typedef const WCHAR *LPCWSTR, *PCWSTR;
 #define FALSE 0
 #endif
 
-#define WINAPI   _cdecl
-#ifndef __stdcall
+#ifndef WINAPI
+#define WINAPI  __stdcall
+#endif
+
+#ifndef _MSC_VER
 #if __i386__
 #define __stdcall __attribute__((stdcall))
 #define _cdecl __attribute__((cdecl))
@@ -50,6 +55,12 @@ typedef const WCHAR *LPCWSTR, *PCWSTR;
 #define __stdcall
 #define _cdecl
 #endif
+#endif
+
+#if __GNUC__ >= 4
+#define DLL_EXPORT __attribute__ ((visibility ("default")))
+#else
+#define DLL_EXPORT
 #endif
 
 LPWSTR HackyConvertToWSTR(char* pszInput);

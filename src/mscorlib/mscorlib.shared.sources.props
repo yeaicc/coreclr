@@ -325,13 +325,7 @@
     <SystemSources Include="$(BclSourcesRoot)\System\TypeUnloadedException.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\cominterfaces.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\CompatibilitySwitches.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\Console.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\ConsoleCancelEventArgs.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\ConsoleColor.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\ConsoleKey.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\ConsoleKeyInfo.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\ConsoleModifiers.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\ConsoleSpecialKey.cs" />
+    <SystemSources Condition="'$(FeatureCoreClr)'=='true'" Include="$(BclSourcesRoot)\System\LowLevelConsole.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\ContextMarshalException.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\Convert.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\ContextBoundObject.cs" />
@@ -408,7 +402,6 @@
     <SystemSources Include="$(BclSourcesRoot)\System\ParseNumbers.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\PlatformID.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\PlatformNotSupportedException.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\Platforms.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\Progress.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\Random.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\RankException.cs" />
@@ -421,7 +414,6 @@
     <SystemSources Include="$(BclSourcesRoot)\System\SharedStatics.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\Single.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\StubHelpers.cs" />
-    <SystemSources Include="$(BclSourcesRoot)\System\SupportedPlatformsAttribute.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\ThreadAttributes.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\TimeoutException.cs" />
     <SystemSources Include="$(BclSourcesRoot)\System\TimeSpan.cs" />
@@ -453,118 +445,6 @@
     <SystemSources Condition="'$(FeatureCominterop)' == 'true'" Include="$(BclSourcesRoot)\System\__ComObject.cs" />
     <SystemSources Condition="'$(FeatureCominterop)' == 'true'" Include="$(BclSourcesRoot)\System\Variant.cs" />
     <SystemSources Condition="'$(FeatureClassicCominterop)' == 'true'" Include="$(BclSourcesRoot)\System\OleAutBinder.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(FeatureCrypto)' == 'true'" >
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\CapiNative.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Crypto.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\ICryptoTransform.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RandomNumberGenerator.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RNGCryptoServiceProvider.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Aes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricKeyExchangeDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricKeyExchangeFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricSignatureDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricSignatureFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\base64Transforms.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\cryptoapiTransform.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\CryptoConfig.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\CryptoStream.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\DES.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\DeriveBytes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\dsa.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\DSASignatureDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\DSASignatureFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMAC.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACMD5.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACRIPEMD160.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACSHA1.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACSHA256.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACSHA384.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACSHA512.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HashAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\ICspAsymmetricAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\KeyedHashAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\mactripleDES.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\MD5.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\MD5CryptoServiceProvider.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\MaskGenerationMethod.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\PasswordDeriveBytes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\PKCS1MaskGenerationMethod.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Rfc2898DeriveBytes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RIPEMD160.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RIPEMD160Managed.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\rsa.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSACryptoServiceProvider.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAOAEPKeyExchangeDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAOAEPKeyExchangeFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1KeyExchangeDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1KeyExchangeFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1SignatureDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1SignatureFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Rijndael.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RijndaelManaged.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RijndaelManagedTransform.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SafeCryptoHandles.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA1.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA1CryptoServiceProvider.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA256.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA256Managed.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA384.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA384Managed.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA512.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA512Managed.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SignatureDescription.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SymmetricAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\TripleDES.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Utils.cs" />
-    <SecCryptographySources Condition="'$(FeatureCoreClr)'=='true'" Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA1Managed.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(FeatureCrypto)' != 'true' and '$(FeatureLegacySurface)' == 'true'" >
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Aes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\CapiNative.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Crypto.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\cryptoapiTransform.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\CryptoConfig.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\CryptoStream.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\DeriveBytes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMAC.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACSHA1.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HMACSHA256.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\HashAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\ICryptoTransform.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\KeyedHashAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RandomNumberGenerator.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Rfc2898DeriveBytes.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Rijndael.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RijndaelManaged.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RijndaelManagedTransform.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RNGCryptoServiceProvider.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SafeCryptoHandles.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA1.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA256.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA256Managed.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\SymmetricAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\Utils.cs" />
-    <SecCryptographySources Condition="'$(FeatureCoreClr)'=='true'" Include="$(BclSourcesRoot)\System\Security\Cryptography\SHA1Managed.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(FeatureCrypto)' != 'true' and '$(FeatureLegacyNetCFCrypto)' == 'true'" >
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricKeyExchangeFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricKeyExchangeDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricSignatureDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\AsymmetricSignatureFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\ICspAsymmetricAlgorithm.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\MaskGenerationMethod.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\PKCS1MaskGenerationMethod.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\rsa.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSACryptoServiceProvider.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAOAEPKeyExchangeDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAOAEPKeyExchangeFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1KeyExchangeDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1KeyExchangeFormatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1SignatureDeformatter.cs" />
-    <SecCryptographySources Include="$(BclSourcesRoot)\System\Security\Cryptography\RSAPKCS1SignatureFormatter.cs" />
   </ItemGroup>
   <ItemGroup>
     <ReflectionSources Include="$(BclSourcesRoot)\System\Reflection\__Filters.cs" />
@@ -873,7 +753,6 @@
   </ItemGroup>
   <ItemGroup>
     <IoSources Include="$(BclSourcesRoot)\System\IO\__DebugOutputTextWriter.cs" />
-    <IoSources Include="$(BclSourcesRoot)\System\IO\__ConsoleStream.cs" />
     <IoSources Include="$(BclSourcesRoot)\System\IO\__Error.cs" />
     <IoSources Include="$(BclSourcesRoot)\System\IO\__HResults.cs" />
     <IoSources Include="$(BclSourcesRoot)\System\IO\BinaryReader.cs" />
@@ -918,21 +797,6 @@
     <IoSources Include="$(BclSourcesRoot)\System\IO\UnmanagedMemoryStreamWrapper.cs" />
     <IoSources Condition="'$(FeatureCoreclr)' == 'true'" Include="$(BclSourcesRoot)\System\IO\FileSecurityState.cs" />
     <IoSources Condition="'$(FeatureCoreclr)' == 'true'" Include="$(BclSourcesRoot)\System\IO\FileSecurityStateAccess.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(FeatureIsostoreLight)' == 'true'" >
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageFileStream.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageException.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageSecurityState.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageFileSmall.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageGroup.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageAccountingInfo.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\__HResults.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(FeatureIsostore)' == 'true' and '$(FeatureIsostoreLight)' != 'true'" >
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageFileStream.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageException.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\IsolatedStorageSecurityState.cs" />
-    <IsostoreSources Include="$(BclSourcesRoot)\System\IO\IsolatedStorage\__HResults.cs" />
   </ItemGroup>
   <ItemGroup>
     <SecuritySources Include="$(BclSourcesRoot)\System\Security\Attributes.cs" />
@@ -1091,19 +955,7 @@
     <ConfigurationAssembliesSources Include="$(BclSourcesRoot)\System\Configuration\Assemblies\AssemblyHashAlgorithm.cs" />
     <ConfigurationAssembliesSources Include="$(BclSourcesRoot)\System\Configuration\Assemblies\AssemblyVersionCompatibility.cs" />
   </ItemGroup>
-  <ItemGroup Condition="'$(FeatureX509)' == 'true'">
-    <SecPublickeySources Include="$(BclSourcesRoot)\System\Security\Cryptography\X509Certificates\safex509handles.cs" />
-    <SecPublickeySources Include="$(BclSourcesRoot)\System\Security\Cryptography\X509Certificates\x509utils.cs" />
-    <SecPublickeySources Include="$(BclSourcesRoot)\System\Security\Cryptography\X509Certificates\X509Certificate.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <SerializationFormattersSources Include="$(BclSourcesRoot)\System\Runtime\Serialization\Formatters\CommonEnums.cs" />
-    <SerializationFormattersSources Include="$(BclSourcesRoot)\System\Runtime\Serialization\Formatters\ISoapMessage.cs" />
-    <SerializationFormattersSources Include="$(BclSourcesRoot)\System\Runtime\Serialization\Formatters\IFieldInfo.cs" />
-    <SerializationFormattersSources Include="$(BclSourcesRoot)\System\Runtime\Serialization\Formatters\SerTrace.cs" />
-    <SerializationFormattersSources Include="$(BclSourcesRoot)\System\Runtime\Serialization\Formatters\SoapMessage.cs" />
-    <SerializationFormattersSources Include="$(BclSourcesRoot)\System\Runtime\Serialization\Formatters\SoapFault.cs" />
-  </ItemGroup>
+
   <ItemGroup>
     <RemotingSources Include="$(BclSourcesRoot)\System\Runtime\Remoting\ObjectHandle.cs" />
   </ItemGroup>
@@ -1162,10 +1014,6 @@
   </ItemGroup>
   <ItemGroup>
     <XmlSources Include="$(BclSourcesRoot)\System\Security\SecurityElement.cs" />
-    <XmlSources Include="$(BclSourcesRoot)\System\Security\XMLSyntaxException.cs" />
-    <XmlSources Condition="'$(FeatureCasPolicy)' == 'true' or '$(FeatureLegacyNetCFCrypto)' == 'true'" Include="$(BclSourcesRoot)\System\Security\SecurityDocument.cs" />
-    <XmlSources Condition="'$(FeatureCasPolicy)' == 'true' or '$(FeatureLegacyNetCFCrypto)' == 'true'" Include="$(BclSourcesRoot)\System\Security\Util\Parser.cs" />
-    <XmlSources Condition="'$(FeatureCasPolicy)' == 'true' or '$(FeatureLegacyNetCFCrypto)' == 'true'" Include="$(BclSourcesRoot)\System\Security\Util\Tokenizer.cs" />
   </ItemGroup>
   <ItemGroup>
     <Win32Sources Include="$(BclSourcesRoot)\Microsoft\Win32\UnsafeNativeMethods.cs" />
@@ -1185,12 +1033,8 @@
     <InteropTceadaptergenSources Include="$(BclSourcesRoot)\System\Runtime\InteropServices\TCEAdapterGen\TCEAdapterGenerator.cs" />
   </ItemGroup>
   <ItemGroup>
-    <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\GenericIdentity.cs" />
-    <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\GenericPrincipal.cs" />
     <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\IIdentity.cs" />
     <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\IPrincipal.cs" />
-    <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\PrincipalPolicy.cs" />
-    <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\TokenAccessLevels.cs" />
     <SecurityPrincipalSources Include="$(BclSourcesRoot)\System\Security\Principal\TokenImpersonationLevel.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -1268,7 +1112,6 @@
     <GenericsSources Include="$(BclSourcesRoot)\System\Collections\Concurrent\Partitioner.cs" />
     <GenericsSources Include="$(BclSourcesRoot)\System\Collections\Concurrent\OrderablePartitioner.cs" />
     <GenericsSources Include="$(BclSourcesRoot)\System\Collections\Concurrent\PartitionerStatic.cs" />
-    <GenericsSources Condition="'$(FeatureLegacyNetCF)'=='true'" Include="$(BclSourcesRoot)\System\Collections\Generic\MangoArraySortHelper.cs" />
   </ItemGroup>
   <ItemGroup>
     <SafehandleSources Include="$(BclSourcesRoot)\Microsoft\Win32\SafeHandles\SafeFileHandle.cs" />
@@ -1282,54 +1125,54 @@
     <SafehandleSources Condition="'$(FeatureWin32Registry)' == 'true'" Include="$(BclSourcesRoot)\Microsoft\Win32\SafeHandles\SafeRegistryHandle.cs" />
   </ItemGroup>
   <ItemGroup>
-    <MscorlibSources Include="@(SystemSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ThreadingSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(DeploymentSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(CollectionsSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(GenericsSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(DiagnosticsSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(DiagnosticsCodeanalysisSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(DiagnosticsSymbolstoreSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ReflectionSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ExceptionservicesSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(HostingSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SerializationSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(GlobalizationSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(TextSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ResourcesSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(Win32Sources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SafehandleSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecUtilSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecurityPolicySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecurityPrincipalSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ReliabilitySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(InteropSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(InteropComtypesSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(InteropComeventsSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(InteropExpandoSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(InteropWinRTSources)"><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(WinRTTSources)"><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(WinRTCollectionSources)"><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(IoSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(CompilerServicesSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(RuntimeSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(XmlSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(PermissionsSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecuritySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(RemotingSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(IsostoreSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SerializationFormattersSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SerializationFormattersBinarySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ReflectionEmitSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ReflectionMetadataSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(ConfigurationAssembliesSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecCryptographySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecPublickeySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(InteropTceadaptergenSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(SecurityAclSources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(IdentitySources)" ><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(VersioningSources)"><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="@(DesignerServicesSources)"><Visible>true</Visible></MscorlibSources>
-    <MscorlibSources Include="$(BclSourcesRoot)\GlobalSuppressions.cs"><Visible>true</Visible></MscorlibSources>
+    <MscorlibSources Include="@(SystemSources)"/>
+    <MscorlibSources Include="@(ThreadingSources)"/>
+    <MscorlibSources Include="@(DeploymentSources)"/>
+    <MscorlibSources Include="@(CollectionsSources)"/>
+    <MscorlibSources Include="@(GenericsSources)"/>
+    <MscorlibSources Include="@(DiagnosticsSources)"/>
+    <MscorlibSources Include="@(DiagnosticsCodeanalysisSources)"/>
+    <MscorlibSources Include="@(DiagnosticsSymbolstoreSources)"/>
+    <MscorlibSources Include="@(ReflectionSources)"/>
+    <MscorlibSources Include="@(ExceptionservicesSources)"/>
+    <MscorlibSources Include="@(HostingSources)"/>
+    <MscorlibSources Include="@(SerializationSources)"/>
+    <MscorlibSources Include="@(GlobalizationSources)"/>
+    <MscorlibSources Include="@(TextSources)"/>
+    <MscorlibSources Include="@(ResourcesSources)"/>
+    <MscorlibSources Include="@(Win32Sources)"/>
+    <MscorlibSources Include="@(SafehandleSources)"/>
+    <MscorlibSources Include="@(SecUtilSources)"/>
+    <MscorlibSources Include="@(SecurityPolicySources)"/>
+    <MscorlibSources Include="@(SecurityPrincipalSources)"/>
+    <MscorlibSources Include="@(ReliabilitySources)"/>
+    <MscorlibSources Include="@(InteropSources)"/>
+    <MscorlibSources Include="@(InteropComtypesSources)"/>
+    <MscorlibSources Include="@(InteropComeventsSources)"/>
+    <MscorlibSources Include="@(InteropExpandoSources)"/>
+    <MscorlibSources Include="@(InteropWinRTSources)"/>
+    <MscorlibSources Include="@(WinRTTSources)"/>
+    <MscorlibSources Include="@(WinRTCollectionSources)"/>
+    <MscorlibSources Include="@(IoSources)"/>
+    <MscorlibSources Include="@(CompilerServicesSources)"/>
+    <MscorlibSources Include="@(RuntimeSources)"/>
+    <MscorlibSources Include="@(XmlSources)"/>
+    <MscorlibSources Include="@(PermissionsSources)"/>
+    <MscorlibSources Include="@(SecuritySources)"/>
+    <MscorlibSources Include="@(RemotingSources)"/>
+    <MscorlibSources Include="@(IsostoreSources)"/>
+    <MscorlibSources Include="@(SerializationFormattersSources)"/>
+    <MscorlibSources Include="@(SerializationFormattersBinarySources)"/>
+    <MscorlibSources Include="@(ReflectionEmitSources)"/>
+    <MscorlibSources Include="@(ReflectionMetadataSources)"/>
+    <MscorlibSources Include="@(ConfigurationAssembliesSources)"/>
+    <MscorlibSources Include="@(SecCryptographySources)"/>
+    <MscorlibSources Include="@(SecPublickeySources)"/>
+    <MscorlibSources Include="@(InteropTceadaptergenSources)"/>
+    <MscorlibSources Include="@(SecurityAclSources)"/>
+    <MscorlibSources Include="@(IdentitySources)"/>
+    <MscorlibSources Include="@(VersioningSources)"/>
+    <MscorlibSources Include="@(DesignerServicesSources)"/>
+    <MscorlibSources Include="$(BclSourcesRoot)\GlobalSuppressions.cs"/>
   </ItemGroup>
 </Project>

@@ -954,8 +954,8 @@ int ArgIteratorTemplate<ARGITERATOR_BASE>::GetNextOffset()
     m_fArgInRegisters = true;
 
     int cFPRegs = 0;
+    int cGenRegs = 0;
     int cbArg = StackElemSize(argSize);
-    int cGenRegs = cbArg / 8; // GP reg size
 
     switch (argType)
     {
@@ -1027,6 +1027,7 @@ int ArgIteratorTemplate<ARGITERATOR_BASE>::GetNextOffset()
     }
 
     default:
+        cGenRegs = cbArg / 8; // GP reg size
         break;
     }
 
@@ -1492,11 +1493,7 @@ void ArgIteratorTemplate<ARGITERATOR_BASE>::ForceSigWalk()
                 _ASSERTE(!FORBIDGC_LOADER_USE_ENABLED());
                 CONTRACT_VIOLATION(ThrowsViolation);
 #endif
-#ifdef BINDER
-                IfFailThrow(COR_E_NOTSUPPORTED);
-#else
                 COMPlusThrow(kNotSupportedException);
-#endif
             }
 #endif
         }
@@ -1553,7 +1550,7 @@ void ArgIteratorTemplate<ARGITERATOR_BASE>::ForceSigWalk()
         int endOfs = ofs + stackElemSize;
         if (endOfs > maxOffset)
         {
-#if !defined(DACCESS_COMPILE) && !defined(BINDER)
+#if !defined(DACCESS_COMPILE)
             if (endOfs > MAX_ARG_SIZE)
             {
 #ifdef _DEBUG

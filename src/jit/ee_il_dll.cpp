@@ -18,11 +18,12 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #pragma hdrstop
 #endif
 #include "emit.h"
+#include "corexcep.h"
 
 
 /*****************************************************************************/
 
-static ICorJitHost* g_jitHost = nullptr;
+ICorJitHost* g_jitHost = nullptr;
 static CILJit* ILJitter = 0;        // The one and only JITTER I return
 #ifndef FEATURE_MERGE_JIT_AND_ENGINE
 HINSTANCE g_hInst = NULL;
@@ -51,6 +52,14 @@ extern "C"
 void __stdcall jitStartup(ICorJitHost* jitHost)
 {
     g_jitHost = jitHost;
+
+    // `jitStartup` may be called multiple times
+    // when pre-jitting. We should not reinitialize
+    // config values each time.
+    if (!JitConfig.isInitialized())
+    {
+        JitConfig.initialize(jitHost);
+    }
 
 #ifdef FEATURE_TRACELOGGING
     JitTelemetry::NotifyDllProcessAttach();
@@ -150,6 +159,89 @@ ICorJitCompiler* __stdcall getJit()
     return(ILJitter);
 }
 
+/*****************************************************************************/
+
+// Information kept in thread-local storage. This is used in the noway_assert exceptional path.
+// If you are using it more broadly in retail code, you would need to understand the
+// performance implications of accessing TLS.
+//
+// If the JIT is being statically linked, these methods must be implemented by the consumer.
+#if !defined(FEATURE_MERGE_JIT_AND_ENGINE) || !defined(FEATURE_IMPLICIT_TLS)
+
+__declspec(thread) void* gJitTls = nullptr;
+
+static void* GetJitTls()
+{
+    return gJitTls;
+}
+
+void SetJitTls(void* value)
+{
+    gJitTls = value;
+}
+
+#else // !defined(FEATURE_MERGE_JIT_AND_ENGINE) || !defined(FEATURE_IMPLICIT_TLS)
+
+extern "C"
+{
+void* GetJitTls();
+void SetJitTls(void* value);
+}
+
+#endif // // defined(FEATURE_MERGE_JIT_AND_ENGINE) && defined(FEATURE_IMPLICIT_TLS)
+
+#if defined(DEBUG)
+
+JitTls::JitTls(ICorJitInfo* jitInfo)
+    : m_compiler(nullptr)
+    , m_logEnv(jitInfo)
+{
+    m_next = reinterpret_cast<JitTls*>(GetJitTls());
+    SetJitTls(this);
+}
+
+JitTls::~JitTls()
+{
+    SetJitTls(m_next);
+}
+
+LogEnv* JitTls::GetLogEnv()
+{
+    return &reinterpret_cast<JitTls*>(GetJitTls())->m_logEnv;
+}
+
+Compiler* JitTls::GetCompiler()
+{
+    return reinterpret_cast<JitTls*>(GetJitTls())->m_compiler;
+}
+
+void JitTls::SetCompiler(Compiler* compiler)
+{
+    reinterpret_cast<JitTls*>(GetJitTls())->m_compiler = compiler;
+}
+
+#else // defined(DEBUG)
+
+JitTls::JitTls(ICorJitInfo* jitInfo)
+{
+}
+
+JitTls::~JitTls()
+{
+}
+
+Compiler* JitTls::GetCompiler()
+{
+    return reinterpret_cast<Compiler*>(GetJitTls());
+}
+
+void JitTls::SetCompiler(Compiler* compiler)
+{
+    SetJitTls(compiler);
+}
+
+#endif // !defined(DEBUG)
+
 //****************************************************************************
 // The main JIT function for the 32 bit JIT.  See code:ICorJitCompiler#EEToJitInterface for more on the EE-JIT
 // interface. Things really don't get going inside the JIT until the code:Compiler::compCompile#Phases
@@ -187,9 +279,7 @@ CorJitResult CILJit::compileMethod (
     void *                  methodCodePtr = NULL;
     CORINFO_METHOD_HANDLE   methodHandle  = methodInfo->ftn;
 
-#ifdef DEBUG
-    LogEnv curEnv(compHnd);      // capture state needed for error reporting
-#endif
+    JitTls jitTls(compHnd); // Initialize any necessary thread-local state
 
     assert(methodInfo->ILCode);
 
@@ -285,8 +375,7 @@ unsigned CILJit::getMaxIntrinsicSIMDVectorLength(DWORD cpuCompileFlags)
         ((cpuCompileFlags & CORJIT_FLG_FEATURE_SIMD) != 0) &&
         ((cpuCompileFlags & CORJIT_FLG_USE_AVX2) != 0))
     {
-        static ConfigDWORD fEnableAVX;
-        if (fEnableAVX.val(CLRConfig::EXTERNAL_EnableAVX) != 0)
+        if (JitConfig.EnableAVX() != 0)
         {
             return 32;
         }
@@ -1038,6 +1127,114 @@ void Compiler::eeGetSystemVAmd64PassStructInRegisterDescriptor(/*IN*/  CORINFO_C
 }
 
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
+
+#if COR_JIT_EE_VERSION <= 460
+
+// Validate the token to determine whether to turn the bad image format exception into
+// verification failure (for backward compatibility)
+static bool isValidTokenForTryResolveToken(ICorJitInfo* corInfo, CORINFO_RESOLVED_TOKEN* resolvedToken)
+{
+    if (!corInfo->isValidToken(resolvedToken->tokenScope, resolvedToken->token))
+        return false;
+
+    CorInfoTokenKind tokenType = resolvedToken->tokenType;
+    switch (TypeFromToken(resolvedToken->token))
+    {
+    case mdtModuleRef:
+    case mdtTypeDef:
+    case mdtTypeRef:
+    case mdtTypeSpec:
+        if ((tokenType & CORINFO_TOKENKIND_Class) == 0)
+            return false;
+        break;
+
+    case mdtMethodDef:
+    case mdtMethodSpec:
+        if ((tokenType & CORINFO_TOKENKIND_Method) == 0)
+            return false;
+        break;
+
+    case mdtFieldDef:
+        if ((tokenType & CORINFO_TOKENKIND_Field) == 0)
+            return false;
+        break;
+
+    case mdtMemberRef:
+        if ((tokenType & (CORINFO_TOKENKIND_Method | CORINFO_TOKENKIND_Field)) == 0)
+            return false;
+        break;
+
+    default:
+        return false;
+    }
+
+    return true;
+}
+
+// This type encapsulates the information necessary for `TryResolveTokenFilter` and
+// `eeTryResolveToken` below.
+struct TryResolveTokenFilterParam
+{
+    ICorJitInfo* m_corInfo;
+    CORINFO_RESOLVED_TOKEN* m_resolvedToken;
+    EXCEPTION_POINTERS m_exceptionPointers;
+    bool m_success;
+};
+
+LONG TryResolveTokenFilter(struct _EXCEPTION_POINTERS* exceptionPointers, void* theParam)
+{
+    assert(exceptionPointers->ExceptionRecord->ExceptionCode != SEH_VERIFICATION_EXCEPTION);
+
+    // Backward compatibility: Convert bad image format exceptions thrown by the EE while resolving token to verification exceptions 
+    // if we are verifying. Verification exceptions will cause the JIT of the basic block to fail, but the JITing of the whole method 
+    // is still going to succeed. This is done for backward compatibility only. Ideally, we would always treat bad tokens in the IL 
+    // stream as fatal errors.
+    if (exceptionPointers->ExceptionRecord->ExceptionCode == EXCEPTION_COMPLUS)
+    {
+        auto* param = reinterpret_cast<TryResolveTokenFilterParam*>(theParam);
+        if (!isValidTokenForTryResolveToken(param->m_corInfo, param->m_resolvedToken))
+        {
+            param->m_exceptionPointers = *exceptionPointers;
+            return param->m_corInfo->FilterException(exceptionPointers);
+        }
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+bool Compiler::eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
+{
+    TryResolveTokenFilterParam param;
+    param.m_corInfo = info.compCompHnd;
+    param.m_resolvedToken = resolvedToken;
+    param.m_success = true;
+
+    PAL_TRY(TryResolveTokenFilterParam*, pParam, &param)
+    {
+        pParam->m_corInfo->resolveToken(pParam->m_resolvedToken);
+    }
+    PAL_EXCEPT_FILTER(TryResolveTokenFilter)
+    {
+        if (param.m_exceptionPointers.ExceptionRecord->ExceptionCode == EXCEPTION_COMPLUS)
+        {
+            param.m_corInfo->HandleException(&param.m_exceptionPointers);
+        }
+
+        param.m_success = false;
+    }
+    PAL_ENDTRY
+
+    return param.m_success;
+}
+
+#else // CORJIT_EE_VER <= 460
+    
+bool Compiler::eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
+{
+    return info.compCompHnd->tryResolveToken(resolvedToken);
+}
+
+#endif // CORJIT_EE_VER > 460
 
 /*****************************************************************************
  *

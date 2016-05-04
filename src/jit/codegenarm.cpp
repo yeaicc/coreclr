@@ -342,8 +342,8 @@ void                CodeGen::genCodeForBBlist()
         }
 
         regSet.rsMaskVars = newLiveRegSet;
-        gcInfo.gcMarkRegSetGCref(newRegGCrefSet DEBUG_ARG(true));
-        gcInfo.gcMarkRegSetByref(newRegByrefSet DEBUG_ARG(true));
+        gcInfo.gcMarkRegSetGCref(newRegGCrefSet DEBUGARG(true));
+        gcInfo.gcMarkRegSetByref(newRegByrefSet DEBUGARG(true));
 
         /* Blocks with handlerGetsXcptnObj()==true use GT_CATCH_ARG to
            represent the exception object (TYP_REF).
@@ -1152,7 +1152,7 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
     case GT_LSH:
     case GT_RSH:
     case GT_RSZ:
-        genCodeForShift(treeNode->gtGetOp1(), treeNode->gtGetOp2(), treeNode);
+        genCodeForShift(treeNode);
         // genCodeForShift() calls genProduceReg()
         break;
 
@@ -1746,22 +1746,17 @@ instruction CodeGen::genGetInsForOper(genTreeOps oper, var_types type)
     return ins;
 }
 
-/** Generates the code sequence for a GenTree node that
- * represents a bit shift operation (<<, >>, >>>).
- *
- * Arguments: operand:  the value to be shifted by shiftBy bits.
- *            shiftBy:  the number of bits to shift the operand.
- *            parent:   the actual bitshift node (that specifies the
- *                      type of bitshift to perform.
- *
- * Preconditions:    a) All GenTrees are register allocated.
- *                   b) Either shiftBy is a contained constant or
- *                      it's an expression sitting in RCX.
- *                   c) The actual bit shift node is not stack allocated
- *                      nor contained (not yet supported).
- */
-void CodeGen::genCodeForShift(GenTreePtr operand, GenTreePtr shiftBy,
-                              GenTreePtr parent)
+//------------------------------------------------------------------------
+// genCodeForShift: Generates the code sequence for a GenTree node that
+// represents a bit shift or rotate operation (<<, >>, >>>, rol, ror).
+//
+// Arguments:
+//    tree - the bit shift node (that specifies the type of bit shift to perform).
+//
+// Assumptions:
+//    a) All GenTrees are register allocated.
+//
+void CodeGen::genCodeForShift(GenTreePtr tree)
 {
     NYI("genCodeForShift");
 }
@@ -2076,21 +2071,21 @@ void*
 #else
 void
 #endif
-CodeGen::genCreateAndStoreGCInfo(unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUG_ARG(void* codePtr))
+CodeGen::genCreateAndStoreGCInfo(unsigned codeSize, unsigned prologSize, unsigned epilogSize DEBUGARG(void* codePtr))
 {
 #ifdef JIT32_GCENCODER
-    return genCreateAndStoreGCInfoJIT32(codeSize, prologSize, epilogSize DEBUG_ARG(codePtr));
+    return genCreateAndStoreGCInfoJIT32(codeSize, prologSize, epilogSize DEBUGARG(codePtr));
 #else
-    genCreateAndStoreGCInfoX64(codeSize, prologSize DEBUG_ARG(codePtr));
+    genCreateAndStoreGCInfoX64(codeSize, prologSize DEBUGARG(codePtr));
 #endif
 }
 
 // TODO-ARM-Cleanup: It seems that the ARM JIT (classic and otherwise) uses this method, so it seems to be inappropriately named?
 
-void                CodeGen::genCreateAndStoreGCInfoX64(unsigned codeSize, unsigned prologSize DEBUG_ARG(void* codePtr))
+void                CodeGen::genCreateAndStoreGCInfoX64(unsigned codeSize, unsigned prologSize DEBUGARG(void* codePtr))
 {
     IAllocator* allowZeroAlloc = new (compiler, CMK_GC) AllowZeroAllocator(compiler->getAllocatorGC());
-    GcInfoEncoder* gcInfoEncoder = new (compiler, CMK_GC) GcInfoEncoder(compiler->info.compCompHnd, compiler->info.compMethodInfo, allowZeroAlloc);
+    GcInfoEncoder* gcInfoEncoder = new (compiler, CMK_GC) GcInfoEncoder(compiler->info.compCompHnd, compiler->info.compMethodInfo, allowZeroAlloc, NOMEM);
     assert(gcInfoEncoder);
 
     // Follow the code pattern of the x86 gc info encoder (genCreateAndStoreGCInfoJIT32).

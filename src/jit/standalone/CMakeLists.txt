@@ -4,12 +4,16 @@ add_definitions(-DSELF_NO_HOST)
 add_definitions(-DFEATURE_READYTORUN_COMPILER)
 remove_definitions(-DFEATURE_MERGE_JIT_AND_ENGINE)
 
+if(CLR_CMAKE_TARGET_ARCH_I386 OR CLR_CMAKE_TARGET_ARCH_ARM)
+  add_definitions(-DLEGACY_BACKEND)
+endif()
+
 if(CLR_CMAKE_PLATFORM_LINUX OR CLR_CMAKE_PLATFORM_NETBSD)
     # This is required to force using our own PAL, not one that we are loaded with.
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Xlinker -Bsymbolic -Bsymbolic-functions")
 endif(CLR_CMAKE_PLATFORM_LINUX OR CLR_CMAKE_PLATFORM_NETBSD)
 
-add_library_clr(ryujit
+add_library_clr(${JIT_BASE_NAME}
    SHARED
    ${SHARED_LIB_SOURCES}
 )
@@ -27,7 +31,8 @@ if(CLR_CMAKE_PLATFORM_UNIX)
     )
 else()
     list(APPEND RYUJIT_LINK_LIBRARIES
-       msvcrt.lib
+       ${STATIC_MT_CRT_LIB}
+       ${STATIC_MT_VCRT_LIB}
        kernel32.lib
        advapi32.lib
        ole32.lib
@@ -42,12 +47,9 @@ else()
     )
 endif(CLR_CMAKE_PLATFORM_UNIX)
 
-target_link_libraries(ryujit
+target_link_libraries(${JIT_BASE_NAME}
    ${RYUJIT_LINK_LIBRARIES}
 )
 
 # add the install targets
-install (TARGETS ryujit DESTINATION .)
-if(WIN32)
-    install (FILES ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/ryujit.pdb DESTINATION PDB)
-endif(WIN32)
+install_clr(${JIT_BASE_NAME})

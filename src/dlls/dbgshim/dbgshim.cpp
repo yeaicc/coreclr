@@ -54,13 +54,117 @@ Notes:
 
 */
 
+#ifdef FEATURE_PAL
+#define INITIALIZE_SHIM { if (PAL_InitializeDLL() != 0) return E_FAIL; }
+#else
+#define INITIALIZE_SHIM
+#endif
+
 // Contract for public APIs. These must be NOTHROW.
 #define PUBLIC_CONTRACT \
+    INITIALIZE_SHIM \
     CONTRACTL \
     { \
         NOTHROW; \
     } \
-    CONTRACTL_END; \
+    CONTRACTL_END;
+
+//-----------------------------------------------------------------------------
+// Public API.
+//
+// CreateProcessForLaunch - a stripped down version of the Windows CreateProcess
+// that can be supported cross-platform.
+//
+//-----------------------------------------------------------------------------
+HRESULT
+CreateProcessForLaunch(
+    __in LPWSTR lpCommandLine,
+    __in BOOL bSuspendProcess,
+    __in LPVOID lpEnvironment,
+    __in LPCWSTR lpCurrentDirectory,
+    __out PDWORD pProcessId,
+    __out HANDLE *pResumeHandle)
+{
+    PUBLIC_CONTRACT;
+
+    PROCESS_INFORMATION processInfo;
+    STARTUPINFOW startupInfo;
+    DWORD dwCreationFlags = 0;
+
+    ZeroMemory(&processInfo, sizeof(processInfo));
+    ZeroMemory(&startupInfo, sizeof(startupInfo));
+
+    startupInfo.cb = sizeof(startupInfo);
+
+    if (bSuspendProcess)
+    {
+        dwCreationFlags = CREATE_SUSPENDED;
+    }
+
+    BOOL result = CreateProcessW(
+        NULL,
+        lpCommandLine,
+        NULL,
+        NULL,
+        FALSE,
+        dwCreationFlags,
+        lpEnvironment,
+        lpCurrentDirectory,
+        &startupInfo,
+        &processInfo);
+
+    if (!result) {
+        *pProcessId = 0;
+        *pResumeHandle = NULL;
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    if (processInfo.hProcess != NULL)
+    {
+        CloseHandle(processInfo.hProcess);
+    }
+
+    *pProcessId = processInfo.dwProcessId;
+    *pResumeHandle = processInfo.hThread;
+
+    return S_OK;
+}
+
+//-----------------------------------------------------------------------------
+// Public API.
+//
+// ResumeProcess - to be used with the CreateProcessForLaunch resume handle
+//
+//-----------------------------------------------------------------------------
+HRESULT
+ResumeProcess(
+    __in HANDLE hResumeHandle)
+{
+    PUBLIC_CONTRACT;
+    if (ResumeThread(hResumeHandle) == (DWORD)-1)
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    return S_OK;
+}
+
+//-----------------------------------------------------------------------------
+// Public API.
+//
+// CloseResumeHandle - to be used with the CreateProcessForLaunch resume handle
+//
+//-----------------------------------------------------------------------------
+HRESULT
+CloseResumeHandle(
+    __in HANDLE hResumeHandle)
+{
+    PUBLIC_CONTRACT;
+    if (!CloseHandle(hResumeHandle))
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    return S_OK;
+}
 
 #ifdef FEATURE_PAL
 
@@ -436,7 +540,7 @@ public:
             }
         }
 
-        if (FAILED(hr))
+        if (FAILED(hr) && !m_canceled)
         {
             m_callback(NULL, m_parameter, hr);
         }
@@ -1682,33 +1786,3 @@ CLRCreateInstance(
     return E_NOTIMPL;
 #endif
 }
-
-#ifdef FEATURE_PAL
-
-EXTERN_C BOOL WINAPI
-DllMain(HANDLE instance, DWORD reason, LPVOID reserved)
-{
-    int err = 0;
-
-    switch (reason)
-    {
-        case DLL_PROCESS_ATTACH:
-        {
-            err = PAL_InitializeDLL();
-            break;
-        }
-
-        case DLL_THREAD_ATTACH:
-            err = PAL_EnterTop();
-            break;
-    }
-
-    if (err != 0)
-    {
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-#endif // FEATURE_PAL

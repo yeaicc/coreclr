@@ -1205,9 +1205,10 @@ void                CodeGen::sched_AM(instruction  ins,
  *  Emit a "call [r/m]" instruction (the r/m operand given by a tree).
  */
 
-void                CodeGen::instEmit_indCall(GenTreePtr   call,
-                                              size_t       argSize,
-                                              emitAttr     retSize)
+void                CodeGen::instEmit_indCall(GenTreePtr                                call,
+                                              size_t                                    argSize,
+                                              emitAttr                                  retSize
+                                              FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(emitAttr    secondRetSize))
 {
     GenTreePtr              addr;
 
@@ -1244,15 +1245,16 @@ void                CodeGen::instEmit_indCall(GenTreePtr   call,
         {
             ssize_t     funcPtr = addr->gtIntCon.gtIconVal;
 
-            getEmitter()->emitIns_Call( emitter::EC_FUNC_ADDR,
-                                      NULL,    // methHnd
-                                      INDEBUG_LDISASM_COMMA(sigInfo)
-                                      (void*) funcPtr,
-                                      argSize,
-                                      retSize,
-                                      gcInfo.gcVarPtrSetCur,
-                                      gcInfo.gcRegGCrefSetCur,
-                                      gcInfo.gcRegByrefSetCur);
+            getEmitter()->emitIns_Call(emitter::EC_FUNC_ADDR,
+                                       NULL,    // methHnd
+                                       INDEBUG_LDISASM_COMMA(sigInfo)
+                                       (void*) funcPtr,
+                                       argSize,
+                                       retSize
+                                       FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(secondRetSize),
+                                       gcInfo.gcVarPtrSetCur,
+                                       gcInfo.gcRegGCrefSetCur,
+                                       gcInfo.gcRegByrefSetCur);
             return;
         }
     }
@@ -1305,15 +1307,16 @@ void                CodeGen::instEmit_indCall(GenTreePtr   call,
             {
                 ssize_t     funcPtr = addr->gtIntCon.gtIconVal;
 
-                getEmitter()->emitIns_Call( emitter::EC_FUNC_ADDR,
-                                          NULL,    // methHnd
-                                          INDEBUG_LDISASM_COMMA(sigInfo)
-                                          (void*) funcPtr,
-                                          argSize,
-                                          retSize,
-                                          gcInfo.gcVarPtrSetCur,
-                                          gcInfo.gcRegGCrefSetCur,
-                                          gcInfo.gcRegByrefSetCur);
+                getEmitter()->emitIns_Call(emitter::EC_FUNC_ADDR,
+                                           NULL,    // methHnd
+                                           INDEBUG_LDISASM_COMMA(sigInfo)
+                                           (void*) funcPtr,
+                                           argSize,
+                                           retSize
+                                           FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(secondRetSize),
+                                           gcInfo.gcVarPtrSetCur,
+                                           gcInfo.gcRegGCrefSetCur,
+                                           gcInfo.gcRegByrefSetCur);
                 return;
             }
         }
@@ -1369,17 +1372,21 @@ void                CodeGen::instEmit_indCall(GenTreePtr   call,
 
 #endif // CPU_LOAD_STORE_ARCH
 
-    getEmitter()->emitIns_Call( emitCallType,
-                              NULL,   // methHnd
-                              INDEBUG_LDISASM_COMMA(sigInfo)
-                              NULL,                 // addr
-                              argSize,
-                              retSize,
-                              gcInfo.gcVarPtrSetCur,
-                              gcInfo.gcRegGCrefSetCur,
-                              gcInfo.gcRegByrefSetCur,
-                              BAD_IL_OFFSET,        // ilOffset
-                              brg, xrg, mul, cns);  // addressing mode values
+    getEmitter()->emitIns_Call(emitCallType,
+                               NULL,   // methHnd
+                               INDEBUG_LDISASM_COMMA(sigInfo)
+                               NULL,                 // addr
+                               argSize,
+                               retSize
+                               FEATURE_UNIX_AMD64_STRUCT_PASSING_ONLY_ARG(secondRetSize),
+                               gcInfo.gcVarPtrSetCur,
+                               gcInfo.gcRegGCrefSetCur,
+                               gcInfo.gcRegByrefSetCur,
+                               BAD_IL_OFFSET,        // ilOffset
+                               brg,
+                               xrg,
+                               mul,
+                               cns);  // addressing mode values
 }
 
 #ifdef LEGACY_BACKEND
@@ -2633,46 +2640,15 @@ void        CodeGen::inst_RV_SH(instruction  ins,
     assert(val < 256);
 #endif
 
-    assert(ins == INS_rcl  ||
-           ins == INS_rcr  ||
-           ins == INS_rol  ||
-           ins == INS_ror  ||
-           ins == INS_shl  ||
-           ins == INS_shr  ||
-           ins == INS_sar);
-
-    /* Which format should we use? */
+    ins = genMapShiftInsToShiftByConstantIns(ins, val);
 
     if  (val == 1)
     {
-        /* Use the shift-by-one format */
-
-        assert(INS_rcl + 1 == INS_rcl_1);
-        assert(INS_rcr + 1 == INS_rcr_1);
-        assert(INS_rol + 1 == INS_rol_1);
-        assert(INS_ror + 1 == INS_ror_1);
-        assert(INS_shl + 1 == INS_shl_1);
-        assert(INS_shr + 1 == INS_shr_1);
-        assert(INS_sar + 1 == INS_sar_1);
-
-        getEmitter()->emitIns_R((instruction)(ins+1), size, reg);
+        getEmitter()->emitIns_R(ins, size, reg);
     }
     else
     {
-        /* Use the shift-by-NNN format */
-
-        assert(INS_rcl + 2 == INS_rcl_N);
-        assert(INS_rcr + 2 == INS_rcr_N);
-        assert(INS_rol + 2 == INS_rol_N);
-        assert(INS_ror + 2 == INS_ror_N);
-        assert(INS_shl + 2 == INS_shl_N);
-        assert(INS_shr + 2 == INS_shr_N);
-        assert(INS_sar + 2 == INS_sar_N);
-
-        getEmitter()->emitIns_R_I((instruction)(ins+2),
-                                 size,
-                                 reg,
-                                 val);
+        getEmitter()->emitIns_R_I(ins, size, reg, val);
     }
 
 #else
@@ -2691,43 +2667,20 @@ void                CodeGen::inst_TT_SH(instruction   ins,
                                         unsigned      offs)
 {
 #ifdef _TARGET_XARCH_
-    /* Which format should we use? */
-
-    switch (val)
+    if (val == 0)
     {
-    case 1:
-
-        /* Use the shift-by-one format */
-
-        assert(INS_rcl + 1 == INS_rcl_1);
-        assert(INS_rcr + 1 == INS_rcr_1);
-        assert(INS_shl + 1 == INS_shl_1);
-        assert(INS_shr + 1 == INS_shr_1);
-        assert(INS_sar + 1 == INS_sar_1);
-
-        inst_TT((instruction)(ins+1), tree, offs, 0, emitTypeSize(tree->TypeGet()));
-
-        break;
-
-    case 0:
-
         // Shift by 0 - why are you wasting our precious time????
-
         return;
+    }
 
-    default:
-
-        /* Use the shift-by-NNN format */
-
-        assert(INS_rcl + 2 == INS_rcl_N);
-        assert(INS_rcr + 2 == INS_rcr_N);
-        assert(INS_shl + 2 == INS_shl_N);
-        assert(INS_shr + 2 == INS_shr_N);
-        assert(INS_sar + 2 == INS_sar_N);
-
-        inst_TT((instruction)(ins+2), tree, offs, val, emitTypeSize(tree->TypeGet()));
-
-        break;
+    ins = genMapShiftInsToShiftByConstantIns(ins, val);
+    if (val == 1)
+    {
+        inst_TT(ins, tree, offs, 0, emitTypeSize(tree->TypeGet()));
+    }
+    else
+    {
+        inst_TT(ins, tree, offs, val, emitTypeSize(tree->TypeGet()));
     }
 #endif // _TARGET_XARCH_
 
@@ -3566,86 +3519,40 @@ bool                CodeGen::isMoveIns(instruction ins)
 
 instruction         CodeGenInterface::ins_FloatLoad(var_types type)
 {    
-#ifdef LEGACY_BACKEND 
-    switch (type)
-    {
-    case TYP_FLOAT:
-        return INS_movss;
-    case TYP_DOUBLE:
-        return INS_movsdsse2;
-    default:
-        unreached();
-    }
-#else // !LEGACY_BACKEND
     // Do Not use this routine in RyuJIT backend. Instead use ins_Load()/ins_Store()
     unreached();
-#endif // !LEGACY_BACKEND
 }
 
 // everything is just an addressing mode variation on x64
 instruction         CodeGen::ins_FloatStore(var_types type)
 {
-#ifdef LEGACY_BACKEND
-    return ins_FloatLoad(type);
-#else // !LEGACY_BACKEND
     // Do Not use this routine in RyuJIT backend. Instead use ins_Store()
     unreached();
-#endif // !LEGACY_BACKEND
 }
 
 instruction         CodeGen::ins_FloatCopy(var_types type)
 {
-#ifdef LEGACY_BACKEND
-    return ins_FloatLoad(type);
-#else // !LEGACY_BACKEND
     // Do Not use this routine in RyuJIT backend. Instead use ins_Load().
     unreached();
-#endif // !LEGACY_BACKEND
 }
 
 instruction         CodeGen::ins_FloatCompare(var_types type)
 {
-    instruction ins = INS_invalid;
-
-    ins = (type == TYP_FLOAT) ? INS_ucomiss : INS_ucomisd;
-    return ins;
+    return (type == TYP_FLOAT) ? INS_ucomiss : INS_ucomisd;
 }
 
 instruction         CodeGen::ins_CopyIntToFloat(var_types  srcType, var_types dstType)
 {
-    instruction ins = INS_invalid; 
-
     // On SSE2/AVX - the same instruction is used for moving double/quad word to XMM/YMM register.
-    InstructionSet iset = compiler->getFloatingPointInstructionSet();
-    if (srcType == TYP_INT || srcType == TYP_UINT ||
-        srcType == TYP_LONG || srcType == TYP_ULONG)
-    {
-        return INS_mov_i2xmm;
-    }
-    else
-    {
-        assert("!UNREACHED");
-    }
-    
-    return ins;
+    assert((srcType == TYP_INT) || (srcType == TYP_UINT) || (srcType == TYP_LONG) || (srcType == TYP_ULONG));
+    return INS_mov_i2xmm;
 }
 
 instruction         CodeGen::ins_CopyFloatToInt(var_types  srcType, var_types dstType)
 {
-    instruction ins = INS_invalid; 
-
     // On SSE2/AVX - the same instruction is used for moving double/quad word of XMM/YMM to an integer register.
-    if (dstType == TYP_INT || dstType == TYP_LONG ||
-        dstType == TYP_UINT || dstType == TYP_ULONG)
-    {
-        return INS_mov_xmm2i;
-    }
-    else
-    {
-        assert("!UNREACHED");
-    }
-    
-    return ins;
+    assert((dstType == TYP_INT) || (dstType == TYP_UINT) || (dstType == TYP_LONG) || (dstType == TYP_ULONG));
+    return INS_mov_xmm2i;
 }
 
 instruction         CodeGen::ins_MathOp(genTreeOps oper, var_types type)
@@ -3900,13 +3807,12 @@ void                CodeGen::instGen_Return(unsigned stkArgSize)
  *  Emit a MemoryBarrier instruction
  *
  *     Note: all MemoryBarriers instructions can be removed by
- *           SET COMPLUS_JitNoMemoryBarriers=1
+ *           SET COMPlus_JitNoMemoryBarriers=1
  */
 void                CodeGen::instGen_MemoryBarrier()
 {
 #ifdef DEBUG
-    static ConfigDWORD fJitNoMemoryBarriers;
-    if (fJitNoMemoryBarriers.val(CLRConfig::INTERNAL_JitNoMemoryBarriers) == 1)
+    if (JitConfig.JitNoMemoryBarriers() == 1)
         return;
 #endif // DEBUG
 
