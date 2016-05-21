@@ -2696,12 +2696,12 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* callNode)
         // convention for x86/SSE.
         if (!lateArgsComputed)
         {
-            if (call->IsUnmanaged())
+            if (call->IsUnmanaged() && !opts.ShouldUsePInvokeHelpers())
             {
                 assert(!call->gtCallCookie);
                 // Add a conservative estimate of the stack size in a special parameter (r11) at the call site.
                 // It will be used only on the intercepted-for-host code path to copy the arguments.             
-                
+
                 GenTree* cns = new (this, GT_CNS_INT) GenTreeIntCon(TYP_I_IMPL, fgEstimateCallStackSize(call));
                 call->gtCallArgs = gtNewListNode(cns, call->gtCallArgs);
                 NonStandardArg nsa = {REG_PINVOKE_COOKIE_PARAM, cns};
@@ -2868,7 +2868,6 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* callNode)
             maxRegArgs++;
     }
 
-#if INLINE_NDIRECT
     if (call->IsUnmanaged())
     {
         noway_assert(intArgRegNum == 0);
@@ -2889,7 +2888,6 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* callNode)
         if (callHasRetBuffArg)
             maxRegArgs++;
     }
-#endif // INLINE_NDIRECT
 #endif // _TARGET_X86_
 
     /* Morph the user arguments */
@@ -6217,30 +6215,31 @@ bool                Compiler::fgCanFastTailCall(GenTreeCall* callee)
             // Get the size of the struct and see if it is register passable.
             if (argx->OperGet() == GT_OBJ)
             {
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_)
 
                 unsigned typeSize = 0;
                 hasMultiByteArgs = !VarTypeIsMultiByteAndCanEnreg(argx->TypeGet(), argx->gtObj.gtClass, &typeSize, false);
 
-#if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
-                // On System V the args could be a 2 eightbyte struct that is passed in two registers.
+#if defined(FEATURE_UNIX_AMD64_STRUCT_PASSING) || defined(_TARGET_ARM64_)
+                // On System V/arm64 the args could be a 2 eightbyte struct that is passed in two registers.
                 // Account for the second eightbyte in the nCalleeArgs.
-                // TODO-CQ-Amd64-Unix:  Structs of size between 9 to 16 bytes are conservatively estimated
-                //                      as two args, since they need two registers. Whereas nCallerArgs is
-                //                      counting such an arg as one.This would mean we will not be optimizing 
-                //                      certain calls  though technically possible.
+                // https://github.com/dotnet/coreclr/issues/2666
+                // TODO-CQ-Amd64-Unix/arm64:  Structs of size between 9 to 16 bytes are conservatively estimated
+                //                            as two args, since they need two registers whereas nCallerArgs is
+                //                            counting such an arg as one. This would mean we will not be optimizing
+                //                            certain calls though technically possible.
 
                 if (typeSize > TARGET_POINTER_SIZE)
                 {
                     unsigned extraArgRegsToAdd = (typeSize / TARGET_POINTER_SIZE);
                     nCalleeArgs += extraArgRegsToAdd;
                 }
-#endif // defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
+#endif // FEATURE_UNIX_AMD64_STRUCT_PASSING || _TARGET_ARM64_
 
 #else
                 assert(!"Target platform ABI rules regarding passing struct type args in registers");
                 unreached();
-#endif //_TARGET_AMD64_
+#endif //_TARGET_AMD64_ || _TARGET_ARM64_
 
             }
             else
@@ -6962,6 +6961,14 @@ GenTreePtr          Compiler::fgMorphCall(GenTreeCall* call)
                     // in Stublinkerx86.cpp.
                     szFailReason = "Method with non-standard args passed in callee trash register cannot be tail called via helper";
                 }
+#ifdef _TARGET_ARM64_
+                else
+                {
+                    // NYI - TAILCALL_RECURSIVE/TAILCALL_HELPER.
+                    // So, bail out if we can't make fast tail call.
+                    szFailReason = "Non-qualified fast tail call";
+                }
+#endif
 #endif //LEGACY_BACKEND
             }
         }
@@ -7098,81 +7105,102 @@ GenTreePtr          Compiler::fgMorphCall(GenTreeCall* call)
         }
 #endif
 
-        GenTreePtr stmtExpr = fgMorphStmt->gtStmt.gtStmtExpr;
-        bool deleteReturn = false;
-        if (info.compRetBuffArg != BAD_VAR_NUM)
-        {
-            // In this case we simply have a call followed by a return.
-            noway_assert(fgMorphStmt->gtNext->gtStmt.gtStmtExpr->gtOper == GT_RETURN);
-            deleteReturn = true;
-        }
-        else if ((stmtExpr->gtOper == GT_ASG) && (fgMorphStmt->gtNext != nullptr))
-        {
-            GenTreePtr nextStmtExpr = fgMorphStmt->gtNext->gtStmt.gtStmtExpr;
-            noway_assert(nextStmtExpr->gtOper == GT_RETURN);
-            // In this case we have an assignment of the result of the call, and then a return of the  result of the assignment.
-            // This can occur if impSpillStackEnsure() has introduced an assignment to a temp.
-            noway_assert(stmtExpr->gtGetOp1()->OperIsLocal() &&
-                         nextStmtExpr->OperGet() == GT_RETURN &&
-                         nextStmtExpr->gtGetOp1() != nullptr &&
-                         nextStmtExpr->gtGetOp1()->OperIsLocal() &&
-                         stmtExpr->gtGetOp1()->AsLclVarCommon()->gtLclNum == nextStmtExpr->gtGetOp1()->AsLclVarCommon()->gtLclNum);
-            deleteReturn = true;
-        }
-        if (deleteReturn)
-        {
-            fgRemoveStmt(compCurBB, fgMorphStmt->gtNext);
-        }
+        
+        GenTreePtr stmtExpr = fgMorphStmt->gtStmt.gtStmtExpr; 
+        
+#ifdef DEBUG
+        // Tail call needs to be in one of the following IR forms
+        //    Either a call stmt or
+        //    GT_RETURN(GT_CALL(..)) or 
+        //    var = call
+        noway_assert((stmtExpr->gtOper == GT_CALL && stmtExpr == call) ||   
+                     (stmtExpr->gtOper == GT_RETURN && (stmtExpr->gtOp.gtOp1 == call || stmtExpr->gtOp.gtOp1->gtOp.gtOp1 == call)) || 
+                     (stmtExpr->gtOper == GT_ASG && stmtExpr->gtOp.gtOp2 == call));  
+#endif
 
         // For void calls, we would have created a GT_CALL in the stmt list.
         // For non-void calls, we would have created a GT_RETURN(GT_CAST(GT_CALL)).
         // For calls returning structs, we would have a void call, followed by a void return.
         // For debuggable code, it would be an assignment of the call to a temp
         // We want to get rid of any of this extra trees, and just leave
-        // the call
-        
-        bool tailCallFollowedByPopAndRet = false;
-        GenTreePtr stmt;
+        // the call.
+        GenTreePtr nextMorphStmt = fgMorphStmt->gtNext;
 
-#ifdef DEBUG
-        noway_assert((stmtExpr->gtOper == GT_CALL && stmtExpr == call) ||   // Either a call stmt
-                     (stmtExpr->gtOper == GT_RETURN && (stmtExpr->gtOp.gtOp1 == call || stmtExpr->gtOp.gtOp1->gtOp.gtOp1 == call)) || // GT_RETURN(GT_CALL(..))
-                     (stmtExpr->gtOper == GT_ASG && stmtExpr->gtOp.gtOp2 == call));  // or var = call
-#endif
-        
 #ifdef _TARGET_AMD64_
-        if ((stmtExpr->gtOper == GT_CALL) && (fgMorphStmt->gtNext != nullptr))
+        // Legacy Jit64 Compat:
+        // There could be any number of GT_NOPs between tail call and GT_RETURN.
+        // That is tail call pattern could be one of the following:
+        //  1) tail.call, nop*, ret 
+        //  2) tail.call, nop*, pop, nop*, ret  
+        //  3) var=tail.call, nop*, ret(var) 
+        //  4) var=tail.call, nop*, pop, ret
+        //
+        // See impIsTailCallILPattern() for details on tail call IL patterns
+        // that are supported.
+        if ((stmtExpr->gtOper == GT_CALL) || (stmtExpr->gtOper == GT_ASG))
         {
-            // We have a stmt node after a tail call node. This must be a tail call occuring
-            // in the following IL pattern
-            //    tail.call
-            //    pop
-            //    ret
-            // Since tail prefix is honored, we can get rid of the remaining two stmts
-            // corresponding to pop and ret. Note that 'pop' may or may not result in 
-            // a new statement (see impImportBlockCode() for details).
-            stmt = fgMorphStmt->gtNext;
-            if (stmt->gtNext != nullptr) 
+            // First delete all GT_NOPs after the call
+            GenTreePtr morphStmtToRemove = nullptr;
+            while (nextMorphStmt != nullptr)
             {
-                // We have a pop tree. 
-                // It must be side effect free.
-                GenTreePtr ret = stmt->gtNext;
-                noway_assert((stmt->gtStmt.gtStmtExpr->gtFlags & GTF_ALL_EFFECT) == 0);
-                fgRemoveStmt(compCurBB, stmt);
-                stmt = ret;
+                GenTreePtr nextStmtExpr = nextMorphStmt->gtStmt.gtStmtExpr;
+                if (!nextStmtExpr->IsNothingNode())
+                {
+                    break;
+                }
+
+                morphStmtToRemove = nextMorphStmt;
+                nextMorphStmt = morphStmtToRemove->gtNext;
+                fgRemoveStmt(compCurBB, morphStmtToRemove);
             }
-            noway_assert(stmt->gtStmt.gtStmtExpr->gtOper == GT_RETURN);
-            fgRemoveStmt(compCurBB, stmt);
-            
-            tailCallFollowedByPopAndRet = true;
+
+            // Check to see if there is a pop.
+            // Since tail call is honored, we can get rid of the stmt corresponding to pop.
+            if (nextMorphStmt != nullptr && nextMorphStmt->gtStmt.gtStmtExpr->gtOper != GT_RETURN)
+            {                
+                // Note that pop opcode may or may not result in a new stmt (for details see
+                // impImportBlockCode()). Hence, it is not possible to assert about the IR
+                // form generated by pop but pop tree must be side-effect free so that we can
+                // delete it safely.
+                GenTreePtr popStmt = nextMorphStmt;
+                nextMorphStmt = nextMorphStmt->gtNext;
+
+                noway_assert((popStmt->gtStmt.gtStmtExpr->gtFlags & GTF_ALL_EFFECT) == 0);
+                fgRemoveStmt(compCurBB, popStmt);
+            }
+
+            // Next delete any GT_NOP nodes after pop
+            while (nextMorphStmt != nullptr)
+            {
+                GenTreePtr nextStmtExpr = nextMorphStmt->gtStmt.gtStmtExpr;
+                if (!nextStmtExpr->IsNothingNode())
+                {
+                    break;
+                }
+
+                morphStmtToRemove = nextMorphStmt;
+                nextMorphStmt = morphStmtToRemove->gtNext;
+                fgRemoveStmt(compCurBB, morphStmtToRemove);
+            }
         }
-#else //!TARGET_AMD64_
+#endif // _TARGET_AMD64_
 
-#ifdef DEBUG
-        noway_assert(fgMorphStmt->gtNext == nullptr);
-#endif
+        // Delete GT_RETURN  if any
+        if (nextMorphStmt != nullptr)
+        {
+            GenTreePtr retExpr = nextMorphStmt->gtStmt.gtStmtExpr;
+            noway_assert(retExpr->gtOper == GT_RETURN);
 
-#endif //!_TARGET_AMD64_
+            // If var=call, then the next stmt must be a GT_RETURN(TYP_VOID) or GT_RETURN(var).
+            // This can occur if impSpillStackEnsure() has introduced an assignment to a temp.
+            if (stmtExpr->gtOper == GT_ASG && info.compRetType != TYP_VOID)
+            {                
+                noway_assert(stmtExpr->gtGetOp1()->OperIsLocal());
+                noway_assert(stmtExpr->gtGetOp1()->AsLclVarCommon()->gtLclNum == retExpr->gtGetOp1()->AsLclVarCommon()->gtLclNum);
+            }
+
+            fgRemoveStmt(compCurBB, nextMorphStmt);
+        }
 
         fgMorphStmt->gtStmt.gtStmtExpr = call;
 
@@ -7222,16 +7250,10 @@ GenTreePtr          Compiler::fgMorphCall(GenTreeCall* call)
         }
 
         // For non-void calls, we return a place holder which will be
-        // used by the parent GT_RETURN node of this call.  This should
-        // not be done for tail calls occuring in the following IL pattern,
-        // since this pattern is supported only in void returning methods.
-        //    tail.call
-        //    pop
-        //    ret
+        // used by the parent GT_RETURN node of this call. 
 
         GenTree* result = call;
-
-        if (!tailCallFollowedByPopAndRet && (callType != TYP_VOID) && info.compRetType != TYP_VOID)
+        if (callType != TYP_VOID && info.compRetType != TYP_VOID)
         {
 #ifdef _TARGET_ARM_
             // Return a dummy node, as the return is already removed.
@@ -14707,12 +14729,10 @@ void                Compiler::fgSetOptions()
         codeGen->setFramePointerRequiredGCInfo(true);
     }
 
-#if INLINE_NDIRECT
     if (info.compCallUnmanaged)
     {
         codeGen->setFramePointerRequired(true);  // Setup of Pinvoke frame currently requires an EBP style frame
     }
-#endif
 
     if (info.compPublishStubParam)
     {
@@ -15555,43 +15575,54 @@ void                Compiler::fgPromoteStructs()
     //
 
     lvaStructPromotionInfo structPromotionInfo;
+    bool tooManyLocals = false;
 
     for (unsigned lclNum = 0;
-        lclNum < startLvaCount;
-        lclNum++)
+         lclNum < startLvaCount;
+         lclNum++)
     {
+        // Whether this var got promoted
+        bool promotedVar = false;
         LclVarDsc*  varDsc = &lvaTable[lclNum];
-
-        // Don't promote if we have reached the tracking limit.
-        if (lvaHaveManyLocals())
-        {
-            JITDUMP("Stopped promoting struct fields, due to too many locals.\n");
-            break;
-        }
-#if !FEATURE_MULTIREG_STRUCT_PROMOTE
-        if (varDsc->lvIsMultiRegArgOrRet)
-        {
-            JITDUMP("Skipping V%02u: marked lvIsMultiRegArgOrRet.\n", lclNum);
-            continue;
-        }
-#endif // !FEATURE_MULTIREG_STRUCT_PROMOTE
 
 #ifdef FEATURE_SIMD
         if (varDsc->lvSIMDType && varDsc->lvUsedInSIMDIntrinsic)
         {
             // If we have marked this as lvUsedInSIMDIntrinsic, then we do not want to promote
             // its fields.  Instead, we will attempt to enregister the entire struct.
-            // Note, however, that if the code below does not decide to promote this struct,
-            // we will still set lvRegStruct if its fields have not been accessed.
             varDsc->lvRegStruct = true;
         }
         else
-#endif // FEATURE_SIMD
-        if (varTypeIsStruct(varDsc))
+#endif //FEATURE_SIMD
+        // Don't promote if we have reached the tracking limit.
+        if (lvaHaveManyLocals())
+        {
+            // Print the message first time when we detected this condition
+            if (!tooManyLocals)
+            {
+                JITDUMP("Stopped promoting struct fields, due to too many locals.\n");
+            }
+            tooManyLocals = true;
+        }
+#if !FEATURE_MULTIREG_STRUCT_PROMOTE
+        else if (varDsc->lvIsMultiRegArgOrRet)
+        {
+            JITDUMP("Skipping V%02u: marked lvIsMultiRegArgOrRet.\n", lclNum);
+        }
+#endif // !FEATURE_MULTIREG_STRUCT_PROMOTE
+        else if (varTypeIsStruct(varDsc))
         {
             lvaCanPromoteStructVar(lclNum, &structPromotionInfo);
-            if (structPromotionInfo.canPromote)
+            bool canPromote = structPromotionInfo.canPromote;            
+
+            // We start off with shouldPromote same as canPromote.
+            // Based on further profitablity checks done below, shouldPromote
+            // could be set to false.
+            bool shouldPromote = canPromote;
+
+            if (canPromote)
             {
+                
                 // We *can* promote; *should* we promote?
                 // We should only do so if promotion has potential savings.  One source of savings
                 // is if a field of the struct is accessed, since this access will be turned into
@@ -15605,7 +15636,7 @@ void                Compiler::fgPromoteStructs()
                 {
                     JITDUMP("Not promoting promotable struct local V%02u: #fields = %d, fieldAccessed = %d.\n",
                         lclNum, structPromotionInfo.fieldCnt, varDsc->lvFieldAccessed);
-                    continue;
+                    shouldPromote = false;
                 }
 #if defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_)
                 // TODO-PERF - Only do this when the LclVar is used in an argument context
@@ -15616,29 +15647,29 @@ void                Compiler::fgPromoteStructs()
                 // Promoting it can cause us to shuffle it back and forth between the int and 
                 //  the float regs when it is used as a argument, which is very expensive for XARCH
                 //
-                if (structPromotionInfo.fieldCnt==1
-                    && varTypeIsFloating(structPromotionInfo.fields[0].fldType))
+                else if ((structPromotionInfo.fieldCnt == 1) &&
+                          varTypeIsFloating(structPromotionInfo.fields[0].fldType))
                 {
                     JITDUMP("Not promoting promotable struct local V%02u: #fields = %d because it is a struct with single float field.\n",
                             lclNum, structPromotionInfo.fieldCnt);
-                    continue;
+                    shouldPromote = false;
                 }
 #endif // _TARGET_AMD64_ || _TARGET_ARM64_
+
 #if !FEATURE_MULTIREG_STRUCT_PROMOTE
 #if defined(_TARGET_ARM64_)
                 //
                 // For now we currently don't promote structs that could be passed in registers
                 //
-                if (varDsc->lvIsMultiregStruct())
+                else if (varDsc->lvIsMultiregStruct())
                 {
                     JITDUMP("Not promoting promotable struct local V%02u (size==%d): ",
                             lclNum, lvaLclExactSize(lclNum));
-                    continue;
+                    shouldPromote = false;
                 }
 #endif // _TARGET_ARM64_
 #endif // !FEATURE_MULTIREG_STRUCT_PROMOTE
-
-                if (varDsc->lvIsParam)
+                else if (varDsc->lvIsParam)
                 {
 #if FEATURE_MULTIREG_STRUCT_PROMOTE                   
                     if (varDsc->lvIsMultiregStruct() &&         // Is this a variable holding a value that is passed in multiple registers?
@@ -15646,8 +15677,9 @@ void                Compiler::fgPromoteStructs()
                     {
                         JITDUMP("Not promoting multireg struct local V%02u, because lvIsParam is true and #fields != 2\n",
                                 lclNum);
-                        continue;
+                        shouldPromote = false;
                     }
+                    else
 #endif  // !FEATURE_MULTIREG_STRUCT_PROMOTE
 
                     // TODO-PERF - Implement struct promotion for incoming multireg structs
@@ -15657,7 +15689,7 @@ void                Compiler::fgPromoteStructs()
                     {
                         JITDUMP("Not promoting promotable struct local V%02u, because lvIsParam is true and #fields = %d.\n",
                                 lclNum, structPromotionInfo.fieldCnt);
-                        continue;
+                        shouldPromote = false;
                     }
                 }
 
@@ -15676,9 +15708,14 @@ void                Compiler::fgPromoteStructs()
                 if (atoi(getenv("structpromovarnumlo")) <= structPromoVarNum && structPromoVarNum <= atoi(getenv("structpromovarnumhi")))
 #endif // 0
 
+                if (shouldPromote)
                 {
+                    assert(canPromote);
+
                     // Promote the this struct local var.
                     lvaPromoteStructVar(lclNum, &structPromotionInfo);
+                    promotedVar = true;
+
 #ifdef _TARGET_ARM_
                     if (structPromotionInfo.requiresScratchVar)
                     {
@@ -15694,15 +15731,17 @@ void                Compiler::fgPromoteStructs()
 #endif // _TARGET_ARM_
                 }
             }
-#ifdef FEATURE_SIMD
-            else if (varDsc->lvSIMDType && !varDsc->lvFieldAccessed)
-            {
-                // Even if we have not used this in a SIMD intrinsic, if it is not being promoted,
-                // we will treat it as a reg struct.
-                varDsc->lvRegStruct = true;
-            }
-#endif // FEATURE_SIMD
         }
+
+#ifdef FEATURE_SIMD
+        if (!promotedVar && varDsc->lvSIMDType && !varDsc->lvFieldAccessed)
+        {
+            // Even if we have not used this in a SIMD intrinsic, if it is not being promoted,
+            // we will treat it as a reg struct.
+            varDsc->lvRegStruct = true;
+        }
+#endif // FEATURE_SIMD
+
     }
 }
 

@@ -3,7 +3,7 @@
   <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), dir.props))\dir.props" />
   
   <PropertyGroup>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <SkipPackageFileCheck>true</SkipPackageFileCheck>
     <MinOSForArch>win7</MinOSForArch>
     <MinOSForArch Condition="$(PackagePlatform.StartsWith('arm'))">win8</MinOSForArch>
@@ -12,16 +12,17 @@
   
   <ItemGroup>
     <ArchitectureSpecificNativeFile Include="$(BinDir)clretwrc.dll"/>
-    <ArchitectureSpecificNativeFile Include="$(BinDir)clrjit.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)coreclr.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)dbgshim.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)mscordaccore.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)mscordbi.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)mscorlib.ni.dll"/>
+    <ArchitectureSpecificNativeFile Include="$(BinDir)System.Private.CoreLib.ni.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)mscorrc.debug.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)mscorrc.dll"/>
     <ArchitectureSpecificNativeFile Include="$(BinDir)sos.dll"/>
 
+    <ArchitectureSpecificLibFile Include="$(BinDir)System.Private.CoreLib.dll"/>
     <ArchitectureSpecificLibFile Include="$(BinDir)mscorlib.dll"/>
 
     <ArchitectureSpecificToolFile Include="$(BinDir)crossgen.exe"/>

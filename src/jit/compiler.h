@@ -2218,11 +2218,10 @@ public :
     unsigned            lvaVarargsBaseOfStkArgs;    // Pointer (computed based on incoming varargs handle) to the start of the stack arguments
 #endif // _TARGET_X86_
 
-#if INLINE_NDIRECT
     unsigned            lvaInlinedPInvokeFrameVar;  // variable representing the InlinedCallFrame
+    unsigned            lvaReversePInvokeFrameVar;  // variable representing the reverse PInvoke frame
 #if FEATURE_FIXED_OUT_ARGS
     unsigned            lvaPInvokeFrameRegSaveVar;  // variable representing the RegSave for PInvoke inlining.
-#endif
 #endif
     unsigned            lvaMonAcquired; // boolean variable introduced into in synchronized methods 
                                         // that tracks whether the lock has been taken
@@ -2656,10 +2655,8 @@ protected :
                                                 unsigned mflags);
     GenTreePtr          impImportIndirectCall(CORINFO_SIG_INFO * sig,
                                               IL_OFFSETX ilOffset = BAD_IL_OFFSET);
-#ifdef INLINE_NDIRECT
     void                impPopArgsForUnmanagedCall(GenTreePtr call,
                                                    CORINFO_SIG_INFO * sig);
-#endif // INLINE_NDIRECT
 
     void                impInsertHelperCall(CORINFO_HELPER_DESC * helperCall);
     void                impHandleAccessAllowed(CorInfoIsAccessAllowedResult result,
@@ -2818,12 +2815,13 @@ public:
         return impTokenToHandle(pResolvedToken, pRuntimeLookup, mustRestoreHandle, TRUE);
     }
 
-    GenTreePtr          impLookupToTree(CORINFO_LOOKUP *pLookup,
+    GenTreePtr          impLookupToTree(CORINFO_RESOLVED_TOKEN *pResolvedToken, 
+                                        CORINFO_LOOKUP *pLookup,
                                         unsigned flags,
                                         void *compileTimeHandle);
 
-    GenTreePtr          impRuntimeLookupToTree(CORINFO_RUNTIME_LOOKUP_KIND kind,
-                                               CORINFO_RUNTIME_LOOKUP *pLookup,
+    GenTreePtr          impRuntimeLookupToTree(CORINFO_RESOLVED_TOKEN *pResolvedToken, 
+                                               CORINFO_LOOKUP *pLookup,
                                                void * compileTimeHandle);
 
     GenTreePtr          impReadyToRunLookupToTree(CORINFO_CONST_LOOKUP *pLookup,
@@ -2833,7 +2831,8 @@ public:
     GenTreePtr          impReadyToRunHelperToTree(CORINFO_RESOLVED_TOKEN * pResolvedToken,
                                         CorInfoHelpFunc helper,
                                         var_types type,
-                                        GenTreePtr arg = NULL);
+                                        GenTreeArgList* arg = NULL,
+                                        CORINFO_LOOKUP_KIND * pGenericLookupKind = NULL);
 
     GenTreePtr          impCastClassOrIsInstToTree(GenTreePtr op1, 
                                         GenTreePtr op2,
@@ -3138,9 +3137,11 @@ private:
                                                 GenTreePtr additionalTreesToBeEvaluatedBefore,
                                                 GenTreePtr variableBeingDereferenced,
                                                 InlArgInfo * inlArgInfo);
-    void                impMarkInlineCandidate(GenTreePtr call, CORINFO_CONTEXT_HANDLE exactContextHnd);
 
-    
+    void                impMarkInlineCandidate(GenTreePtr call,
+                                               CORINFO_CONTEXT_HANDLE exactContextHnd,
+                                               CORINFO_CALL_INFO* callInfo);
+
     bool                impTailCallRetTypeCompatible(var_types callerRetType, 
                                                      CORINFO_CLASS_HANDLE callerRetTypeClass,
                                                      var_types calleeRetType,
@@ -3408,6 +3409,8 @@ public :
     void                fgConvertSyncReturnToLeave(BasicBlock* block);
 
 #endif // !_TARGET_X86_
+
+    void                fgAddReversePInvokeEnterExit();
 
     bool                fgMoreThanOneReturnBlock();
 
@@ -6358,6 +6361,38 @@ public :
 
     GenTreePtr                  eeGetPInvokeCookie(CORINFO_SIG_INFO *szMetaSig);
 
+    // Returns the page size for the target machine as reported by the EE.
+    inline size_t               eeGetPageSize()
+    {
+#if COR_JIT_EE_VERSION > 460
+        return eeGetEEInfo()->osPageSize;
+#else // COR_JIT_EE_VERSION <= 460
+        return CORINFO_PAGE_SIZE;
+#endif // COR_JIT_EE_VERSION > 460
+    }
+
+    // Returns the frame size at which we will generate a loop to probe the stack.
+    inline size_t               getVeryLargeFrameSize()
+    {
+#ifdef _TARGET_ARM_
+        // The looping probe code is 40 bytes, whereas the straight-line probing for
+        // the (0x2000..0x3000) case is 44, so use looping for anything 0x2000 bytes
+        // or greater, to generate smaller code.
+        return 2 * eeGetPageSize();
+#else
+        return 3 * eeGetPageSize();
+#endif
+    }
+
+    inline bool                 generateCFIUnwindCodes()
+    {
+#if COR_JIT_EE_VERSION > 460 && defined(UNIX_AMD64_ABI)
+        return eeGetEEInfo()->targetAbi == CORINFO_CORERT_ABI;
+#else
+        return false;
+#endif
+    }
+
     // Exceptions
 
     unsigned                    eeGetEHcount        (CORINFO_METHOD_HANDLE handle);
@@ -6455,6 +6490,14 @@ public :
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
 
     bool eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken);
+
+    template<typename ParamType>
+    bool eeRunWithErrorTrap(void (*function)(ParamType*), ParamType* param)
+    {
+        return eeRunWithErrorTrapImp(reinterpret_cast<void (*)(void*)>(function), reinterpret_cast<void*>(param));
+    }
+
+    bool eeRunWithErrorTrapImp(void (*function)(void*), void* param);
 
     // Utility functions
 
@@ -7450,10 +7493,33 @@ public :
 #endif
         }
 
-        // true if we must generate compatible code with Jit64 quirks
+        // true if we should use insert the REVERSE_PINVOKE_{ENTER,EXIT} helpers in the method
+        // prolog/epilog
+        inline bool         IsReversePInvoke()
+        {
+#if COR_JIT_EE_VERSION > 460
+            return (jitFlags->corJitFlags2 & CORJIT_FLG2_REVERSE_PINVOKE) != 0;
+#else
+            return false;
+#endif
+        }
+
+        // true if we must generate code compatible with JIT32 quirks
+        inline bool         IsJit32Compat()
+        {
+#if defined(_TARGET_X86_) && COR_JIT_EE_VERSION > 460
+            return (jitFlags->corJitFlags2 & CORJIT_FLG2_DESKTOP_QUIRKS) != 0;
+#else
+            return false;
+#endif
+        }
+
+        // true if we must generate code compatible with Jit64 quirks
         inline bool         IsJit64Compat()
         {
-#if defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
+#if defined(_TARGET_AMD64_) && COR_JIT_EE_VERSION > 460
+            return (jitFlags->corJitFlags2 & CORJIT_FLG2_DESKTOP_QUIRKS) != 0;
+#elif defined(_TARGET_AMD64_) && !defined(FEATURE_CORECLR)
             return true;
 #else
             return false;
@@ -7544,7 +7610,7 @@ public :
         bool                dspOrder;       // Display names of each of the methods that we ngen/jit
         bool                dspUnwind;      // Display the unwind info output
         bool                dspDiffable;    // Makes the Jit Dump 'diff-able' (currently uses same COMPlus_* flag as disDiffable)
-        bool                compLargeBranches; // Force using large conditional branches
+        bool                compLongAddress;// Force using large pseudo instructions for long address (IF_LARGEJMP/IF_LARGEADR/IF_LARGLDC)
         bool                dspGCtbls;      // Display the GC tables
 #endif
 
@@ -7793,10 +7859,8 @@ public :
         UNATIVE_OFFSET  compTotalHotCodeSize;       // Total number of bytes of Hot Code in the method
         UNATIVE_OFFSET  compTotalColdCodeSize;      // Total number of bytes of Cold Code in the method
 
-#if INLINE_NDIRECT
         unsigned        compCallUnmanaged;          // count of unmanaged calls
         unsigned        compLvFrameListRoot;        // lclNum for the Frame root
-#endif
         unsigned        compXcptnsCount;            // Number of exception-handling clauses read in the method's IL.
                                                     // You should generally use compHndBBtabCount instead: it is the
                                                     // current number of EH clauses (after additions like synchronized
@@ -7861,11 +7925,14 @@ public :
         // 2. As per the System V ABI, the address of RetBuf needs to be returned by  
         //    methods with hidden RetBufArg in RAX. In such case GT_RETURN is of TYP_BYREF,  
         //    returning the address of RetBuf.  
-#ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
+        //
+        // 3. Windows 64-bit native calling convention also requires the address of RetBuff
+        //    to be returned in RAX.
+#ifdef _TARGET_AMD64_
         return (info.compRetBuffArg != BAD_VAR_NUM);
-#else // FEATURE_UNIX_AMD64_STRUCT_PASSING  
+#else // !_TARGET_AMD64_  
         return (compIsProfilerHookNeeded()) && (info.compRetBuffArg != BAD_VAR_NUM);
-#endif // !FEATURE_UNIX_AMD64_STRUCT_PASSING  
+#endif // !_TARGET_AMD64_
     }
 
     // Returns true if the method returns a value in more than one return register
@@ -8074,7 +8141,7 @@ public :
             nraTotalSizeUsed  += ms.nraTotalSizeUsed;
         }
 
-        void Print(FILE* f); // Print these stats to stdout.
+        void Print(FILE* f); // Print these stats to jitstdout.
     };
 
     static CritSecObject s_memStatsLock;    // This lock protects the data structures below.
@@ -8230,9 +8297,12 @@ public:
 #endif // DEBUG
 #endif // MEASURE_MEM_ALLOC
 
+    void                compFunctionTraceStart();
+    void                compFunctionTraceEnd(void* methodCodePtr, ULONG methodCodeSize, bool isNYI);
+
 protected:
 
-    unsigned            compMaxUncheckedOffsetForNullObject; 
+    size_t              compMaxUncheckedOffsetForNullObject; 
 
     void                compInitOptions (CORJIT_FLAGS* compileFlags);
 
@@ -9075,18 +9145,8 @@ extern const BYTE          genActualTypes[];
 
 /*****************************************************************************/
 
-// Define the frame size at which we will generate a loop to probe the stack.
-// VERY_LARGE_FRAME_SIZE_REG_MASK is the set of registers we need to use for the probing loop.
-
-#ifdef _TARGET_ARM_
-// The looping probe code is 40 bytes, whereas the straight-line probing for
-// the (0x2000..0x3000) case is 44, so use looping for anything 0x2000 bytes
-// or greater, to generate smaller code.
-
-#define VERY_LARGE_FRAME_SIZE           (2 * CORINFO_PAGE_SIZE)
-#else
-#define VERY_LARGE_FRAME_SIZE           (3 * CORINFO_PAGE_SIZE)
-#endif
+// VERY_LARGE_FRAME_SIZE_REG_MASK is the set of registers we need to use for
+// the probing loop generated for very large stack frames (see `getVeryLargeFrameSize`).
 
 #ifdef _TARGET_ARM_
 #define VERY_LARGE_FRAME_SIZE_REG_MASK  (RBM_R4 | RBM_R5 | RBM_R6)

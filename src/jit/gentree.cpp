@@ -499,7 +499,6 @@ Compiler::fgWalkResult      Compiler::fgWalkTreePreRec(GenTreePtr *pTree, fgWalk
 
             assert(tree->gtFlags & GTF_CALL);
 
-#if INLINE_NDIRECT
             /* Is this a call to unmanaged code ? */
             if  (fgWalkData->wtprLclsOnly && (tree->gtFlags & GTF_CALL_UNMANAGED))
             {
@@ -507,7 +506,7 @@ Compiler::fgWalkResult      Compiler::fgWalkTreePreRec(GenTreePtr *pTree, fgWalk
                 if  (result == WALK_ABORT)
                     return result;
             }
-#endif
+
             if  (tree->gtCall.gtCallObjp)
             {
                 result = fgWalkTreePreRec<computeStack>(&tree->gtCall.gtCallObjp, fgWalkData);
@@ -1091,13 +1090,20 @@ Compiler::fgWalkResult  Compiler::fgWalkTree(GenTreePtr  * pTree,
     return result;
 }
 
-// Sets the register to the "no register assignment" value, depending upon the type
-// of the node, and whether it fits any of the special cases for register pairs.
-
+// ------------------------------------------------------------------------------------------
+// gtClearReg: Sets the register to the "no register assignment" value, depending upon
+// the type of the node, and whether it fits any of the special cases for register pairs
+// or multi-reg call nodes.
+//
+// Arguments:
+//     compiler  -  compiler instance
+//
+// Return Value:
+//     None
 void
 GenTree::gtClearReg(Compiler* compiler)
 {
-#if !defined(LEGACY_BACKEND) && !defined(_TARGET_64BIT_)
+#if CPU_LONG_USES_REGPAIR
     if (isRegPairType(TypeGet()) ||
         // (IsLocal() && isRegPairType(compiler->lvaTable[gtLclVarCommon.gtLclNum].TypeGet())) ||
         (OperGet() == GT_MUL && (gtFlags & GTF_MUL_64RSLT)))
@@ -1105,10 +1111,222 @@ GenTree::gtClearReg(Compiler* compiler)
         gtRegPair = REG_PAIR_NONE;
     }
     else
-#endif // !defined(LEGACY_BACKEND) && !defined(_TARGET_64BIT_)
+#endif // CPU_LONG_USES_REGPAIR
     {
         gtRegNum = REG_NA;
     }
+
+    // Also clear multi-reg state if this is a call node
+    if (IsCall())
+    {
+        this->AsCall()->ClearOtherRegs();
+    }
+    else if (IsCopyOrReload())
+    {
+        this->AsCopyOrReload()->ClearOtherRegs();
+    }
+}
+
+//-----------------------------------------------------------
+// CopyReg: Copy the _gtRegNum/_gtRegPair/gtRegTag fields.
+//
+// Arguments:
+//     from   -  GenTree node from which to copy
+//
+// Return Value:
+//     None
+void 
+GenTree::CopyReg(GenTreePtr from)
+{
+    // To do the copy, use _gtRegPair, which must be bigger than _gtRegNum. Note that the values
+    // might be undefined (so gtRegTag == GT_REGTAG_NONE).
+    _gtRegPair = from->_gtRegPair;
+    C_ASSERT(sizeof(_gtRegPair) >= sizeof(_gtRegNum));
+    INDEBUG(gtRegTag = from->gtRegTag;)
+
+    // Also copy multi-reg state if this is a call node
+    if (IsCall())
+    {
+        assert(from->IsCall());
+        this->AsCall()->CopyOtherRegs(from->AsCall());
+    }
+    else if (IsCopyOrReload())
+    {
+        this->AsCopyOrReload()->CopyOtherRegs(from->AsCopyOrReload());
+    }
+}
+
+//------------------------------------------------------------------
+// gtHasReg: Whether node beeen assigned a register by LSRA
+//
+// Arguments:
+//    None
+//
+// Return Value:
+//    Returns true if the node was assigned a register.
+//
+//    In case of multi-reg call nodes, it is considered
+//    having a reg if regs are allocated for all its
+//    return values.
+//
+//    In case of GT_COPY or GT_RELOAD of a multi-reg call,
+//    GT_COPY/GT_RELOAD is considered having a reg if it
+//    has a reg assigned to any of its positions.
+//
+// Assumption:
+//    In order for this to work properly, gtClearReg must be called
+//    prior to setting the register value.
+//
+bool GenTree::gtHasReg() const
+{
+    bool hasReg;
+
+#if CPU_LONG_USES_REGPAIR
+    if (isRegPairType(TypeGet()))
+    {
+        assert(_gtRegNum != REG_NA);
+        INDEBUG(assert(gtRegTag == GT_REGTAG_REGPAIR));
+        hasReg = (gtRegPair != REG_PAIR_NONE);
+    }
+    else
+#endif
+    {
+        assert(_gtRegNum != REG_PAIR_NONE);
+        INDEBUG(assert(gtRegTag == GT_REGTAG_REG));
+
+        if (IsMultiRegCall())
+        {
+            // Has to cast away const-ness because GetReturnTypeDesc() is a non-const method
+            GenTree* tree = const_cast<GenTree*>(this);
+            GenTreeCall* call = tree->AsCall();
+            unsigned regCount = call->GetReturnTypeDesc()->GetReturnRegCount();
+            hasReg = false;
+
+            // A Multi-reg call node is said to have regs, if it has
+            // reg assigned to each of its result registers.
+            for (unsigned i = 0; i < regCount; ++i)
+            {
+                hasReg = (call->GetRegNumByIdx(i) != REG_NA);
+                if (!hasReg)
+                {
+                    break;
+                }
+            }
+        }
+        else if (IsCopyOrReloadOfMultiRegCall())
+        {
+            GenTree* tree = const_cast<GenTree*>(this);
+            GenTreeCopyOrReload* copyOrReload = tree->AsCopyOrReload();
+            GenTreeCall* call = copyOrReload->gtGetOp1()->AsCall();
+            unsigned regCount = call->GetReturnTypeDesc()->GetReturnRegCount();
+            hasReg = false;
+
+            // A Multi-reg copy or reload node is said to have regs,
+            // if it has valid regs in any of the positions.
+            for (unsigned i = 0; i < regCount; ++i)
+            {
+                hasReg = (copyOrReload->GetRegNumByIdx(i) != REG_NA);
+                if (hasReg)
+                {
+                    break;
+                }
+            }
+        }
+        else
+        {
+            hasReg = (gtRegNum != REG_NA);
+        }
+    }
+
+    return hasReg;
+}
+
+//---------------------------------------------------------------
+// gtGetRegMask: Get the reg mask of the node.
+//
+// Arguments:
+//    None
+//
+// Return Value:
+//    Reg Mask of GenTree node.
+//
+regMaskTP 
+GenTree::gtGetRegMask() const
+{
+    regMaskTP resultMask;
+
+#if CPU_LONG_USES_REGPAIR
+    if (isRegPairType(TypeGet()))
+    {
+        resultMask = genRegPairMask(gtRegPair);
+    }
+    else
+#endif
+    {
+        if (IsMultiRegCall())
+        {
+            // temporarily cast away const-ness as AsCall() method is not declared const
+            resultMask = genRegMask(gtRegNum);
+            GenTree* temp = const_cast<GenTree*>(this);
+            resultMask |= temp->AsCall()->GetOtherRegMask();
+        }
+        else if (IsCopyOrReloadOfMultiRegCall())
+        {
+            // A multi-reg copy or reload, will have valid regs for only those 
+            // positions that need to be copied or reloaded.  Hence we need
+            // to consider only those registers for computing reg mask.
+
+            GenTree* tree = const_cast<GenTree*>(this);
+            GenTreeCopyOrReload* copyOrReload = tree->AsCopyOrReload();
+            GenTreeCall* call = copyOrReload->gtGetOp1()->AsCall();
+            unsigned regCount = call->GetReturnTypeDesc()->GetReturnRegCount();
+
+            resultMask = RBM_NONE;
+            for (unsigned i = 0; i < regCount; ++i)
+            {
+                regNumber reg = copyOrReload->GetRegNumByIdx(i);
+                if (reg != REG_NA)
+                {
+                    resultMask |= genRegMask(reg);
+                }
+            }
+        }
+        else
+        {
+            resultMask = genRegMask(gtRegNum);
+        }
+    }
+
+    return resultMask;
+}
+
+//---------------------------------------------------------------
+// GetOtherRegMask: Get the reg mask of gtOtherRegs of call node
+//
+// Arguments:
+//    None
+//
+// Return Value:
+//    Reg mask of gtOtherRegs of call node.
+//
+regMaskTP  
+GenTreeCall::GetOtherRegMask() const
+{
+    regMaskTP resultMask = RBM_NONE;
+
+#ifdef FEATURE_UNIX_AMD64_STRUCT_PASSING
+    for (unsigned i = 0; i < MAX_RET_REG_COUNT - 1; ++i)
+    {
+        if (gtOtherRegs[i] != REG_NA)
+        {
+            resultMask |= genRegMask(gtOtherRegs[i]);
+            continue;
+        }
+        break;
+    }
+#endif
+
+    return resultMask;
 }
 
 /*****************************************************************************
@@ -4246,6 +4464,15 @@ COMMON_CNS:
             ftreg  |= RBM_VIRTUAL_STUB_PARAM;
         }
 
+#ifdef FEATURE_READYTORUN_COMPILER
+#ifdef _TARGET_ARM64_
+        if (tree->gtCall.IsR2RRelativeIndir())
+        {
+            ftreg |= RBM_R2R_INDIRECT_PARAM;
+        }
+#endif
+#endif
+
         // Normally function calls don't preserve caller save registers 
         //   and thus are much more expensive.
         // However a few function calls do preserve these registers
@@ -5162,6 +5389,12 @@ GenTreeCall*          Compiler::gtNewCallNode(gtCallTypes     callType,
         genCallSite2ILOffsetMap->Set(node, ilOffset);
     }
 #endif
+
+    // Initialize gtOtherRegs 
+    node->ClearOtherRegs();
+
+    // Initialize spill flags of gtOtherRegs
+    node->ClearOtherRegFlags();
 
     return node;
 }
@@ -6111,6 +6344,13 @@ GenTreePtr          Compiler::gtCloneExpr(GenTree * tree,
             }
             break;
 
+        case GT_COPY:
+        case GT_RELOAD:
+            {
+                copy = new(this, oper) GenTreeCopyOrReload(oper, tree->TypeGet(), tree->gtGetOp1());
+            }
+            break;
+
 #ifdef FEATURE_SIMD
         case GT_SIMD:
             {
@@ -6297,13 +6537,14 @@ GenTreePtr          Compiler::gtCloneExpr(GenTree * tree,
 #endif
 
 #ifdef FEATURE_READYTORUN_COMPILER
-        copy->gtCall.gtEntryPoint = tree->gtCall.gtEntryPoint;
+        copy->gtCall.setEntryPoint(tree->gtCall.gtEntryPoint);
 #endif
 
 #ifdef DEBUG
         copy->gtCall.gtInlineObservation = tree->gtCall.gtInlineObservation;
 #endif
 
+        copy->AsCall()->CopyOtherRegFlags(tree->AsCall());
         break;
 
     case GT_FIELD:
@@ -7171,6 +7412,10 @@ Compiler::gtDispNodeName(GenTree *tree)
             gtfType = " ind";
         else if (tree->gtFlags & GTF_CALL_VIRT_STUB)
             gtfType = " stub";
+#ifdef FEATURE_READYTORUN_COMPILER
+        else if (tree->gtCall.IsR2RRelativeIndir())
+            gtfType = " r2r_ind";
+#endif // FEATURE_READYTORUN_COMPILER
         else if (tree->gtFlags & GTF_CALL_UNMANAGED)
         {
             char * gtfTypeBufWalk = gtfTypeBuf;
@@ -7279,7 +7524,7 @@ void                Compiler::gtDispVN(GenTree* tree)
 }
 
 //------------------------------------------------------------------------
-// gtDispNode: Print a tree to stdout.
+// gtDispNode: Print a tree to jitstdout.
 //
 // Arguments:
 //    tree - the tree to be printed
@@ -7659,6 +7904,28 @@ void                Compiler::gtDispRegVal(GenTree *  tree)
         break;
     }
 
+    if (tree->IsMultiRegCall())
+    {
+        // 0th reg is gtRegNum, which is already printed above.
+        // Print the remaining regs of a multi-reg call node.
+        GenTreeCall* call = tree->AsCall();
+        unsigned regCount = call->GetReturnTypeDesc()->GetReturnRegCount();
+        for (unsigned i = 1; i < regCount; ++i)
+        {
+            printf(",%s", compRegVarName(call->GetRegNumByIdx(i)));
+        }        
+    }
+    else if (tree->IsCopyOrReloadOfMultiRegCall())
+    {
+        GenTreeCopyOrReload* copyOrReload = tree->AsCopyOrReload();
+        GenTreeCall* call = tree->gtGetOp1()->AsCall();
+        unsigned regCount = call->GetReturnTypeDesc()->GetReturnRegCount();
+        for (unsigned i = 1; i < regCount; ++i)
+        {
+            printf(",%s", compRegVarName(copyOrReload->GetRegNumByIdx(i)));
+        }
+    }
+
     if  (tree->gtFlags & GTF_REG_VAL)
     {
         printf(" RV");
@@ -7714,10 +7981,8 @@ void                Compiler::gtGetLclVarNameInfo(unsigned lclNum, const char** 
             else if (lclNum == lvaGSSecurityCookie)
                 ilName = "GsCookie";
 #if FEATURE_FIXED_OUT_ARGS
-#if INLINE_NDIRECT
             else if (lclNum == lvaPInvokeFrameRegSaveVar)
                 ilName = "PInvokeFrameRegSave";
-#endif // INLINE_NDIRECT
             else if (lclNum == lvaOutgoingArgSpaceVar)
                 ilName = "OutArgs";
 #endif // FEATURE_FIXED_OUT_ARGS
@@ -8002,7 +8267,7 @@ void Compiler::gtDispFieldSeq(FieldSeqNode* pfsn)
 }
 
 //------------------------------------------------------------------------
-// gtDispLeaf: Print a single leaf node to stdout.
+// gtDispLeaf: Print a single leaf node to jitstdout.
 //
 // Arguments:
 //    tree - the tree to be printed
@@ -8241,7 +8506,7 @@ Compiler::gtDispLeaf(GenTree *tree, IndentStack* indentStack)
 }
 
 //------------------------------------------------------------------------
-// gtDispLeaf: Print a child node to stdout.
+// gtDispLeaf: Print a child node to jitstdout.
 //
 // Arguments:
 //    tree - the tree to be printed
@@ -8596,6 +8861,10 @@ void                Compiler::gtDispTree(GenTreePtr             tree,
             }
 
             gtDispVN(tree);
+            if (tree->IsMultiRegCall())
+            {
+                gtDispRegVal(tree);
+            }
             printf("\n");
 
             if (!topOnly)

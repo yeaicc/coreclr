@@ -7,6 +7,10 @@ if (CLR_CMAKE_PLATFORM_UNIX)
   #-fms-compatibility      Enable full Microsoft Visual C++ compatibility
   #-fms-extensions         Accept some non-standard constructs supported by the Microsoft compiler
 
+  # Make signed arithmetic overflow of addition, subtraction, and multiplication wrap around
+  # using twos-complement representation (this is normally undefined according to the C++ spec).
+  add_compile_options(-fwrapv)
+
   if(CLR_CMAKE_PLATFORM_DARWIN)
     # We cannot enable "stack-protector-strong" on OS X due to a bug in clang compiler (current version 7.0.2)
     add_compile_options(-fstack-protector)
@@ -87,6 +91,7 @@ if (WIN32)
   add_compile_options(/Zm200) # Specify Precompiled Header Memory Allocation Limit of 150MB
   add_compile_options(/wd4960 /wd4961 /wd4603 /wd4627 /wd4838 /wd4456 /wd4457 /wd4458 /wd4459 /wd4091 /we4640)
   add_compile_options(/Zi) # enable debugging information
+  add_compile_options(/ZH:SHA_256) # use SHA256 for generating hashes of compiler processed source files.
 
   if (CLR_CMAKE_PLATFORM_ARCH_I386)
     add_compile_options(/Gz)
@@ -112,6 +117,8 @@ if (WIN32)
   add_compile_options($<$<OR:$<CONFIG:Release>,$<CONFIG:Relwithdebinfo>>:/MT>)  
   add_compile_options($<$<OR:$<CONFIG:Debug>,$<CONFIG:Checked>>:/MTd>)  
 
+  set(CMAKE_ASM_MASM_FLAGS "${CMAKE_ASM_MASM_FLAGS} /ZH:SHA_256")
+  
 endif (WIN32)
 
 if(CMAKE_ENABLE_CODE_COVERAGE)

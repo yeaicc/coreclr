@@ -20,14 +20,20 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #include "emit.h"
 #include "corexcep.h"
 
+#if !defined(PLATFORM_UNIX)
+#include <io.h>    // For _dup, _setmode
+#include <fcntl.h> // For _O_TEXT
+#endif
 
 /*****************************************************************************/
 
+FILE* jitstdout = nullptr;
+
 ICorJitHost* g_jitHost = nullptr;
 static CILJit* ILJitter = 0;        // The one and only JITTER I return
+bool g_jitInitialized = false;
 #ifndef FEATURE_MERGE_JIT_AND_ENGINE
 HINSTANCE g_hInst = NULL;
-BOOL g_fClrCallbacksInit = FALSE;
 #endif // FEATURE_MERGE_JIT_AND_ENGINE
 
 /*****************************************************************************/
@@ -51,49 +57,53 @@ JitOptions jitOpts =
 extern "C"
 void __stdcall jitStartup(ICorJitHost* jitHost)
 {
+    if (g_jitInitialized)
+    {
+        return;
+    }
+
     g_jitHost = jitHost;
 
-    // `jitStartup` may be called multiple times
-    // when pre-jitting. We should not reinitialize
-    // config values each time.
-    if (!JitConfig.isInitialized())
+    assert(!JitConfig.isInitialized());
+    JitConfig.initialize(jitHost);
+
+#if defined(PLATFORM_UNIX)
+    jitstdout = procstdout();
+#else
+    if (jitstdout == nullptr)
     {
-        JitConfig.initialize(jitHost);
+        int jitstdoutFd = _dup(_fileno(procstdout()));
+        _setmode(jitstdoutFd, _O_TEXT);
+        jitstdout = _fdopen(jitstdoutFd, "w");
+        assert(jitstdout != nullptr);
     }
+#endif
 
 #ifdef FEATURE_TRACELOGGING
     JitTelemetry::NotifyDllProcessAttach();
 #endif
     Compiler::compStartup();
+
+    g_jitInitialized = true;
 }
 
 void jitShutdown()
 {
+    if (!g_jitInitialized)
+    {
+        return;
+    }
+
     Compiler::compShutdown();
+
+    if (jitstdout != procstdout())
+    {
+        fclose(jitstdout);
+    }
+
 #ifdef FEATURE_TRACELOGGING
     JitTelemetry::NotifyDllProcessDetach();
 #endif
-}
-
-
-/*****************************************************************************
- *  jitOnDllProcessAttach() called by DllMain() when jit.dll is loaded
- */
-
-void jitOnDllProcessAttach()
-{
-#if COR_JIT_EE_VERSION <= 460
-    jitStartup(JitHost::getJitHost());
-#endif
-}
-
-/*****************************************************************************
- *  jitOnDllProcessDetach() called by DllMain() when jit.dll is unloaded
- */
-
-void jitOnDllProcessDetach()
-{
-    jitShutdown();
 }
 
 #ifndef FEATURE_MERGE_JIT_AND_ENGINE
@@ -105,15 +115,13 @@ BOOL WINAPI     DllMain(HANDLE hInstance, DWORD dwReason, LPVOID pvReserved)
     {
         g_hInst = (HINSTANCE)hInstance;
         DisableThreadLibraryCalls((HINSTANCE)hInstance);
-#ifdef SELF_NO_HOST
-        jitOnDllProcessAttach();
-        g_fClrCallbacksInit = TRUE;
+#if defined(SELF_NO_HOST) && COR_JIT_EE_VERSION <= 460
+        jitStartup(JitHost::getJitHost());
 #endif
     }
     else if (dwReason == DLL_PROCESS_DETACH)
     {
-        if (g_fClrCallbacksInit)
-            jitOnDllProcessDetach();
+        jitShutdown();
     }
 
     return TRUE;
@@ -129,9 +137,10 @@ void __stdcall sxsJitStartup(CoreClrCallbacks const & cccallbacks)
 {
 #ifndef SELF_NO_HOST
     InitUtilcode(cccallbacks);
+#endif
 
-    jitOnDllProcessAttach();
-    g_fClrCallbacksInit = TRUE;
+#if COR_JIT_EE_VERSION <= 460
+    jitStartup(JitHost::getJitHost());
 #endif
 }
 
@@ -1227,11 +1236,55 @@ bool Compiler::eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
     return param.m_success;
 }
 
+struct TrapParam
+{
+    ICorJitInfo* m_corInfo;
+    EXCEPTION_POINTERS m_exceptionPointers;
+
+    void (*m_function)(void*);
+    void* m_param;
+    bool m_success;
+};
+
+static LONG __EEFilter(PEXCEPTION_POINTERS exceptionPointers, void* param)
+{
+    auto* trapParam = reinterpret_cast<TrapParam*>(param);
+    trapParam->m_exceptionPointers = *exceptionPointers;
+    return trapParam->m_corInfo->FilterException(exceptionPointers);
+}
+
+bool Compiler::eeRunWithErrorTrapImp(void (*function)(void*), void* param)
+{
+    TrapParam trapParam;
+    trapParam.m_corInfo = info.compCompHnd;
+    trapParam.m_function = function;
+    trapParam.m_param = param;
+    trapParam.m_success = true;
+
+    PAL_TRY(TrapParam*, __trapParam, &trapParam)
+    {
+        __trapParam->m_function(__trapParam->m_param);
+    }
+    PAL_EXCEPT_FILTER(__EEFilter)
+    {
+        trapParam.m_corInfo->HandleException(&trapParam.m_exceptionPointers);
+        trapParam.m_success = false;
+    }
+    PAL_ENDTRY
+
+    return trapParam.m_success;
+}
+
 #else // CORJIT_EE_VER <= 460
     
 bool Compiler::eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
 {
     return info.compCompHnd->tryResolveToken(resolvedToken);
+}
+
+bool Compiler::eeRunWithErrorTrapImp(void (*function)(void*), void* param)
+{
+    return info.compCompHnd->runWithErrorTrap(function, param);
 }
 
 #endif // CORJIT_EE_VER > 460

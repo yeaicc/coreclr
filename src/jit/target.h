@@ -337,7 +337,16 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
 #if defined(_TARGET_X86_)
 
   #define CPU_LOAD_STORE_ARCH      0
+
+#ifdef LEGACY_BACKEND
   #define CPU_LONG_USES_REGPAIR    1
+#else
+  #define CPU_LONG_USES_REGPAIR    0       // RyuJIT x86 doesn't use the regPairNo field to record register pairs for long
+                                           // type tree nodes, and instead either decomposes them (for non-atomic operations)
+                                           // or stores multiple regNumber values for operations such as calls where the
+                                           // register definitions are effectively "atomic".
+#endif // LEGACY_BACKEND
+
   #define CPU_HAS_FP_SUPPORT       1
   #define ROUND_FLOAT              1       // round intermed float expression results
   #define CPU_HAS_BYTE_REGS        1
@@ -558,7 +567,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   // We don't allow using ebp as a source register. Maybe we should only prevent this for ETW_EBP_FRAMED (but that is always set right now).
   #define RBM_WRITE_BARRIER_SRC    (RBM_EAX|RBM_ECX|RBM_EBX|RBM_ESI|RBM_EDI)
 
-  #define RBM_CALLEE_TRASH_NOGC    RBM_NONE
+  #define RBM_CALLEE_TRASH_NOGC    RBM_EDX
 #endif // NOGC_WRITE_BARRIERS
 
   // IL stub's secret parameter (CORJIT_FLG_PUBLISH_SECRET_PARAM)
@@ -1451,7 +1460,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define FEATURE_FIXED_OUT_ARGS   1       // Preallocate the outgoing arg area in the prolog
   #define FEATURE_STRUCTPROMOTE    1       // JIT Optimization to promote fields of structs into registers
   #define FEATURE_MULTIREG_STRUCT_PROMOTE 1  // True when we want to promote fields of a multireg struct into registers
-  #define FEATURE_FASTTAILCALL     0       // Tail calls made as epilog+jmp
+  #define FEATURE_FASTTAILCALL     1       // Tail calls made as epilog+jmp
   #define FEATURE_TAILCALL_OPT     0       // opportunistic Tail calls (i.e. without ".tail" prefix) made as fast tail calls.
   #define FEATURE_SET_FLAGS        1       // Set to true to force the JIT to mark the trees with GTF_SET_FLAGS when the flags need to be set
   #define FEATURE_MULTIREG_ARGS_OR_RET  1  // Support for passing and/or returning single values in more than one register  
@@ -1505,6 +1514,7 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define RBM_CALLEE_SAVED        (RBM_INT_CALLEE_SAVED | RBM_FLT_CALLEE_SAVED)
   #define RBM_CALLEE_TRASH        (RBM_INT_CALLEE_TRASH | RBM_FLT_CALLEE_TRASH)
   #define RBM_CALLEE_TRASH_NOGC   (RBM_R12|RBM_R13|RBM_R14|RBM_R15)
+  #define REG_DEFAULT_HELPER_CALL_TARGET REG_R12
 
   #define RBM_ALLINT              (RBM_INT_CALLEE_SAVED | RBM_INT_CALLEE_TRASH)
   #define RBM_ALLFLOAT            (RBM_FLT_CALLEE_SAVED | RBM_FLT_CALLEE_TRASH)
@@ -1597,6 +1607,11 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define RBM_VIRTUAL_STUB_PARAM          RBM_R11
   #define PREDICT_REG_VIRTUAL_STUB_PARAM  PREDICT_REG_R11
 
+  // R2R indirect call. Use the same registers as VSD
+  #define REG_R2R_INDIRECT_PARAM          REG_R11
+  #define RBM_R2R_INDIRECT_PARAM          RBM_R11
+  #define PREDICT_REG_RER_INDIRECT_PARAM  PREDICT_REG_R11
+
   // Registers used by PInvoke frame setup
   #define REG_PINVOKE_FRAME        REG_R8
   #define RBM_PINVOKE_FRAME        RBM_R8
@@ -1685,8 +1700,26 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define RBM_ARG_6                RBM_R6
   #define RBM_ARG_7                RBM_R7
 
+  #define REG_FLTARG_0             REG_V0
+  #define REG_FLTARG_1             REG_V1
+  #define REG_FLTARG_2             REG_V2
+  #define REG_FLTARG_3             REG_V3
+  #define REG_FLTARG_4             REG_V4
+  #define REG_FLTARG_5             REG_V5
+  #define REG_FLTARG_6             REG_V6
+  #define REG_FLTARG_7             REG_V7
+
+  #define RBM_FLTARG_0             RBM_V0
+  #define RBM_FLTARG_1             RBM_V1
+  #define RBM_FLTARG_2             RBM_V2
+  #define RBM_FLTARG_3             RBM_V3
+  #define RBM_FLTARG_4             RBM_V4
+  #define RBM_FLTARG_5             RBM_V5
+  #define RBM_FLTARG_6             RBM_V6
+  #define RBM_FLTARG_7             RBM_V7
+
   #define RBM_ARG_REGS            (RBM_ARG_0|RBM_ARG_1|RBM_ARG_2|RBM_ARG_3|RBM_ARG_4|RBM_ARG_5|RBM_ARG_6|RBM_ARG_7)
-  #define RBM_FLTARG_REGS         (RBM_V0|RBM_V1|RBM_V2|RBM_V3|RBM_V4|RBM_V5|RBM_V6|RBM_V7)
+  #define RBM_FLTARG_REGS         (RBM_FLTARG_0|RBM_FLTARG_1|RBM_FLTARG_2|RBM_FLTARG_3|RBM_FLTARG_4|RBM_FLTARG_5|RBM_FLTARG_6|RBM_FLTARG_7)
 
   SELECTANY const regNumber fltArgRegs [] = {REG_V0, REG_V1, REG_V2, REG_V3, REG_V4, REG_V5, REG_V6, REG_V7 };
   SELECTANY const regMaskTP fltArgMasks[] = {RBM_V0, RBM_V1, RBM_V2, RBM_V3, RBM_V4, RBM_V5, RBM_V6, RBM_V7 };
@@ -1695,13 +1728,21 @@ typedef unsigned short          regPairNoSmall; // arm: need 12 bits
   #define LBL_DIST_SMALL_MAX_POS  (+1048575)
 
   #define LBL_SIZE_SMALL          (4)
-  #define LBL_SIZE_LARGE          (8)   // NYI
+  #define LBL_SIZE_LARGE          (8)
 
   #define JCC_DIST_SMALL_MAX_NEG  (-1048576)
-  #define JCC_DIST_SMALL_MAX_POS  (+1048572)
+  #define JCC_DIST_SMALL_MAX_POS  (+1048575)
 
   #define JCC_SIZE_SMALL          (4)
-  #define JCC_SIZE_LARGE          (8)   // NYI
+  #define JCC_SIZE_LARGE          (8)
+
+  #define LDC_DIST_SMALL_MAX_NEG  (-1048576)
+  #define LDC_DIST_SMALL_MAX_POS  (+1048575)
+
+  #define LDC_SIZE_SMALL          (4)
+  #define LDC_SIZE_LARGE          (8)
+
+  #define JMP_SIZE_SMALL          (4)
 
 #else
   #error Unsupported or unset target architecture

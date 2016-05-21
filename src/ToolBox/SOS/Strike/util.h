@@ -692,7 +692,7 @@ namespace Output
             {
                 if (mFormat == Formats::Default || mFormat == Formats::Pointer)
                 {
-                    ExtOut("%p", (__int64)mValue);
+                    ExtOut("%p", SOS_PTR(mValue));
                 }
                 else
                 {
@@ -745,7 +745,7 @@ namespace Output
                     if (precision > width)
                         precision = width;
 
-                    ExtOut(leftAlign ? "%-*.*p" : "%*.*p", width, precision, (__int64)mValue);
+                    ExtOut(leftAlign ? "%-*.*p" : "%*.*p", width, precision, SOS_PTR(mValue));
                 }
                 else
                 {

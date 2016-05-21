@@ -47,15 +47,34 @@ const WCHAR kWatsonName2[] = W("drwtsn32");
 
 #include "random.h"
 
-// Windows CoreSystem has a different naming scheme for some dlls, which we must take account of when doing
-// LoadLibrary and the like.
-#if defined(FEATURE_CORESYSTEM)
-#define WINDOWS_KERNEL32_DLLNAME_A "kernelbase"
-#define WINDOWS_KERNEL32_DLLNAME_W W("kernelbase")
-#elif !defined(FEATURE_CORESYSTEM) || defined(CROSS_COMPILE)
 #define WINDOWS_KERNEL32_DLLNAME_A "kernel32"
 #define WINDOWS_KERNEL32_DLLNAME_W W("kernel32")
-#endif
+
+#if defined(FEATURE_CORECLR)
+#define CoreLibName_W W("System.Private.CoreLib")
+#define CoreLibName_IL_W W("System.Private.CoreLib.dll")
+#define CoreLibName_NI_W W("System.Private.CoreLib.ni.dll")
+#define CoreLibName_TLB_W W("System.Private.CoreLib.tlb")
+#define CoreLibName_A "System.Private.CoreLib"
+#define CoreLibName_IL_A "System.Private.CoreLib.dll"
+#define CoreLibName_NI_A "System.Private.CoreLib.ni.dll"
+#define CoreLibName_TLB_A "System.Private.CoreLib.tlb"
+#define CoreLibNameLen 22
+#define CoreLibSatelliteName_A "System.Private.CoreLib.resources"
+#define CoreLibSatelliteNameLen 32
+#else // !defined(FEATURE_CORECLR)
+#define CoreLibName_W W("mscorlib")
+#define CoreLibName_IL_W W("mscorlib.dll")
+#define CoreLibName_NI_W W("mscorlib.ni.dll")
+#define CoreLibName_TLB_W W("mscorlib.tlb")
+#define CoreLibName_A "mscorlib"
+#define CoreLibName_IL_A "mscorlib.dll"
+#define CoreLibName_NI_A "mscorlib.ni.dll"
+#define CoreLibName_TLB_A "mscorlib.tlb"
+#define CoreLibNameLen 8
+#define CoreLibSatelliteName_A "mscorlib.resources"
+#define CoreLibSatelliteNameLen 18
+#endif // defined(FEATURE_CORECLR)
 
 class StringArrayList;
 
@@ -1544,11 +1563,6 @@ public:
 
 #if !defined(FEATURE_REDHAWK)&& !defined(FEATURE_PAL)
 private:	// apis types
-#if !defined(FEATURE_CORESYSTEM)
-    //GetNumaProcessorNode()
-    typedef BOOL
-    (WINAPI *PGNPN)(UCHAR, PUCHAR);
-#endif
 
     //GetNumaHighestNodeNumber()
     typedef BOOL
@@ -1558,21 +1572,14 @@ private:	// apis types
     (WINAPI *PVAExN)(HANDLE,LPVOID,SIZE_T,DWORD,DWORD,DWORD);
 
     // api pfns and members
-#if !defined(FEATURE_CORESYSTEM)
-    static PGNPN    m_pGetNumaProcessorNode;
-#endif
     static PGNHNN   m_pGetNumaHighestNodeNumber;
     static PVAExN   m_pVirtualAllocExNuma;
 
 public: 	// functions
-#if !defined(FEATURE_CORESYSTEM)
-    static BOOL GetNumaProcessorNode(UCHAR proc_no, PUCHAR node_no);
-#endif
 
     static LPVOID VirtualAllocExNuma(HANDLE hProc, LPVOID lpAddr, SIZE_T size,
                                      DWORD allocType, DWORD prot, DWORD node);
 
-#if !defined(FEATURE_CORECLR) || defined(FEATURE_CORESYSTEM)
 private:
     //GetNumaProcessorNodeEx()
     typedef BOOL
@@ -1581,7 +1588,6 @@ private:
 
 public:
     static BOOL GetNumaProcessorNodeEx(PPROCESSOR_NUMBER proc_no, PUSHORT node_no);
-#endif
 #endif
 };
 
@@ -1634,7 +1640,6 @@ private:
     //GetThreadGroupAffinity()
     typedef BOOL
     (WINAPI *PGTGA)(HANDLE, GROUP_AFFINITY *);
-#if !defined(FEATURE_CORESYSTEM) && !defined(FEATURE_CORECLR)
     //GetCurrentProcessorNumberEx()
     typedef void
     (WINAPI *PGCPNEx)(PROCESSOR_NUMBER *);
@@ -1644,16 +1649,12 @@ private:
     //NtQuerySystemInformationEx()
     //typedef int
     //(WINAPI *PNTQSIEx)(SYSTEM_INFORMATION_CLASS, PULONG, ULONG, PVOID, ULONG, PULONG);
-#endif
-
     static PGLPIEx m_pGetLogicalProcessorInformationEx;
     static PSTGA   m_pSetThreadGroupAffinity;
     static PGTGA   m_pGetThreadGroupAffinity;
-#if !defined(FEATURE_CORESYSTEM) && !defined(FEATURE_CORECLR)
     static PGCPNEx m_pGetCurrentProcessorNumberEx;
     static PGST    m_pGetSystemTimes;
     //static PNTQSIEx m_pNtQuerySystemInformationEx;
-#endif
 
 public:
     static BOOL GetLogicalProcessorInformationEx(DWORD relationship,
@@ -1661,11 +1662,9 @@ public:
     static BOOL SetThreadGroupAffinity(HANDLE h,
 		    GROUP_AFFINITY *groupAffinity, GROUP_AFFINITY *previousGroupAffinity);
     static BOOL GetThreadGroupAffinity(HANDLE h, GROUP_AFFINITY *groupAffinity);
-#if !defined(FEATURE_CORESYSTEM) && !defined(FEATURE_CORECLR)
     static BOOL GetSystemTimes(FILETIME *idleTime, FILETIME *kernelTime, FILETIME *userTime);
     static void ChooseCPUGroupAffinity(GROUP_AFFINITY *gf);
     static void ClearCPUGroupAffinity(GROUP_AFFINITY *gf);
-#endif
 #endif
 };
 
