@@ -3084,7 +3084,7 @@ void CEEInfo::ComputeRuntimeLookupForSharedGenericToken(DictionaryEntryKind entr
 #ifdef FEATURE_READYTORUN_COMPILER
     if (IsReadyToRunCompilation())
     {
-#if defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
+#if defined(_TARGET_ARM_)
         // TODO
         ThrowHR(E_NOTIMPL);
 #endif
@@ -3468,7 +3468,7 @@ NoSpecialCase:
                 methodFlags |= ENCODE_METHOD_SIG_SlotInsteadOfToken;
             }
             else
-            if (entryKind == DispatchStubAddrSlot)
+            if (entryKind == DispatchStubAddrSlot && pTemplateMD->IsVtableMethod())
             {
                 // Encode the method for dispatch stub using slot to avoid touching the interface method MethodDesc at runtime
 
@@ -4015,7 +4015,7 @@ DWORD CEEInfo::getClassAttribsInternal (CORINFO_CLASS_HANDLE clsHnd)
         {
             ret |= CORINFO_FLG_VALUECLASS;
 
-            if (pMT->ContainsStackPtr())
+            if (pMT->IsByRefLike())
                 ret |= CORINFO_FLG_CONTAINS_STACK_PTR;
 
             if ((pClass->IsNotTightlyPacked() && (!pClass->IsManagedSequential() || pClass->HasExplicitSize())) ||
@@ -4429,7 +4429,7 @@ CORINFO_CLASS_HANDLE CEEInfo::getBuiltinClass(CorInfoClassId classId)
         result = CORINFO_CLASS_HANDLE(MscorlibBinder::GetClass(CLASS__METHOD_HANDLE));
         break;
     case CLASSID_ARGUMENT_HANDLE:
-        result = CORINFO_CLASS_HANDLE(g_ArgumentHandleMT);
+        result = CORINFO_CLASS_HANDLE(MscorlibBinder::GetClass(CLASS__ARGUMENT_HANDLE));
         break;
     case CLASSID_STRING:
         result = CORINFO_CLASS_HANDLE(g_pStringClass);
@@ -6402,7 +6402,7 @@ CorInfoHelpFunc CEEInfo::getBoxHelper(CORINFO_CLASS_HANDLE clsHnd)
 
         // we shouldn't allow boxing of types that contains stack pointers
         // csc and vbc already disallow it.
-        if (VMClsHnd.AsMethodTable()->ContainsStackPtr())
+        if (VMClsHnd.AsMethodTable()->IsByRefLike())
             COMPlusThrow(kInvalidProgramException);
 
         result = CORINFO_HELP_BOX;

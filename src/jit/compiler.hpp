@@ -1238,7 +1238,7 @@ GenTreePtr          Compiler::gtUnusedValNode(GenTreePtr expr)
 
 /*****************************************************************************
  *
- * A wrapper for gtSetEvalOrder and fgComputeFPlvls
+ * A wrapper for gtSetEvalOrder and gtComputeFPlvls
  * Necessary because the FP levels may need to be re-computed if we reverse
  * operands
  */
@@ -1254,7 +1254,7 @@ void               Compiler::gtSetStmtInfo(GenTree * stmt)
     codeGen->genResetFPstkLevel();
 
     /* Sometimes we need to redo the FP level computation */
-    fgFPstLvlRedo = false;
+    gtFPstLvlRedo = false;
 #endif // FEATURE_STACK_FP_X87
 
 #ifdef DEBUG
@@ -1275,10 +1275,10 @@ void               Compiler::gtSetStmtInfo(GenTree * stmt)
 
     /* Do we need to recompute FP stack levels? */
 
-    if  (fgFPstLvlRedo)
+    if  (gtFPstLvlRedo)
     {
         codeGen->genResetFPstkLevel();
-        fgComputeFPlvls(expr);
+        gtComputeFPlvls(expr);
         assert(codeGen->genGetFPstkLevel() == 0 || codeGen->genGetFPstkLevel() == 1);
     }
 #endif // FEATURE_STACK_FP_X87
@@ -3147,11 +3147,18 @@ DWORD               StrictCheckForNonVirtualCallToVirtualMethod()
  *      [0, MAX_FLOAT_REG_ARG)  -- for floating point registers
  * Note that RegArgNum's are overlapping for integer and floating-point registers,
  * while RegNum's are not (for ARM anyway, though for x86, it might be different).
+ * If we have a fixed return buffer register and are given it's index
+ * we return the fixed return buffer register
  */
 
 inline
 regNumber           genMapIntRegArgNumToRegNum(unsigned argNum)
 {
+    if (hasFixedRetBuffReg() && (argNum == theFixedRetBuffArgNum()))
+    {
+        return theFixedRetBuffReg();
+    }
+
     assert (argNum < ArrLen(intArgRegs));
     
     return intArgRegs[argNum];
@@ -3230,11 +3237,19 @@ __forceinline regMaskTP genMapArgNumToRegMask(unsigned argNum, var_types type)
 
 /*****************************************************************************/
 /* Map a register number ("RegNum") to a register argument number ("RegArgNum")
+ * If we have a fixed return buffer register we return theFixedRetBuffArgNum
  */
 
 inline
 unsigned           genMapIntRegNumToRegArgNum(regNumber regNum)
 {
+    // First check for the Arm64 fixed return buffer argument register
+    // as it is not in the RBM_ARG_REGS set of registers
+    if (hasFixedRetBuffReg() && (regNum == theFixedRetBuffReg()))
+    {
+        return theFixedRetBuffArgNum();
+    }
+
     assert (genRegMask(regNum) & RBM_ARG_REGS);
 
     switch (regNum)
@@ -3261,7 +3276,9 @@ unsigned           genMapIntRegNumToRegArgNum(regNumber regNum)
 #endif
 #endif
 #endif
-    default: assert(!"invalid register arg register"); return (unsigned)-1;
+    default: 
+        assert(!"invalid register arg register"); 
+        return BAD_VAR_NUM;
     }
 }
 
@@ -3294,10 +3311,13 @@ unsigned           genMapFloatRegNumToRegArgNum(regNumber regNum)
 #endif
 #endif
 #endif
-    default: assert(!"invalid register arg register"); return (unsigned)-1;
+    default: 
+        assert(!"invalid register arg register"); 
+        return BAD_VAR_NUM;
     }
 #else
-    assert(!"flt reg args not allowed"); return (unsigned)-1;
+    assert(!"flt reg args not allowed"); 
+    return BAD_VAR_NUM;
 #endif 
 #endif // !arm
 }

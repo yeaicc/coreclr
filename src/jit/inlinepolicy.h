@@ -238,6 +238,7 @@ protected:
 
     void ComputeOpcodeBin(OPCODE opcode);
     void EstimateCodeSize();
+    void EstimatePerformanceImpact();
     void MethodInfoObservations(CORINFO_METHOD_INFO* methodInfo);
     enum { MAX_ARGS = 6 };
 
@@ -278,7 +279,9 @@ protected:
     unsigned    m_LoadAddressCount;
     unsigned    m_ThrowCount;
     unsigned    m_CallCount;
+    unsigned    m_CallSiteWeight;
     int         m_ModelCodeSizeEstimate;
+    int         m_PerCallInstructionEstimate;
 };
 
 // ModelPolicy is an experimental policy that uses the results
@@ -346,7 +349,21 @@ class ReplayPolicy : public DiscretionaryPolicy
 public:
 
     // Construct a ReplayPolicy
-    ReplayPolicy(Compiler* compiler, InlineContext* inlineContext, bool isPrejitRoot);
+    ReplayPolicy(Compiler* compiler, bool isPrejitRoot);
+
+    // Policy observations
+    void NoteBool(InlineObservation obs, bool value) override;
+
+    // Optional observations
+    void NoteContext(InlineContext* context) override
+    {
+        m_InlineContext = context;
+    }
+
+    void NoteOffset(IL_OFFSETX offset) override
+    {
+        m_Offset = offset;
+    }
 
     // Policy determinations
     void DetermineProfitability(CORINFO_METHOD_INFO* methodInfo) override;
@@ -361,11 +378,14 @@ private:
     bool FindMethod();
     bool FindContext(InlineContext* context);
     bool FindInline(CORINFO_METHOD_HANDLE callee);
-    bool FindInline(unsigned token, unsigned hash);
+    bool FindInline(unsigned token, unsigned hash, unsigned offset);
 
-    static bool    s_WroteReplayBanner;
-    static FILE*   s_ReplayFile;
-    InlineContext* m_InlineContext;
+    static bool          s_WroteReplayBanner;
+    static FILE*         s_ReplayFile;
+    static CritSecObject s_XmlReaderLock;
+    InlineContext*       m_InlineContext;
+    IL_OFFSETX           m_Offset;
+    bool                 m_WasForceInline;
 };
 
 #endif // defined(DEBUG) || defined(INLINE_DATA)

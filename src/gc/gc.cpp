@@ -7219,7 +7219,9 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
             // Suspending here allows copying dirty state from the old table into the new table, and not have to merge old
             // table info lazily as done for card tables.
 
-            BOOL is_runtime_suspended = IsSuspendEEThread();
+            // Either this thread was the thread that did the suspension which means we are suspended; or this is called
+            // from a GC thread which means we are in a blocking GC and also suspended.
+            BOOL is_runtime_suspended = IsGCThread();
             if (!is_runtime_suspended)
             {
                 // Note on points where the runtime is suspended anywhere in this function. Upon an attempt to suspend the
@@ -7256,17 +7258,6 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
             g_card_table = translated_ct;
         }
 
-        // We need to make sure that other threads executing checked write barriers
-        // will see the g_card_table update before g_lowest/highest_address updates.
-        // Otherwise, the checked write barrier may AV accessing the old card table
-        // with address that it does not cover. Write barriers access card table 
-        // without memory barriers for performance reasons, so we need to flush 
-        // the store buffers here.
-        GCToOSInterface::FlushProcessWriteBuffers();
-
-        g_lowest_address = saved_g_lowest_address;
-        VolatileStore(&g_highest_address, saved_g_highest_address);
-
         if (!write_barrier_updated)
         {
             // This passes a bool telling whether we need to switch to the post
@@ -7277,8 +7268,19 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
             // to be changed, so we are doing this after all global state has
             // been updated. See the comment above suspend_EE() above for more
             // info.
-            StompWriteBarrierResize(!!IsSuspendEEThread(), la != saved_g_lowest_address);
+            StompWriteBarrierResize(!!IsGCThread(), la != saved_g_lowest_address);
         }
+
+        // We need to make sure that other threads executing checked write barriers
+        // will see the g_card_table update before g_lowest/highest_address updates.
+        // Otherwise, the checked write barrier may AV accessing the old card table
+        // with address that it does not cover. Write barriers access card table 
+        // without memory barriers for performance reasons, so we need to flush 
+        // the store buffers here.
+        GCToOSInterface::FlushProcessWriteBuffers();
+
+        g_lowest_address = saved_g_lowest_address;
+        VolatileStore(&g_highest_address, saved_g_highest_address);
 
         return 0;
         
@@ -9398,6 +9400,7 @@ void gc_heap::get_write_watch_for_gc_heap(bool reset, void *base_address, size_t
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
     SoftwareWriteWatch::GetDirty(base_address, region_size, dirty_pages, dirty_page_count_ref, reset, is_runtime_suspended);
 #else // !FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+    UNREFERENCED_PARAMETER(is_runtime_suspended);
     bool success = GCToOSInterface::GetWriteWatch(reset, base_address, region_size, dirty_pages, dirty_page_count_ref);
     assert(success);
 #endif // FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
@@ -9474,22 +9477,11 @@ void gc_heap::reset_write_watch (BOOL concurrent_p)
     while (seg)
     {
         uint8_t* base_address = align_lower_page (heap_segment_mem (seg));
-
-        if (concurrent_p)
-        {
-            base_address = max (base_address, background_saved_lowest_address);
-        }
+        base_address = max (base_address, background_saved_lowest_address);
 
         uint8_t* high_address = 0;
-        if (concurrent_p)
-        {
-            high_address = ((seg == ephemeral_heap_segment) ? alloc_allocated : heap_segment_allocated (seg));
-            high_address = min (high_address, background_saved_highest_address);
-        }
-        else
-        {
-            high_address = heap_segment_allocated (seg);
-        }
+        high_address = ((seg == ephemeral_heap_segment) ? alloc_allocated : heap_segment_allocated (seg));
+        high_address = min (high_address, background_saved_highest_address);
         
         if (base_address < high_address)
         {
@@ -9528,11 +9520,8 @@ void gc_heap::reset_write_watch (BOOL concurrent_p)
         uint8_t* base_address = align_lower_page (heap_segment_mem (seg));
         uint8_t* high_address =  heap_segment_allocated (seg);
 
-        if (concurrent_p)
-        {
-            base_address = max (base_address, background_saved_lowest_address);
-            high_address = min (high_address, background_saved_highest_address);
-        }
+        base_address = max (base_address, background_saved_lowest_address);
+        high_address = min (high_address, background_saved_highest_address);
 
         if (base_address < high_address)
         {
@@ -15332,7 +15321,7 @@ void gc_heap::gc1()
     if (!settings.concurrent)
 #endif //BACKGROUND_GC
     {
-        adjust_ephemeral_limits(!!IsSuspendEEThread());
+        adjust_ephemeral_limits(!!IsGCThread());
     }
 
 #ifdef BACKGROUND_GC
@@ -16179,7 +16168,7 @@ BOOL gc_heap::expand_soh_with_minimal_gc()
         dd_gc_new_allocation (dynamic_data_of (max_generation)) -= ephemeral_size;
         dd_new_allocation (dynamic_data_of (max_generation)) = dd_gc_new_allocation (dynamic_data_of (max_generation));
 
-        adjust_ephemeral_limits(!!IsSuspendEEThread());
+        adjust_ephemeral_limits(!!IsGCThread());
         return TRUE;
     }
     else
@@ -16640,6 +16629,10 @@ int gc_heap::garbage_collect (int n)
 
                 if (do_concurrent_p)
                 {
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+                    SoftwareWriteWatch::EnableForGCHeap();
+#endif //FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+
 #ifdef MULTIPLE_HEAPS
                     for (int i = 0; i < n_heaps; i++)
                         g_heaps[i]->current_bgc_state = bgc_initialized;
@@ -25693,8 +25686,6 @@ void gc_heap::background_mark_phase ()
 #endif //MULTIPLE_HEAPS
         {
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
-            SoftwareWriteWatch::EnableForGCHeap();
-
             // Resetting write watch for software write watch is pretty fast, much faster than for hardware write watch. Reset
             // can be done while the runtime is suspended or after the runtime is restarted, the preference was to reset while
             // the runtime is suspended. The reset for hardware write watch is done after the runtime is restarted below.
@@ -26329,7 +26320,13 @@ void gc_heap::revisit_written_page (uint8_t* page,
                                     background_mark_object (oo THREAD_NUMBER_ARG);
                                 );
             }
-            else if (concurrent_p && large_objects_p && ((CObjectHeader*)o)->IsFree() && (next_o > min (high_address, page + OS_PAGE_SIZE)))
+            else if (
+                concurrent_p &&
+#ifndef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP // see comment below
+                large_objects_p &&
+#endif // !FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+                ((CObjectHeader*)o)->IsFree() &&
+                (next_o > min (high_address, page + OS_PAGE_SIZE)))
             {
                 // We need to not skip the object here because of this corner scenario:
                 // A large object was being allocated during BGC mark so we first made it 
@@ -26339,6 +26336,14 @@ void gc_heap::revisit_written_page (uint8_t* page,
                 // been made into a valid object and some of its memory was changed. We need
                 // to be sure to process those written pages so we can't skip the object just
                 // yet.
+                //
+                // Similarly, when using software write watch, don't advance last_object when
+                // the current object is a free object that spans beyond the current page or
+                // high_address. Software write watch acquires gc_lock before the concurrent
+                // GetWriteWatch() call during revisit_written_pages(). A foreground GC may
+                // happen at that point and allocate from this free region, so when
+                // revisit_written_pages() continues, it cannot skip now-valid objects in this
+                // region.
                 no_more_loop_p = TRUE;
                 goto end_limit;                
             }

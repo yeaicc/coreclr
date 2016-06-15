@@ -1094,10 +1094,12 @@ int ArgIteratorTemplate<ARGITERATOR_BASE>::GetNextOffset()
         // the interop "native value types".
         fRequiresAlign64Bit = thValueType.RequiresAlign8();
 
+#ifdef FEATURE_HFA
         // Handle HFAs: packed structures of 1-4 floats or doubles that are passed in FP argument
         // registers if possible.
         if (thValueType.IsHFA())
             fFloatingPoint = true;
+#endif
 
         break;
     }
@@ -1119,6 +1121,7 @@ int ArgIteratorTemplate<ARGITERATOR_BASE>::GetNextOffset()
 
     // Ignore floating point argument placement in registers if we're dealing with a vararg function (the ABI
     // specifies this so that vararg processing on the callee side is simplified).
+#ifndef ARM_SOFTFP
     if (fFloatingPoint && !this->IsVarArg())
     {
         // Handle floating point (primitive) arguments.
@@ -1171,6 +1174,7 @@ int ArgIteratorTemplate<ARGITERATOR_BASE>::GetNextOffset()
 
         return argOfs;
     }
+#endif // ARM_SOFTFP
 
     //
     // Handle the non-floating point case.

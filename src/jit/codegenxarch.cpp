@@ -527,11 +527,7 @@ void                CodeGen::genCodeForBBlist()
 
         if (handlerGetsXcptnObj(block->bbCatchTyp))
         {
-#if JIT_FEATURE_SSA_SKIP_DEFS
             GenTreePtr firstStmt = block->FirstNonPhiDef();
-#else
-            GenTreePtr firstStmt = block->bbTreeList;
-#endif
             if (firstStmt != NULL)
             {
                 GenTreePtr firstTree = firstStmt->gtStmt.gtStmtExpr;
@@ -1328,6 +1324,7 @@ void CodeGen::genCodeForDivMod(GenTreeOp* treeNode)
 
 //------------------------------------------------------------------------
 // genCodeForBinary: Generate code for many binary arithmetic operators
+// This method is expected to have called genConsumeOperands() before calling it.
 //
 // Arguments:
 //    treeNode - The binary operation for which we are generating code.
@@ -1389,8 +1386,6 @@ void CodeGen::genCodeForBinary(GenTree* treeNode)
     GenTreePtr dst;
     GenTreePtr src;
 
-    genConsumeOperands(treeNode->AsOp());
-
     // This is the case of reg1 = reg1 op reg2
     // We're ready to emit the instruction without any moves
     if (op1reg == targetReg)
@@ -1448,13 +1443,13 @@ void CodeGen::genCodeForBinary(GenTree* treeNode)
         && src->isContainedIntOrIImmed() 
         && !treeNode->gtOverflowEx())
     {
-        if (src->gtIntConCommon.IconValue() == 1)
+        if (src->IsIntegralConst(1))
         {
             emit->emitIns_R(INS_inc, emitTypeSize(treeNode), targetReg);
             genProduceReg(treeNode);
             return;
         }
-        else if (src->gtIntConCommon.IconValue() == -1)
+        else if (src->IsIntegralConst(-1))
         {
             emit->emitIns_R(INS_dec, emitTypeSize(treeNode), targetReg);
             genProduceReg(treeNode);
@@ -1958,6 +1953,7 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
 #endif // !defined(_TARGET_64BIT_)
     case GT_ADD:
     case GT_SUB:
+        genConsumeOperands(treeNode->AsOp());
         genCodeForBinary(treeNode);
         break;
 
@@ -2131,7 +2127,9 @@ CodeGen::genCodeForTreeNode(GenTreePtr treeNode)
                     // zero in the target register, because an xor is smaller than a copy. Note that we could
                     // potentially handle this in the register allocator, but we can't always catch it there
                     // because the target may not have a register allocated for it yet.
-                    if (!containedOp1 && (op1->gtRegNum != treeNode->gtRegNum) && op1->IsZero())
+                    if (!containedOp1 &&
+                        (op1->gtRegNum != treeNode->gtRegNum) &&
+                        (op1->IsIntegralConst(0) || op1->IsFPZero()))
                     {
                         op1->gtRegNum = REG_NA;
                         op1->ResetReuseRegVal();
@@ -4364,7 +4362,7 @@ CodeGen::genCodeForArrOffset(GenTreeArrOffs* arrOffset)
 
     // First, consume the operands in the correct order.
     regNumber offsetReg = REG_NA;
-    if (!offsetNode->IsZero())
+    if (!offsetNode->IsIntegralConst(0))
     {
         offsetReg = genConsumeReg(offsetNode);
     }
@@ -4385,7 +4383,7 @@ CodeGen::genCodeForArrOffset(GenTreeArrOffs* arrOffset)
         arrReg = genConsumeReg(arrObj);
     }
 
-    if (!offsetNode->IsZero())
+    if (!offsetNode->IsIntegralConst(0))
     {
         // Evaluate tgtReg = offsetReg*dim_size + indexReg.
         // tmpReg is used to load dim_size and the result of the multiplication.
@@ -7047,7 +7045,7 @@ void CodeGen::genCompareInt(GenTreePtr treeNode)
     // For this to generate the correct conditional branch we must have 
     // a compare against zero.
     // 
-    if (op2->IsZero())
+    if (op2->IsIntegralConst(0))
     {
         if (op1->isContained())
         {

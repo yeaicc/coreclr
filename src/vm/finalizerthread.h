@@ -11,6 +11,10 @@ class FinalizerThread
     static BOOL fRunFinalizersOnUnload;
     static BOOL fQuitFinalizer;
     static AppDomain *UnloadingAppDomain;
+    
+#if defined(__linux__) && defined(FEATURE_EVENT_TRACE)
+    static ULONGLONG LastHeapDumpTime;
+#endif
 
     static CLREvent *hEventFinalizer;
     static CLREvent *hEventFinalizerDone;

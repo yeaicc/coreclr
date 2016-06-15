@@ -407,7 +407,6 @@ typedef ptrdiff_t   ssize_t;
 //=============================================================================
 
 #define REDUNDANT_LOAD      1       // track locals in regs, suppress loads
-#define LONG_MATH_REGPARAM  0       // args to long mul/div passed in registers
 #define STACK_PROBES        0       // Support for stack probes
 #define DUMP_FLOWGRAPHS     DEBUG   // Support for creating Xml Flowgraph reports in *.fgx files
 
@@ -422,7 +421,6 @@ typedef ptrdiff_t   ssize_t;
 #define DUMP_GC_TABLES      DEBUG
 #define VERIFY_GC_TABLES    0
 #define REARRANGE_ADDS      1
-#define JIT_FEATURE_SSA_SKIP_DEFS 1
 
 #define FUNC_INFO_LOGGING   1   // Support dumping function info to a file. In retail, only NYIs, with no function name, are dumped.
 

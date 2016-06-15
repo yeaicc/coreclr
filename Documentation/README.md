@@ -8,18 +8,11 @@ Intro to .NET Core
 
 .NET Core is a self-contained .NET runtime and framework that implements [ECMA 335](project-docs/dotnet-standards.md). It can be (and has been) ported to multiple architectures and platforms. It supports a variety of installation options, having no specific deployment requirements itself.
 
-Learn about .NET Core
-====================
+Getting Started
+===============
 
+- [Installing the .NET Core SDK](https://www.microsoft.com/net/core)
 - [[WIP] Official .NET Core Docs](http://dotnet.github.io/docs/)
-
-Get .NET Core
-=============
-
-- [Get .NET Core DNX SDK on Windows](install/get-dotnetcore-dnx-windows.md)
-- [Get .NET Core DNX SDK on OS X](install/get-dotnetcore-dnx-osx.md)
-- [Get .NET Core DNX SDK on Linux](install/get-dotnetcore-dnx-linux.md)
-- [Get .NET Core (Raw) on Windows](install/get-dotnetcore-windows.md)
 
 Project Docs
 ============
@@ -56,7 +49,8 @@ Testing and Debugging CoreCLR
 - [Testing Changes on Windows](building/windows-test-instructions.md)
 - [Testing Changes on Linux, OS X, and FreeBSD](building/unix-test-instructions.md)
 - [Testing with CoreFX](building/testing-with-corefx.md)
-- [.NET Performance Data Collection Script](https://raw.githubusercontent.com/dotnet/corefx-tools/master/src/performance/perfcollect/perfcollect)
+- [Performance Tracing on Windows](project-docs/windows-performance-tracing.md)
+- [Performance Tracing on Linux](project-docs/linux-performance-tracing.md)
 - [Creating native images](building/crossgen.md)
 
 Book of the Runtime

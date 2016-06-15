@@ -78,8 +78,6 @@ void                Compiler::raInit()
 #endif
     codeGen->intRegState.rsIsFloat   = false;
     codeGen->floatRegState.rsIsFloat = true;
-    codeGen->intRegState.rsMaxRegArgNum   = MAX_REG_ARG;
-    codeGen->floatRegState.rsMaxRegArgNum = MAX_FLOAT_REG_ARG;
 
     rpReverseEBPenreg = false;
     rpAsgVarNum       = -1;
@@ -293,13 +291,11 @@ regMaskTP               Compiler::genReturnRegForTree(GenTreePtr tree)
 {
     var_types type = tree->TypeGet();
 
-#ifdef _TARGET_ARM_
     if (type == TYP_STRUCT && IsHfa(tree))
     {
-        int retSlots = GetHfaSlots(tree);
+        int retSlots = GetHfaCount(tree);
         return ((1 << retSlots) - 1) << REG_FLOATRET;
     }
-#endif
 
     const  static
     regMaskTP returnMap[TYP_COUNT] =
@@ -666,27 +662,31 @@ void                Compiler::raSetupArgMasks(RegState *regState)
 // by linear scan. (It is not shared for System V AMD64 platform.)
 regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *argDsc)
 {
-    regNumber inArgReg = argDsc->lvArgReg;
+    regNumber inArgReg  = argDsc->lvArgReg;
+    regMaskTP inArgMask = genRegMask(inArgReg);
 
-    noway_assert(genRegMask(inArgReg) & (regState->rsIsFloat ? RBM_FLTARG_REGS : RBM_ARG_REGS));
-
-    regState->rsCalleeRegArgMaskLiveIn |= genRegMask(inArgReg);
-
-#if FEATURE_MULTIREG_ARGS
-#ifdef _TARGET_ARM64_
-    if ((argDsc->lvOtherArgReg != REG_STK) && (argDsc->lvOtherArgReg != REG_NA))
+    if (regState->rsIsFloat)
     {
-        assert(argDsc->lvIsMultiregStruct());
-
-        regNumber secondArgReg = argDsc->lvOtherArgReg;
-
-        noway_assert(regState->rsIsFloat == false);
-        noway_assert(genRegMask(secondArgReg) & RBM_ARG_REGS);
-
-        regState->rsCalleeRegArgMaskLiveIn |= genRegMask(secondArgReg);
+        noway_assert(inArgMask & RBM_FLTARG_REGS);
     }
-#endif // TARGET_ARM64_
-#endif // FEATURE_MULTIREG_ARGS
+    else //  regState is for the integer registers
+    {
+        // This might be the fixed return buffer register argument (on ARM64)
+        // We check and allow inArgReg to be theFixedRetBuffReg
+        if (hasFixedRetBuffReg() && (inArgReg == theFixedRetBuffReg()))
+        {
+            // We should have a TYP_BYREF or TYP_I_IMPL arg and not a TYP_STRUCT arg
+            noway_assert(argDsc->lvType == TYP_BYREF || argDsc->lvType == TYP_I_IMPL);
+            // We should have recorded the variable number for the return buffer arg
+            noway_assert(info.compRetBuffArg != BAD_VAR_NUM); 
+        }
+        else  // we have a regular arg 
+        {
+            noway_assert(inArgMask & RBM_ARG_REGS);
+        }
+    }
+
+    regState->rsCalleeRegArgMaskLiveIn |= inArgMask;
 
 #ifdef _TARGET_ARM_
     if (argDsc->lvType == TYP_DOUBLE)
@@ -710,12 +710,15 @@ regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *ar
         regState->rsCalleeRegArgMaskLiveIn |= genRegMask((regNumber)(inArgReg+1));
         
     }
-    else if (argDsc->lvType == TYP_STRUCT)
+#endif // _TARGET_ARM_
+
+#if FEATURE_MULTIREG_ARGS
+    if (argDsc->lvType == TYP_STRUCT)
     {
-        if (argDsc->lvIsHfaRegArg)
+        if (argDsc->lvIsHfaRegArg())
         {
             assert(regState->rsIsFloat);
-            unsigned cSlots = GetHfaSlots(argDsc->lvVerTypeInfo.GetClassHandleForValueClass());
+            unsigned cSlots = GetHfaCount(argDsc->lvVerTypeInfo.GetClassHandleForValueClass());
             for (unsigned i = 1; i < cSlots; i++)
             {
                 assert(inArgReg + i <= LAST_FP_ARGREG);
@@ -732,12 +735,12 @@ regNumber     Compiler::raUpdateRegStateForArg(RegState *regState, LclVarDsc *ar
                 {
                     break;
                 }
-                assert(!regState->rsIsFloat);
+                assert(regState->rsIsFloat == false);
                 regState->rsCalleeRegArgMaskLiveIn |= genRegMask(nextArgReg);
             }
         }
     }
-#endif // _TARGET_ARM_
+#endif // FEATURE_MULTIREG_ARGS
 
     return inArgReg;
 }
@@ -3471,10 +3474,6 @@ GENERIC_UNARY:
         case GT_MUL:
 
 #ifndef _TARGET_AMD64_
-#if LONG_MATH_REGPARAM
-        if  (type == TYP_LONG)
-            goto LONG_MATH;
-#endif
         if (type == TYP_LONG)
         {
             assert(tree->gtIsValid64RsltMul());
@@ -3674,7 +3673,6 @@ GENERIC_BINARY:
 
 #ifndef _TARGET_64BIT_
 
-#if!LONG_MATH_REGPARAM
             if  (type == TYP_LONG && (oper == GT_MOD || oper == GT_UMOD))
             {
                 /* Special case:  a mod with an int op2 is done inline using idiv or div
@@ -3706,42 +3704,6 @@ GENERIC_BINARY:
 
                 goto RETURN_CHECK;
             }
-#else // LONG_MATH_REGPARAM
-            if  (type == TYP_LONG)
-            {
-LONG_MATH:      /* LONG_MATH_REGPARAM case */
-
-                noway_assert(type == TYP_LONG);
-#ifdef _TARGET_X86_
-                if  (tree->gtFlags & GTF_REVERSE_OPS)
-                {
-                    rpPredictTreeRegUse(op2, PREDICT_PAIR_ECXEBX, lockedRegs,  rsvdRegs | op1->gtRsvdRegs);
-                    rpPredictTreeRegUse(op1, PREDICT_PAIR_EAXEDX, lockedRegs | RBM_ECX | RBC_EBX, RBM_LASTUSE);
-                }
-                else
-                {
-                    rpPredictTreeRegUse(op1, PREDICT_PAIR_EAXEDX, lockedRegs,  rsvdRegs | op2->gtRsvdRegs);
-                    rpPredictTreeRegUse(op2, PREDICT_PAIR_ECXEBX, lockedRegs | RBM_EAX | RBM_EDX, RBM_LASTUSE);
-                }
-#elif defined(_TARGET_ARM_)
-                NYI_ARM("64-bit MOD");
-#else // !_TARGET_X86_ && !_TARGET_ARM_
-#error "Non-ARM or x86 _TARGET_ in RegPredict for 64-bit MOD"
-#endif // !_TARGET_X86_ && !_TARGET_ARM_
-
-                /* grab EAX, EDX for this tree node */
-
-                regMask          |=  (RBM_EAX | RBM_EDX);
-
-                tree->gtUsedRegs  = (regMaskSmall)regMask  | (RBM_ECX | RBM_EBX);
-
-                tree->gtUsedRegs |= op1->gtUsedRegs | op2->gtUsedRegs;
-
-                regMask = RBM_EAX | RBM_EDX;
-
-                goto RETURN_CHECK;
-            }
-#endif
 #endif // _TARGET_64BIT_
 
             /* no divide immediate, so force integer constant which is not
@@ -6559,11 +6521,7 @@ void               Compiler::rpPredictRegUse()
 
             compCurBB = block;
 
-#if JIT_FEATURE_SSA_SKIP_DEFS
             for (stmt =  block->FirstNonPhiDef();
-#else
-            for (stmt =  block->bbTreeList;
-#endif
                  stmt != NULL;
                  stmt =  stmt->gtNext)
             {

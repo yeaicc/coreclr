@@ -15,7 +15,6 @@
 //
 // Arguments:
 //    compiler      - the compiler instance that will evaluate inlines
-//    inlineContext - the context of the inline
 //    isPrejitRoot  - true if this policy is evaluating a prejit root
 //
 // Return Value:
@@ -25,11 +24,8 @@
 //    Determines which of the various policies should apply,
 //    and creates (or reuses) a policy instance to use.
 
-InlinePolicy* InlinePolicy::GetPolicy(Compiler* compiler, InlineContext* inlineContext, bool isPrejitRoot)
+InlinePolicy* InlinePolicy::GetPolicy(Compiler* compiler, bool isPrejitRoot)
 {
-
-    // inlineContext only conditionally used below.
-    (void) inlineContext;
 
 #ifdef DEBUG
 
@@ -52,7 +48,7 @@ InlinePolicy* InlinePolicy::GetPolicy(Compiler* compiler, InlineContext* inlineC
 
     if (useReplayPolicy)
     {
-        return new (compiler, CMK_Inlining) ReplayPolicy(compiler, inlineContext, isPrejitRoot);
+        return new (compiler, CMK_Inlining) ReplayPolicy(compiler, isPrejitRoot);
     }
 
     // Optionally install the SizePolicy.
@@ -1144,7 +1140,9 @@ DiscretionaryPolicy::DiscretionaryPolicy(Compiler* compiler, bool isPrejitRoot)
     , m_LoadAddressCount(0)
     , m_ThrowCount(0)
     , m_CallCount(0)
+    , m_CallSiteWeight(0)
     , m_ModelCodeSizeEstimate(0)
+    , m_PerCallInstructionEstimate(0)
 {
     // Empty
 }
@@ -1231,6 +1229,10 @@ void DiscretionaryPolicy::NoteInt(InlineObservation obs, int value)
 
     case InlineObservation::CALLSITE_DEPTH:
         m_Depth = value;
+        break;
+
+    case InlineObservation::CALLSITE_WEIGHT:
+        m_CallSiteWeight = static_cast<unsigned>(value);
         break;
 
     default:
@@ -1539,6 +1541,11 @@ void DiscretionaryPolicy::DetermineProfitability(CORINFO_METHOD_INFO* methodInfo
     // model for actual inlining.
     EstimateCodeSize();
 
+    // Estimate peformance impact. This is just for model
+    // evaluation purposes -- we'll still use the legacy policy's
+    // model for actual inlining.
+    EstimatePerformanceImpact();
+
     // Delegate to LegacyPolicy for the rest
     LegacyPolicy::DetermineProfitability(methodInfo);
 }
@@ -1696,6 +1703,33 @@ void DiscretionaryPolicy::EstimateCodeSize()
 }
 
 //------------------------------------------------------------------------
+// EstimatePeformanceImpact: produce performance estimates based on
+// observations.
+//
+// Notes:
+//    Attempts to predict the per-call savings in instructions executed.
+//
+//    A negative value indicates the doing the inline will save instructions
+//    and likely time.
+
+void DiscretionaryPolicy::EstimatePerformanceImpact()
+{
+    // Performance estimate based on GLMNET model.
+    // R=0.24, RMSE=16.1, MAE=8.9.
+    double perCallSavingsEstimate =
+        -7.35
+        + (m_CallsiteFrequency == InlineCallsiteFrequency::BORING ?  0.76 : 0)
+        + (m_CallsiteFrequency == InlineCallsiteFrequency::LOOP   ? -2.02 : 0)
+        + (m_ArgType[0] == CORINFO_TYPE_CLASS ?  3.51 : 0)
+        + (m_ArgType[3] == CORINFO_TYPE_BOOL  ? 20.7  : 0)
+        + (m_ArgType[4] == CORINFO_TYPE_CLASS ?  0.38 : 0)
+        + (m_ReturnType == CORINFO_TYPE_CLASS ?  2.32 : 0);
+
+    // Scaled up and reported as an integer value.
+    m_PerCallInstructionEstimate = (int) (SIZE_SCALE * perCallSavingsEstimate);
+}
+
+//------------------------------------------------------------------------
 // CodeSizeEstimate: estimated code size impact of the inline
 //
 // Return Value:
@@ -1765,6 +1799,7 @@ void DiscretionaryPolicy::DumpSchema(FILE* file) const
     fprintf(file, ",LoadAddressCount");
     fprintf(file, ",ThrowCount");
     fprintf(file, ",CallCount");
+    fprintf(file, ",CallSiteWeight");
     fprintf(file, ",IsForceInline");
     fprintf(file, ",IsInstanceCtor");
     fprintf(file, ",IsFromPromotableValueClass");
@@ -1777,6 +1812,7 @@ void DiscretionaryPolicy::DumpSchema(FILE* file) const
     fprintf(file, ",CalleeNativeSizeEstimate");
     fprintf(file, ",CallsiteNativeSizeEstimate");
     fprintf(file, ",ModelCodeSizeEstimate");
+    fprintf(file, ",ModelPerCallInstructionEstimate");
 }
 
 //------------------------------------------------------------------------
@@ -1838,6 +1874,7 @@ void DiscretionaryPolicy::DumpData(FILE* file) const
     fprintf(file, ",%u", m_LoadAddressCount);
     fprintf(file, ",%u", m_ThrowCount);
     fprintf(file, ",%u", m_CallCount);
+    fprintf(file, ",%u", m_CallSiteWeight);
     fprintf(file, ",%u", m_IsForceInline ? 1 : 0);
     fprintf(file, ",%u", m_IsInstanceCtor ? 1 : 0);
     fprintf(file, ",%u", m_IsFromPromotableValueClass ? 1 : 0);
@@ -1850,6 +1887,7 @@ void DiscretionaryPolicy::DumpData(FILE* file) const
     fprintf(file, ",%d", m_CalleeNativeSizeEstimate);
     fprintf(file, ",%d", m_CallsiteNativeSizeEstimate);
     fprintf(file, ",%d", m_ModelCodeSizeEstimate);
+    fprintf(file, ",%d", m_PerCallInstructionEstimate);
 }
 
 //------------------------------------------------------------------------/
@@ -1870,12 +1908,19 @@ ModelPolicy::ModelPolicy(Compiler* compiler, bool isPrejitRoot)
 //
 // Arguments:
 //    methodInfo -- method info for the callee
+//
+// Notes:
+//    There are currently two parameters that are ad-hoc: the
+//    per-call-site weight and the size/speed threshold. Ideally this
+//    policy would have just one tunable parameter, the threshold,
+//    which describes how willing we are to trade size for speed.
 
 void ModelPolicy::DetermineProfitability(CORINFO_METHOD_INFO* methodInfo)
 {
     // Do some homework
     MethodInfoObservations(methodInfo);
     EstimateCodeSize();
+    EstimatePerformanceImpact();
 
     // Preliminary inline model.
     //
@@ -1903,18 +1948,56 @@ void ModelPolicy::DetermineProfitability(CORINFO_METHOD_INFO* methodInfo)
     }
     else
     {
-        // This is a very crude profitability model, based on what
-        // the LegacyPolicy does. It will be updated over time.
-        m_Multiplier = DetermineMultiplier();
-        double benefit = SIZE_SCALE * (m_Multiplier / m_ModelCodeSizeEstimate);
-        double threshold = 0.25;
+        // We estimate that this inline will increase code size.  Only
+        // inline if the performance win is sufficiently large to
+        // justify bigger code.
+
+        // First compute the number of instruction executions saved
+        // via inlining per call to the callee per byte of code size
+        // impact.
+        //
+        // The per call instruction estimate is negative if the inline
+        // will reduce instruction count. Flip the sign here to make
+        // positive be better and negative worse.
+        double perCallBenefit = -((double) m_PerCallInstructionEstimate / (double) m_ModelCodeSizeEstimate);
+
+        // Now estimate the local call frequency.  
+        //
+        // Todo: use IBC data, or a better local profile estimate, or
+        // try and incorporate this into the model. For instance if we
+        // tried to predict the benefit per call to the root method
+        // then the model would have to incorporate the local call
+        // frequency, somehow.
+        double callSiteWeight = 1.0;
+
+        if ((m_CallsiteFrequency == InlineCallsiteFrequency::LOOP) ||
+            (m_CallsiteFrequency == InlineCallsiteFrequency::HOT))
+        {
+            callSiteWeight = 8.0;
+        }
+
+        // Determine the estimated number of instructions saved per
+        // call to the root method per byte of code size impact. This
+        // is our benefit figure of merit.
+        double benefit = callSiteWeight * perCallBenefit;
+
+        // Compare this to the threshold, and inline if greater.  
+        // 
+        // The threshold is interpretable as a size/speed tradeoff:
+        // the value of 0.2 below indicates we'll allow inlines that
+        // grow code by as many as 5 bytes to save 1 instruction
+        // execution (per call to the root method).
+        double threshold = 0.20;
         bool shouldInline = (benefit > threshold);
 
         JITLOG_THIS(m_RootCompiler,
-                    (LL_INFO100000,
-                     "Inline %s profitable: benefit=%g (mult=%g / size=%d)\n",
-                     shouldInline ? "is" : "is not",
-                     benefit, m_Multiplier, (double) m_ModelCodeSizeEstimate / SIZE_SCALE));
+            (LL_INFO100000,
+                "Inline %s profitable: benefit=%g (weight=%g, percall=%g, size=%g)\n",
+                shouldInline ? "is" : "is not",
+                benefit, callSiteWeight,
+                (double) m_PerCallInstructionEstimate / SIZE_SCALE,
+                (double) m_ModelCodeSizeEstimate / SIZE_SCALE));
+
         if (!shouldInline)
         {
             // Fail the inline
@@ -2066,20 +2149,25 @@ void SizePolicy::DetermineProfitability(CORINFO_METHOD_INFO* methodInfo)
     return;
 }
 
-bool  ReplayPolicy::s_WroteReplayBanner = false;
-FILE* ReplayPolicy::s_ReplayFile = nullptr;
+// Statics to track emission of the replay banner
+// and provide file access to the inline xml
+
+bool          ReplayPolicy::s_WroteReplayBanner = false;
+FILE*         ReplayPolicy::s_ReplayFile = nullptr;
+CritSecObject ReplayPolicy::s_XmlReaderLock;
 
 //------------------------------------------------------------------------/
 // ReplayPolicy: construct a new ReplayPolicy
 //
 // Arguments:
 //    compiler -- compiler instance doing the inlining (root compiler)
-//    inlineContext -- inline context for the inline
 //    isPrejitRoot -- true if this compiler is prejitting the root method
 
-ReplayPolicy::ReplayPolicy(Compiler* compiler, InlineContext* inlineContext, bool isPrejitRoot)
+ReplayPolicy::ReplayPolicy(Compiler* compiler, bool isPrejitRoot)
     : DiscretionaryPolicy(compiler, isPrejitRoot)
-    , m_InlineContext(inlineContext)
+    , m_InlineContext(nullptr)
+    , m_Offset(BAD_IL_OFFSET)
+    , m_WasForceInline(false)
 {
     // Is there a log file open already? If so, we can use it.
     if (s_ReplayFile == nullptr)
@@ -2090,9 +2178,16 @@ ReplayPolicy::ReplayPolicy(Compiler* compiler, InlineContext* inlineContext, boo
             // Nope, open it up.
             const wchar_t* replayFileName = JitConfig.JitInlineReplayFile();
             s_ReplayFile = _wfopen(replayFileName, W("r"));
-            fprintf(stderr, "*** %s inlines from %ws\n",
-                    s_ReplayFile == nullptr ? "Unable to replay" : "Replaying",
-                    replayFileName);
+
+            // Display banner to stderr, unless we're dumping inline Xml,
+            // in which case the policy name is captured in the Xml.
+            if (JitConfig.JitInlineDumpXml() == 0)
+            {
+                fprintf(stderr, "*** %s inlines from %ws\n",
+                        s_ReplayFile == nullptr ? "Unable to replay" : "Replaying",
+                        replayFileName);
+            }
+
             s_WroteReplayBanner = true;
         }
     }
@@ -2122,16 +2217,34 @@ void ReplayPolicy::FinalizeXml()
 
 bool ReplayPolicy::FindMethod()
 {
+    if (s_ReplayFile == nullptr)
+    {
+        return false;
+    }
+
+    // See if we've already found this method.
+    InlineStrategy* inlineStrategy = m_RootCompiler->m_inlineStrategy;
+    long filePosition = inlineStrategy->GetMethodXmlFilePosition();
+
+    if (filePosition == -1)
+    {
+        // Past lookup failed
+        return false;
+    }
+    else if (filePosition > 0)
+    {
+        // Past lookup succeeded, jump there
+        fseek(s_ReplayFile, filePosition, SEEK_SET);
+        return true;
+    }
+
+    // Else, scan the file. Might be nice to build an index
+    // or something, someday.
     const mdMethodDef methodToken =
         m_RootCompiler->info.compCompHnd->getMethodDefFromMethod(
             m_RootCompiler->info.compMethodHnd);
     const unsigned methodHash =
         m_RootCompiler->info.compMethodHash();
-
-    if (s_ReplayFile == nullptr)
-    {
-        return false;
-    }
 
     bool foundMethod = false;
     char buffer[256];
@@ -2184,6 +2297,16 @@ bool ReplayPolicy::FindMethod()
         break;
     }
 
+    // Update file position cache for this method
+    long foundPosition = -1;
+
+    if (foundMethod)
+    {
+        foundPosition = ftell(s_ReplayFile);
+    }
+
+    inlineStrategy->SetMethodXmlFilePosition(foundPosition);
+
     return foundMethod;
 }
 
@@ -2227,8 +2350,9 @@ bool ReplayPolicy::FindContext(InlineContext* context)
     unsigned contextHash =
         m_RootCompiler->info.compCompHnd->getMethodHash(
             context->GetCallee());
+    unsigned contextOffset = (unsigned) context->GetOffset();
 
-    return FindInline(contextToken, contextHash);
+    return FindInline(contextToken, contextHash, contextOffset);
 }
 
 //------------------------------------------------------------------------
@@ -2237,6 +2361,7 @@ bool ReplayPolicy::FindContext(InlineContext* context)
 // Arguments:
 //    token -- token describing the inline
 //    hash  -- hash describing the inline
+//    offset -- IL offset of the call site in the parent method
 //
 // ReturnValue:
 //    true if the inline entry was found
@@ -2249,7 +2374,7 @@ bool ReplayPolicy::FindContext(InlineContext* context)
 //    particular inline, if there are multiple calls to the same
 //    method.
 
-bool ReplayPolicy::FindInline(unsigned token, unsigned hash)
+bool ReplayPolicy::FindInline(unsigned token, unsigned hash, unsigned offset)
 {
     char buffer[256];
     bool foundInline = false;
@@ -2322,11 +2447,10 @@ bool ReplayPolicy::FindInline(unsigned token, unsigned hash)
             break;
         }
 
+        // Match token
         unsigned inlineToken = 0;
         int count = sscanf(buffer, " <Token>%u</Token> ", &inlineToken);
 
-        // Need a secondary check here for callsite.
-        // ...offset or similar.
         if ((count != 1) || (inlineToken != token))
         {
             continue;
@@ -2338,15 +2462,31 @@ bool ReplayPolicy::FindInline(unsigned token, unsigned hash)
             break;
         }
 
+        // Match hash
         unsigned inlineHash = 0;
         count = sscanf(buffer, " <Hash>%u</Hash> ", &inlineHash);
 
-        // Need a secondary check here for callsite ID
-        // ... offset or similar.
         if ((count != 1) || (inlineHash != hash))
         {
             continue;
         }
+
+        // Get next line
+        if (fgets(buffer, sizeof(buffer), s_ReplayFile) == nullptr)
+        {
+            break;
+        }
+
+        // Match offset
+        unsigned inlineOffset = 0;
+        count = sscanf(buffer, " <Offset>%u</Offset> ", &inlineOffset);
+        if ((count != 1) || (inlineOffset != offset))
+        {
+            continue;
+        }
+
+        // Token,Hash,Offset may still not be unique enough, but it's
+        // all we have right now.
 
         // We're good!
         foundInline = true;
@@ -2381,9 +2521,42 @@ bool ReplayPolicy::FindInline(CORINFO_METHOD_HANDLE callee)
     unsigned calleeHash =
         m_RootCompiler->info.compCompHnd->getMethodHash(callee);
 
-    bool foundInline = FindInline(calleeToken, calleeHash);
+    // Abstract this or just pass through raw bits
+    // See matching code in xml writer
+    int offset = -1;
+    if (m_Offset != BAD_IL_OFFSET)
+    {
+        offset = (int) jitGetILoffs(m_Offset);
+    }
+
+    unsigned calleeOffset = (unsigned) offset;
+
+    bool foundInline = FindInline(calleeToken, calleeHash, calleeOffset);
 
     return foundInline;
+}
+
+//------------------------------------------------------------------------
+// NoteBool: handle an observed boolean value
+//
+// Arguments:
+//    obs      - the current obsevation
+//    value    - the value being observed
+//
+// Notes:
+//    Overrides parent so Replay can control force inlines.
+
+void ReplayPolicy::NoteBool(InlineObservation obs, bool value)
+{
+    // When inlining, let log override force inline.
+    // Make a note of the actual value for later reporting during observations.
+    if (!m_IsPrejitRoot && (obs == InlineObservation::CALLEE_IS_FORCE_INLINE))
+    {
+        m_WasForceInline = value;
+        value = false;
+    }
+
+    DiscretionaryPolicy::NoteBool(obs, value);
 }
 
 //------------------------------------------------------------------------
@@ -2402,30 +2575,46 @@ void ReplayPolicy::DetermineProfitability(CORINFO_METHOD_INFO* methodInfo)
         return DiscretionaryPolicy::DetermineProfitability(methodInfo);
     }
 
-    // Otherwise try and find this candiate in the Xml. If we fail
-    // the don't inline.
+    // If we're also dumping inline data, make additional observations
+    // based on the method info, and estimate code size, so that the
+    // reports have the necessary data.
+    if (JitConfig.JitInlineDumpData() != 0)
+    {
+        MethodInfoObservations(methodInfo);
+        EstimateCodeSize();
+        m_IsForceInline = m_WasForceInline;
+    }
+
+    // Try and find this candiate in the Xml.
+    // If we fail to find it, then don't inline.
     bool accept = false;
 
-    // First, locate the entries for the root method.
-    bool foundMethod = FindMethod();
-
-    if (foundMethod && (m_InlineContext != nullptr))
+    // Grab the reader lock, since we'll be manipulating
+    // the file pointer as we look for the relevant inline xml.
     {
-        // Next, navigate the context tree to find the entries
-        // for the context that contains this candidate.
-        bool foundContext = FindContext(m_InlineContext);
+        CritSecHolder readerLock(s_XmlReaderLock);
 
-        if (foundContext)
+        // First, locate the entries for the root method.
+        bool foundMethod = FindMethod();
+
+        if (foundMethod && (m_InlineContext != nullptr))
         {
-            // Finally, find this candidate within its context
-            CORINFO_METHOD_HANDLE calleeHandle = methodInfo->ftn;
-            accept = FindInline(calleeHandle);
+            // Next, navigate the context tree to find the entries
+            // for the context that contains this candidate.
+            bool foundContext = FindContext(m_InlineContext);
+
+            if (foundContext)
+            {
+                // Finally, find this candidate within its context
+                CORINFO_METHOD_HANDLE calleeHandle = methodInfo->ftn;
+                accept = FindInline(calleeHandle);
+            }
         }
     }
 
     if (accept)
     {
-        JITLOG_THIS(m_RootCompiler, (LL_INFO100000, "Inline accepted via log replay"))
+        JITLOG_THIS(m_RootCompiler, (LL_INFO100000, "Inline accepted via log replay"));
 
         if (m_IsPrejitRoot)
         {
@@ -2438,7 +2627,7 @@ void ReplayPolicy::DetermineProfitability(CORINFO_METHOD_INFO* methodInfo)
     }
     else
     {
-        JITLOG_THIS(m_RootCompiler, (LL_INFO100000, "Inline rejected via log replay"))
+        JITLOG_THIS(m_RootCompiler, (LL_INFO100000, "Inline rejected via log replay"));
 
         if (m_IsPrejitRoot)
         {

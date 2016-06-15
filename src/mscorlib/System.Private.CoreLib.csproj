@@ -7,12 +7,13 @@
  
   <!-- Compilation options -->
   <PropertyGroup>
-    <AvailablePlatforms>amd64,x86,arm,arm64</AvailablePlatforms>
+    <AvailablePlatforms>amd64,x86,arm,arm-softfp,arm64</AvailablePlatforms>
     <Configuration Condition=" '$(Configuration)' == '' ">$(BuildType)</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">$(BuildArch)</Platform>
     <!-- The CLR properties use amd64 as their platform string, we want to keep in sync with those, so set Platform appropriately,
          though still use the 'x64' output path (see use of BuildArch below) -->
     <Platform Condition=" '$(Platform)' == 'x64' ">amd64</Platform>
+    <Platform Condition=" '$(Platform)' == 'arm-softfp' ">arm</Platform>
     <ProjectGuid>{3DA06C3A-2E7B-4CB7-80ED-9B12916013F9}</ProjectGuid>
 
     <OutputType>Library</OutputType>
@@ -29,7 +30,6 @@
     <HighEntropyVA>true</HighEntropyVA>
     <ErrorReport>prompt</ErrorReport>
     <Optimize Condition="'$(Optimize)' == ''">true</Optimize>
-    <GenerateNativeVersionInfo Condition="'$(OsEnvironment)'=='Windows_NT'">true</GenerateNativeVersionInfo>
     <CLSCompliant>true</CLSCompliant>
     <WarningLevel>4</WarningLevel>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
@@ -37,7 +37,7 @@
     <NoWarn>649,3019,414,169,3015</NoWarn>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
 
-    <BclRewriterModelFile>$(MSBuildThisFileDirectory)model.CoreLib.xml</BclRewriterModelFile>
+    <BclRewriterModelFile>$(MSBuildThisFileDirectory)model.xml</BclRewriterModelFile>
 
     <SignAssembly>true</SignAssembly>
     <DelaySign>true</DelaySign>
@@ -151,7 +151,7 @@
   <!-- Include additional sources shared files in the compilation -->
   <ItemGroup>
     <!-- These are files are preprocessed  -->
-    <MscorlibSources Include="$(CommonPath)\Preprocessed\AssemblyRefs.CoreLib.g.cs" />
+    <MscorlibSources Include="$(CommonPath)\Preprocessed\AssemblyRefs.g.cs" />
 
     <!-- These files are shared with other framework components and don't live the same folder as the rest of them-->
     <MscorlibSources Include="$(CommonPath)\PinnableBufferCache.cs" />

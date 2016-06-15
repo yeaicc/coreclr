@@ -546,13 +546,9 @@ var_types    Compiler::argOrReturnTypeForStruct(unsigned size, CORINFO_CLASS_HAN
             if (size <= MAX_RET_MULTIREG_BYTES)
             {
 #ifdef _TARGET_ARM64_
-                assert(size > TARGET_POINTER_SIZE);
-
-                // For structs that are 9 to 16 bytes in size set useType to TYP_STRUCT, 
-                // as this means a 9-16 byte struct value in two registers
-                //
-                useType = TYP_STRUCT;
-#endif // _TARGET_ARM64_
+                // TODO-ARM64-HFA - Implement x0,x1 returns   
+                // TODO-ARM64     - Implement HFA returns   
+#endif // _TARGET_XXX_
             }
         }
 #endif // FEATURE_MULTIREG_RET
@@ -565,10 +561,13 @@ var_types    Compiler::argOrReturnTypeForStruct(unsigned size, CORINFO_CLASS_HAN
 #ifdef _TARGET_ARM64_
                 assert(size > TARGET_POINTER_SIZE);
 
-                // For structs that are 9 to 16 bytes in size set useType to TYP_STRUCT, 
-                // as this means a 9-16 byte struct value in two registers
-                //
-                useType = TYP_STRUCT;
+                // On ARM64 structs that are 9-16 bytes are passed by value
+                // or if the struct is an HFA it is passed by value
+                if ((size <= (TARGET_POINTER_SIZE * 2)) || IsHfa(clsHnd))
+                {
+                    // set useType to TYP_STRUCT to indicate that this is passed by value in registers
+                    useType = TYP_STRUCT;
+                }
 #endif // _TARGET_ARM64_
             }
         }
@@ -3649,9 +3648,6 @@ void                 Compiler::compCompile(void * * methodCodePtr,
 #ifdef DEBUG
     fgDebugCheckLinks();
 #endif
-       
-    // split trees where it is advantageous
-    fgSplitMethodTrees();
 
     /* Create the variable table (and compute variable ref counts) */
 
@@ -3922,13 +3918,16 @@ void                 Compiler::compCompile(void * * methodCodePtr,
     compFunctionTraceEnd(*methodCodePtr, *methodCodeSize, false);
 
 #if FUNC_INFO_LOGGING
-#ifdef DEBUG // We only have access to info.compFullName in DEBUG builds.
     if (compJitFuncInfoFile != NULL)
     {
         assert(!compIsForInlining());
+#ifdef DEBUG // We only have access to info.compFullName in DEBUG builds.
         fprintf(compJitFuncInfoFile, "%s\n", info.compFullName);
+#elif FEATURE_SIMD
+        fprintf(compJitFuncInfoFile, " %s\n", eeGetMethodFullName(info.compMethodHnd));
+#endif
+        fprintf(compJitFuncInfoFile, "");         // in our logic this causes a flush
     }
-#endif // DEBUG
 #endif // FUNC_INFO_LOGGING
 }
 
@@ -4124,7 +4123,7 @@ int           Compiler::compCompile(CORINFO_METHOD_HANDLE methodHnd,
         if (oldFuncInfoFileName == NULL)
         {
             assert(compJitFuncInfoFile == NULL);
-            compJitFuncInfoFile = _wfsopen(compJitFuncInfoFilename, W("a"), _SH_DENYWR); // allow reading the file before the end of compilation
+            compJitFuncInfoFile = _wfopen(compJitFuncInfoFilename, W("a"));
         }
     }
 #endif // FUNC_INFO_LOGGING
@@ -4348,15 +4347,19 @@ void Compiler::compCompileFinish()
 #endif
 
 #if MEASURE_MEM_ALLOC
-    ClrEnterCriticalSection(s_memStatsLock.Val());
-    genMemStats.nraTotalSizeAlloc = compGetAllocator()->getTotalBytesAllocated();
-    genMemStats.nraTotalSizeUsed  = compGetAllocator()->getTotalBytesUsed();
-    s_aggMemStats.Add(genMemStats);
-    if (genMemStats.allocSz > s_maxCompMemStats.allocSz)
     {
-        s_maxCompMemStats = genMemStats;
+        // Grab the relevant lock.
+        CritSecHolder statsLock(s_memStatsLock);
+
+        // Make the updates.
+        genMemStats.nraTotalSizeAlloc = compGetAllocator()->getTotalBytesAllocated();
+        genMemStats.nraTotalSizeUsed  = compGetAllocator()->getTotalBytesUsed();
+        s_aggMemStats.Add(genMemStats);
+        if (genMemStats.allocSz > s_maxCompMemStats.allocSz)
+        {
+            s_maxCompMemStats = genMemStats;
+        }
     }
-    ClrLeaveCriticalSection(s_memStatsLock.Val());
 
 #ifdef DEBUG
     if (s_dspMemStats || verbose)
@@ -5764,11 +5767,7 @@ Compiler::NodeToIntMap* Compiler::FindReachableNodesInNodeTestData()
          block != NULL;
          block =  block->bbNext)
     {
-#if JIT_FEATURE_SSA_SKIP_DEFS
         for (GenTreePtr stmt = block->FirstNonPhiDef();
-#else
-        for (GenTreePtr stmt = block->bbTreeList;
-#endif
              stmt != NULL;
              stmt = stmt->gtNext)
         {
@@ -6349,7 +6348,7 @@ void CompTimeSummaryInfo::AddInfo(CompTimeInfo& info)
 {
     if (info.m_timerFailure) return;  // Don't update if there was a failure.
 
-    ClrEnterCriticalSection(s_compTimeSummaryLock.Val());
+    CritSecHolder timeLock(s_compTimeSummaryLock);
     m_numMethods++;
 
     bool includeInFiltered = IncludedInFilteredData(info);
@@ -6381,8 +6380,6 @@ void CompTimeSummaryInfo::AddInfo(CompTimeInfo& info)
     }
     m_total.m_parentPhaseEndSlop += info.m_parentPhaseEndSlop;
     m_maximum.m_parentPhaseEndSlop = max(m_maximum.m_parentPhaseEndSlop, info.m_parentPhaseEndSlop);
-
-    ClrLeaveCriticalSection(s_compTimeSummaryLock.Val());
 }
 
 // Static
@@ -6553,7 +6550,8 @@ void JitTimer::PrintCsvHeader()
         return;
     }
 
-    ClrEnterCriticalSection(s_csvLock.Val());
+    CritSecHolder csvLock(s_csvLock);
+
     if (_waccess(jitTimeLogCsv, 0) == -1)
     {
         // File doesn't exist, so create it and write the header
@@ -6575,7 +6573,6 @@ void JitTimer::PrintCsvHeader()
         fprintf(fp, "\"CPS\"\n");
         fclose(fp);
     }
-    ClrLeaveCriticalSection(s_csvLock.Val());
 }
 
 void JitTimer::PrintCsvMethodStats(Compiler* comp)
@@ -6589,7 +6586,7 @@ void JitTimer::PrintCsvMethodStats(Compiler* comp)
     // eeGetMethodFullName uses locks, so don't enter crit sec before this call.
     const char* methName = comp->eeGetMethodFullName(comp->info.compMethodHnd);
 
-    ClrEnterCriticalSection(s_csvLock.Val());
+    CritSecHolder csvLock(s_csvLock);
 
     FILE* fp = _wfopen(jitTimeLogCsv, W("a"));
     fprintf(fp, "\"%s\",", methName);
@@ -6607,8 +6604,6 @@ void JitTimer::PrintCsvMethodStats(Compiler* comp)
     fprintf(fp, "%I64u,", m_info.m_totalCycles);
     fprintf(fp, "%f\n", CycleTimer::CyclesPerSecond());
     fclose(fp);
-
-    ClrLeaveCriticalSection(s_csvLock.Val());
 }
 
 // Completes the timing of the current method, and adds it to "sum".
@@ -6717,11 +6712,11 @@ void Compiler::PrintAggregateLoopHoistStats(FILE* f)
 
 void Compiler::AddLoopHoistStats()
 {
-     ClrEnterCriticalSection(s_loopHoistStatsLock.Val());
-     s_loopsConsidered +=             m_loopsConsidered;
-     s_loopsWithHoistedExpressions += m_loopsWithHoistedExpressions;
-     s_totalHoistedExpressions +=     m_totalHoistedExpressions;
-     ClrLeaveCriticalSection(s_loopHoistStatsLock.Val());
+    CritSecHolder statsLock(s_loopHoistStatsLock);
+
+    s_loopsConsidered +=             m_loopsConsidered;
+    s_loopsWithHoistedExpressions += m_loopsWithHoistedExpressions;
+    s_totalHoistedExpressions +=     m_totalHoistedExpressions;
 }
 
 void Compiler::PrintPerMethodLoopHoistStats()

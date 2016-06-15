@@ -50,6 +50,10 @@ extern void CONTEXT_CaptureContext(LPCONTEXT lpContext);
 
 #if !HAVE_MACH_EXCEPTIONS
 
+#ifndef __GLIBC__
+typedef int __ptrace_request;
+#endif
+
 #if HAVE_MACHINE_REG_H
 #include <machine/reg.h>
 #endif  // HAVE_MACHINE_REG_H
@@ -488,6 +492,12 @@ void CONTEXTFromNativeContext(const native_context_t *native, LPCONTEXT lpContex
     if ((contextFlags & CONTEXT_CONTROL) == CONTEXT_CONTROL)
     {
         ASSIGN_CONTROL_REGS
+#ifdef _ARM_
+        // WinContext assumes that the least bit of Pc is always 1 (denoting thumb)
+        // although the pc value retrived from native context might not have set the least bit.
+        // This becomes especially problematic if the context is on the JIT_WRITEBARRIER.
+        lpContext->Pc |= 0x1;
+#endif
     }
 
     if ((contextFlags & CONTEXT_INTEGER) == CONTEXT_INTEGER)

@@ -540,8 +540,8 @@ const SIMDIntrinsicInfo* Compiler::getSIMDIntrinsicInfo(CORINFO_CLASS_HANDLE*  i
                         assert(expectedArgType != TYP_UNDEF);
                         if (expectedArgType == TYP_UNKNOWN)
                         {
-                            // JIT maps uint/ulong type vars to TYP_INT/TYP_LONG.                            
-                            expectedArgType = (*baseType == TYP_UINT || *baseType == TYP_ULONG) ? genActualType(*baseType) : *baseType;
+                            // The type of the argument will be genActualType(*baseType).                            
+                            expectedArgType = genActualType(*baseType);
                         }
                     }
                     else
@@ -2060,7 +2060,7 @@ GenTreePtr Compiler::impSIMDIntrinsic(OPCODE                   opcode,
             if (argCount == 3)
             {
                 op3 = impSIMDPopStack(TYP_INT);
-                if (op3->IsZero())
+                if (op3->IsIntegralConst(0))
                 {
                     op3 = nullptr;
                 }

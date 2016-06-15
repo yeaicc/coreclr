@@ -35,6 +35,8 @@ check_include_files(libunwind.h HAVE_LIBUNWIND_H)
 check_include_files(runetype.h HAVE_RUNETYPE_H)
 check_include_files(lttng/tracepoint.h HAVE_LTTNG_TRACEPOINT_H)
 check_include_files(uuid/uuid.h HAVE_LIBUUID_H)
+check_include_files(sys/sysctl.h HAVE_SYS_SYSCTL_H)
+check_include_files(gnu/lib-names.h HAVE_GNU_LIBNAMES_H)
 
 check_function_exists(kqueue HAVE_KQUEUE)
 check_function_exists(getpwuid_r HAVE_GETPWUID_R)
@@ -441,47 +443,6 @@ int main(void) {
   exit(0);
 }" HAVE_MMAP_DEV_ZERO)
 check_cxx_source_runs("
-#include <fcntl.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/mman.h>
-#include <unistd.h>
-
-#ifndef MAP_ANON
-#define MAP_ANON MAP_ANONYMOUS
-#endif
-
-int main(void) {
-  void *hint, *ptr;
-  int pagesize;
-  int fd;
-
-  pagesize = getpagesize();
-  fd = open(\"/etc/passwd\", O_RDONLY);
-  if (fd == -1) {
-    exit(0);
-  }
-  ptr = mmap(NULL, pagesize, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
-  if (ptr == MAP_FAILED) {
-    exit(0);
-  }
-  hint = mmap(NULL, pagesize, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
-  if (hint == MAP_FAILED) {
-    exit(0);
-  }
-  if (munmap(ptr, pagesize) != 0) {
-    exit(0);
-  }
-  if (munmap(hint, pagesize) != 0) {
-    exit(0);
-  }
-  ptr = mmap(hint, pagesize, PROT_NONE, MAP_FIXED | MAP_PRIVATE, fd, 0);
-  if (ptr == MAP_FAILED || ptr != hint) {
-    exit(0);
-  }
-  exit(1);
-}" MMAP_IGNORES_HINT)
-check_cxx_source_runs("
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <signal.h>
@@ -665,13 +626,85 @@ int main(void) {
   char path[1024];
 #endif
 
-  sprintf(path, \"/proc/%u/$1\", getpid());
-  fd = open(path, $2);
+  sprintf(path, \"/proc/%u/ctl\", getpid());
+  fd = open(path, O_WRONLY);
   if (fd == -1) {
     exit(1);
   }
   exit(0);
 }" HAVE_PROCFS_CTL)
+set(CMAKE_REQUIRED_LIBRARIES)
+check_cxx_source_runs("
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+int main(void) {
+  int fd;
+#ifdef PATH_MAX
+  char path[PATH_MAX];
+#elif defined(MAXPATHLEN)
+  char path[MAXPATHLEN];
+#else
+  char path[1024];
+#endif
+
+  sprintf(path, \"/proc/%u/maps\", getpid());
+  fd = open(path, O_RDONLY);
+  if (fd == -1) {
+    exit(1);
+  }
+  exit(0);
+}" HAVE_PROCFS_MAPS)
+set(CMAKE_REQUIRED_LIBRARIES)
+check_cxx_source_runs("
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+int main(void) {
+  int fd;
+#ifdef PATH_MAX
+  char path[PATH_MAX];
+#elif defined(MAXPATHLEN)
+  char path[MAXPATHLEN];
+#else
+  char path[1024];
+#endif
+
+  sprintf(path, \"/proc/%u/stat\", getpid());
+  fd = open(path, O_RDONLY);
+  if (fd == -1) {
+    exit(1);
+  }
+  exit(0);
+}" HAVE_PROCFS_STAT)
+set(CMAKE_REQUIRED_LIBRARIES)
+check_cxx_source_runs("
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+int main(void) {
+  int fd;
+#ifdef PATH_MAX
+  char path[PATH_MAX];
+#elif defined(MAXPATHLEN)
+  char path[MAXPATHLEN];
+#else
+  char path[1024];
+#endif
+
+  sprintf(path, \"/proc/%u/status\", getpid());
+  fd = open(path, O_RDONLY);
+  if (fd == -1) {
+    exit(1);
+  }
+  exit(0);
+}" HAVE_PROCFS_STATUS)
 set(CMAKE_REQUIRED_LIBRARIES m)
 check_cxx_source_runs("
 #include <math.h>
@@ -703,7 +736,25 @@ check_cxx_source_runs("
 
 int main(void) {
   double infinity = 1.0 / 0.0;
-  if (!isnan(pow(1.0, infinity))) {
+  if (pow(1.0, infinity) != 1.0 || pow(1.0, -infinity) != 1.0) {
+    exit(1)
+  }
+  if (!isnan(pow(-1.0, infinity)) || !isnan(pow(-1.0, -infinity))) {
+    exit(1);
+  }
+  if (pow(0.0, infinity) != 0.0) {
+    exit(1);
+  }
+  if (pow(0.0, -infinity) != infinity) {
+    exit(1);
+  }
+  if (pow(-1.1, infinity) != infinity || pow(1.1, infinity) != infinity) {
+    exit(1);
+  }
+  if (pow(-1.1, -infinity) != 0.0 || pow(1.1, infinity) != 0.0) {
+    exit(1);
+  }
+  if (pow(-0.0, -1) != -infinity) {
     exit(1);
   }
   if (pow(0.0, -1) != infinity) {
@@ -1062,6 +1113,11 @@ else() # Anything else is Linux
   if(NOT HAVE_LIBUUID_H)
     unset(HAVE_LIBUUID_H CACHE)
     message(FATAL_ERROR "Cannot find libuuid. Try installing uuid-dev or the appropriate packages for your platform")
+  endif()
+  if(NOT HAVE_GNU_LIBNAMES_H)
+    if(EXISTS /lib/libc.musl-x86_64.so.1)
+      set(MUSL_LIBC_SO "/lib/libc.musl-x86_64.so.1")
+    endif()
   endif()
   set(DEADLOCK_WHEN_THREAD_IS_SUSPENDED_WHILE_BLOCKED_ON_MUTEX 0)
   set(PAL_PTRACE "ptrace((cmd), (pid), (void*)(addr), (data))")
