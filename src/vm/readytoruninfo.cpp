@@ -53,7 +53,7 @@ MethodDesc * ReadyToRunInfo::GetMethodDescForEntryPoint(PCODE entryPoint)
     }
     CONTRACTL_END;
 
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_AMD64_) || (defined(_TARGET_X86_) && defined(FEATURE_PAL))
     // A normal method entry point is always 8 byte aligned, but a funclet can start at an odd address.
     // Since PtrHashMap can't handle odd pointers, check for this case and return NULL.
     if ((entryPoint & 0x1) != 0)
@@ -401,6 +401,55 @@ static void LogR2r(const char *msg, PEFile *pFile)
 
 #define DoLog(msg) if (s_r2rLogFile != NULL) LogR2r(msg, pFile)
 
+// Try to acquire an R2R image for exclusive use by a particular module.
+// Returns true if successful. Returns false if the image is already been used
+// by another module. Each R2R image has a space to store a pointer to the
+// module that owns it. We set this pointer unless it has already be
+// initialized to point to another Module.
+static bool AcquireImage(Module * pModule, PEImageLayout * pLayout, READYTORUN_HEADER * pHeader)
+{
+    STANDARD_VM_CONTRACT;
+
+    // First find the import sections of the image.
+    READYTORUN_IMPORT_SECTION * pImportSections = NULL;
+    READYTORUN_IMPORT_SECTION * pImportSectionsEnd = NULL;
+    READYTORUN_SECTION * pSections = (READYTORUN_SECTION*)(pHeader + 1);
+    for (DWORD i = 0; i < pHeader->NumberOfSections; i++)
+    {
+        if (pSections[i].Type == READYTORUN_SECTION_IMPORT_SECTIONS)
+        {
+            pImportSections = (READYTORUN_IMPORT_SECTION*)((PBYTE)pLayout->GetBase() + pSections[i].Section.VirtualAddress);
+            pImportSectionsEnd = (READYTORUN_IMPORT_SECTION*)((PBYTE)pImportSections + pSections[i].Section.Size);
+            break;
+        }
+    }
+
+    // Go through the import sections to find the import for the module pointer.
+    for (READYTORUN_IMPORT_SECTION * pCurSection = pImportSections; pCurSection < pImportSectionsEnd; pCurSection++)
+    {
+        // The import for the module pointer is always in an eager fixup section, so skip delayed fixup sections.
+        if ((pCurSection->Flags & READYTORUN_IMPORT_SECTION_FLAGS_EAGER) == 0)
+            continue;
+
+        // Found an eager fixup section. Check the signature of each fixup in this section.
+        PVOID *pFixups = (PVOID *)((PBYTE)pLayout->GetBase() + pCurSection->Section.VirtualAddress);
+        DWORD nFixups = pCurSection->Section.Size / sizeof(PVOID);
+        DWORD *pSignatures = (DWORD *)((PBYTE)pLayout->GetBase() + pCurSection->Signatures);
+        for (DWORD i = 0; i < nFixups; i++)
+        {
+            // See if we found the fixup for the Module pointer.
+            PBYTE pSig = (PBYTE)pLayout->GetBase() + pSignatures[i];
+            if (pSig[0] == READYTORUN_FIXUP_Helper && pSig[1] == READYTORUN_HELPER_Module)
+            {
+                Module * pPrevious = InterlockedCompareExchangeT(EnsureWritablePages((Module **)(pFixups + i)), pModule, NULL);
+                return pPrevious == NULL || pPrevious == pModule;
+            }
+        }
+    }
+
+    return false;
+}
+
 PTR_ReadyToRunInfo ReadyToRunInfo::Initialize(Module * pModule, AllocMemTracker *pamTracker)
 {
     STANDARD_VM_CONTRACT;
@@ -442,13 +491,8 @@ PTR_ReadyToRunInfo ReadyToRunInfo::Initialize(Module * pModule, AllocMemTracker 
 
     if (!pLayout->IsNativeMachineFormat())
     {
-#ifdef FEATURE_CORECLR
         // For CoreCLR, be strict about disallowing machine mismatches.
         COMPlusThrowHR(COR_E_BADIMAGEFORMAT);
-#else
-        DoLog("Ready to Run disabled - mismatched architecture");
-        return NULL;
-#endif
     }
 
 #ifdef FEATURE_NATIVE_IMAGE_GENERATION
@@ -478,16 +522,22 @@ PTR_ReadyToRunInfo ReadyToRunInfo::Initialize(Module * pModule, AllocMemTracker 
         return NULL;
     }
 
+    if (!AcquireImage(pModule, pLayout, pHeader))
+    {
+        DoLog("Ready to Run disabled - module already loaded in another AppDomain");
+        return NULL;
+    }
+
     LoaderHeap *pHeap = pModule->GetLoaderAllocator()->GetHighFrequencyHeap();
     void * pMemory = pamTracker->Track(pHeap->AllocMem((S_SIZE_T)sizeof(ReadyToRunInfo)));
 
     DoLog("Ready to Run initialized successfully");
 
-    return new (pMemory) ReadyToRunInfo(pModule, pLayout, pHeader);
+    return new (pMemory) ReadyToRunInfo(pModule, pLayout, pHeader, pamTracker);
 }
 
-ReadyToRunInfo::ReadyToRunInfo(Module * pModule, PEImageLayout * pLayout, READYTORUN_HEADER * pHeader)
-    : m_pModule(pModule), m_pLayout(pLayout), m_pHeader(pHeader), m_Crst(CrstLeafLock)
+ReadyToRunInfo::ReadyToRunInfo(Module * pModule, PEImageLayout * pLayout, READYTORUN_HEADER * pHeader, AllocMemTracker *pamTracker)
+    : m_pModule(pModule), m_pLayout(pLayout), m_pHeader(pHeader), m_Crst(CrstLeafLock), m_pPersistentInlineTrackingMap(NULL)
 {
     STANDARD_VM_CONTRACT;
 
@@ -538,6 +588,30 @@ ReadyToRunInfo::ReadyToRunInfo(Module * pModule, PEImageLayout * pLayout, READYT
     {
         LockOwner lock = {&m_Crst, IsOwnerOfCrst};
         m_entryPointToMethodDescMap.Init(TRUE, &lock);
+    }
+
+    // For format version 2.1 and later, there is an optional inlining table 
+    if (IsImageVersionAtLeast(2, 1))
+    {
+        IMAGE_DATA_DIRECTORY * pInlineTrackingInfoDir = FindSection(READYTORUN_SECTION_INLINING_INFO);
+        if (pInlineTrackingInfoDir != NULL)
+        {
+            const BYTE* pInlineTrackingMapData = (const BYTE*)GetImage()->GetDirectoryData(pInlineTrackingInfoDir);
+            PersistentInlineTrackingMapR2R::TryLoad(pModule, pInlineTrackingMapData, pInlineTrackingInfoDir->Size,
+                                                    pamTracker, &m_pPersistentInlineTrackingMap);
+        }
+    }
+    // Fpr format version 2.2 and later, there is an optional profile-data section
+    if (IsImageVersionAtLeast(2, 2))
+    {
+        IMAGE_DATA_DIRECTORY * pProfileDataInfoDir = FindSection(READYTORUN_SECTION_PROFILEDATA_INFO);
+        if (pProfileDataInfoDir != NULL)
+        {
+            CORCOMPILE_METHOD_PROFILE_LIST * pMethodProfileList;
+            pMethodProfileList = (CORCOMPILE_METHOD_PROFILE_LIST *)GetImage()->GetDirectoryData(pProfileDataInfoDir);
+
+            pModule->SetMethodProfileList(pMethodProfileList);  
+        }
     }
 }
 
@@ -636,6 +710,22 @@ PCODE ReadyToRunInfo::GetEntryPoint(MethodDesc * pMD, BOOL fFixups /*=TRUE*/)
             return NULL;
     }
 
+#ifndef CROSSGEN_COMPILE
+#ifdef PROFILING_SUPPORTED
+        BOOL fShouldSearchCache = TRUE;
+        {
+            BEGIN_PIN_PROFILER(CORProfilerTrackCacheSearches());
+            g_profControlBlock.pProfInterface->
+                JITCachedFunctionSearchStarted((FunctionID)pMD, &fShouldSearchCache);
+            END_PIN_PROFILER();
+        }
+        if (!fShouldSearchCache)
+        {
+            return NULL;
+        }
+#endif // PROFILING_SUPPORTED
+#endif // CROSSGEN_COMPILE
+
     uint id;
     offset = m_nativeReader.DecodeUnsigned(offset, &id);
 
@@ -670,6 +760,17 @@ PCODE ReadyToRunInfo::GetEntryPoint(MethodDesc * pMD, BOOL fFixups /*=TRUE*/)
         if (m_entryPointToMethodDescMap.LookupValue(PCODEToPINSTR(pEntryPoint), (LPVOID)PCODEToPINSTR(pEntryPoint)) == (LPVOID)INVALIDENTRY)
             m_entryPointToMethodDescMap.InsertValue(PCODEToPINSTR(pEntryPoint), pMD);
     }
+
+#ifndef CROSSGEN_COMPILE
+#ifdef PROFILING_SUPPORTED
+        {
+            BEGIN_PIN_PROFILER(CORProfilerTrackCacheSearches());
+            g_profControlBlock.pProfInterface->
+                JITCachedFunctionSearchFinished((FunctionID)pMD, COR_PRF_CACHED_FUNCTION_FOUND);
+            END_PIN_PROFILER();
+        }
+#endif // PROFILING_SUPPORTED
+#endif // CROSSGEN_COMPILE
 
     if (g_pDebugInterface != NULL)
     {
@@ -775,6 +876,14 @@ DWORD ReadyToRunInfo::GetFieldBaseOffset(MethodTable * pMT)
     dwCumulativeInstanceFieldPos = (DWORD)ALIGN_UP(dwCumulativeInstanceFieldPos, dwAlignment);
 
     return (DWORD)sizeof(Object) + dwCumulativeInstanceFieldPos - dwOffsetBias;
+}
+
+BOOL ReadyToRunInfo::IsImageVersionAtLeast(int majorVersion, int minorVersion)
+{
+	LIMITED_METHOD_CONTRACT;
+	return (m_pHeader->MajorVersion == majorVersion && m_pHeader->MinorVersion >= minorVersion) ||
+		   (m_pHeader->MajorVersion > majorVersion);
+
 }
 
 #endif // DACCESS_COMPILE

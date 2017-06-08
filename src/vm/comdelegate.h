@@ -131,14 +131,10 @@ public:
 
     static BOOL IsTrueMulticastDelegate(OBJECTREF delegate);
 
-#ifdef FEATURE_CORECLR    
     static BOOL IsMethodAllowedToSinkReversePInvoke(MethodDesc *pMD);
-#endif
 
 private:
-#ifdef FEATURE_CORECLR    
     static BOOL IsFullTrustDelegate(DELEGATEREF pDelegate);
-#endif
     static Stub* SetupShuffleThunk(MethodTable * pDelMT, MethodDesc *pTargetMeth);
 
 public:
@@ -156,7 +152,6 @@ public:
     //@GENERICSVER: new (suitable for generics)
     // Method to do static validation of delegate .ctor
     static BOOL ValidateCtor(TypeHandle objHnd, TypeHandle ftnParentHnd, MethodDesc *pFtn, TypeHandle dlgtHnd, BOOL *pfIsOpenDelegate);
-    static BOOL ValidateSecurityTransparency(MethodDesc *pFtn, MethodTable *pdlgMT); // enforce the transparency rules
 
 private:
     static BOOL ValidateBeginInvoke(DelegateEEClass* pClass);   // make certain the BeginInvoke method is consistant with the Invoke Method
@@ -184,8 +179,8 @@ enum DelegateBindingFlags
     DBF_RelaxedSignature    =   0x00000080, // Allow relaxed signature matching (co/contra variance)
 };
 
-void DistributeEventReliably(OBJECTREF *pDelegate,
-                             OBJECTREF *pDomain);
+void DistributeEvent(OBJECTREF *pDelegate,
+                     OBJECTREF *pDomain);
 
 void DistributeUnhandledExceptionReliably(OBJECTREF *pDelegate,
                                           OBJECTREF *pDomain,

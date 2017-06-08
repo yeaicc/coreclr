@@ -3305,135 +3305,6 @@ ILCriticalHandleMarshaler::ReturnOverride(
     return OVERRIDDEN;
 } // ILCriticalHandleMarshaler::ReturnOverride
 
-#ifndef FEATURE_CORECLR
-//---------------------------------------------------------------------------------------
-// 
-MarshalerOverrideStatus ILBlittableValueClassWithCopyCtorMarshaler::ArgumentOverride(NDirectStubLinker* psl,
-                                                BOOL               byref,
-                                                BOOL               fin,
-                                                BOOL               fout,
-                                                BOOL               fManagedToNative,
-                                                OverrideProcArgs*  pargs,
-                                                UINT*              pResID,
-                                                UINT               argidx,
-                                                UINT               nativeStackOffset)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-    
-    ILCodeStream* pslIL         = psl->GetMarshalCodeStream();
-    ILCodeStream* pslILDispatch = psl->GetDispatchCodeStream();
-
-    if (byref)
-    {
-        *pResID = IDS_EE_BADMARSHAL_COPYCTORRESTRICTION;
-        return DISALLOWED;
-    }        
-
-    if (fManagedToNative)
-    {
-#ifdef _TARGET_X86_
-        _ASSERTE(nativeStackOffset != (UINT)-1);
-
-        // get a new copy ctor cookie
-        DWORD dwCookieLocalNum = psl->CreateCopyCtorCookie(pslIL);
-
-        // and initialize it with our values
-        pslIL->EmitLDLOCA(dwCookieLocalNum);
-        pslIL->EmitLDARG(argidx);
-        pslIL->EmitLDC(nativeStackOffset);
-
-        // SetData takes pointers to managed methods although code:CopyCtorCallStubWorker
-        // currently calls them via reverse P/Invokes
-        if (pargs->mm.m_pCopyCtor)
-        {
-            pslIL->EmitLDFTN(pslIL->GetToken(pargs->mm.m_pCopyCtor));
-        }
-        else
-        {
-            pslIL->EmitLoadNullPtr();
-        }
-
-        if (pargs->mm.m_pDtor)
-        {
-            pslIL->EmitLDFTN(pslIL->GetToken(pargs->mm.m_pDtor));
-        }
-        else
-        {
-            pslIL->EmitLoadNullPtr();
-        }
-
-        // <dwCookieLocalNum>.SetData(<argidx>, <nativeStackOffset>, ctorPtr, dtorPtr)
-        pslIL->EmitCALL(METHOD__COPYCTORSTUBCOOKIE__SET_DATA, 5, 0);
-
-        LocalDesc   locDesc(pargs->mm.m_pMT);
-        pslIL->SetStubTargetArgType(&locDesc);              // native type is the value type
-
-        pslILDispatch->EmitLDARG(argidx);                   // we load the argument directly
-        pslILDispatch->EmitLDOBJ(pslILDispatch->GetToken(pargs->mm.m_pMT));
-#else // _TARGET_X86_
-        // On WIN64 platforms, copy-constructed arguments are actually passed by reference.
-        // This is the same calling convention as used by managed code, but to maintain parity,
-        // we mimic the x86 behaviour:
-        // 
-        // 1) create new native value type local
-        // 2) run new->CopyCtor(old)
-        // 3) run old->Dtor()
-
-        LocalDesc   locDesc(pargs->mm.m_pMT);
-
-        DWORD       dwNewValueTypeLocal;
-
-        // Step 1
-        dwNewValueTypeLocal = pslIL->NewLocal(locDesc);
-
-        // Step 2
-        if (pargs->mm.m_pCopyCtor)
-        {
-            pslIL->EmitLDLOCA(dwNewValueTypeLocal);
-            pslIL->EmitLDARG(argidx);
-            pslIL->EmitCALL(pslIL->GetToken(pargs->mm.m_pCopyCtor), 2, 0);
-        }
-        else
-        {
-            pslIL->EmitLDARG(argidx);
-            pslIL->EmitLDOBJ(pslIL->GetToken(pargs->mm.m_pMT));
-            pslIL->EmitSTLOC(dwNewValueTypeLocal);
-        }
-
-        // Step 3
-        if (pargs->mm.m_pDtor)
-        {
-            pslIL->EmitLDARG(argidx);
-            pslIL->EmitCALL(pslIL->GetToken(pargs->mm.m_pDtor), 1, 0);
-        }
-
-        pslIL->SetStubTargetArgType(ELEMENT_TYPE_I);        // native type is a pointer
-        pslILDispatch->EmitLDLOCA(dwNewValueTypeLocal);
-#endif // _TARGET_X86_
-
-        return OVERRIDDEN;
-    }
-    else
-    {
-        // nothing to do but pass the value along
-        // note that on x86 the argument comes by-value but is converted to pointer by the UM thunk
-        // so that we don't make copies that would not be accounted for by copy ctors
-        LocalDesc   locDesc(pargs->mm.m_pMT);
-        locDesc.MakeCopyConstructedPointer();
-
-        pslIL->SetStubTargetArgType(&locDesc);              // native type is a pointer
-        pslILDispatch->EmitLDARG(argidx);
-
-        return OVERRIDDEN;
-    }
-}
-#endif // FEATURE_CORECLR
 
 LocalDesc ILArgIteratorMarshaler::GetNativeType()
 {
@@ -4177,7 +4048,7 @@ void ILNativeArrayMarshaler::EmitConvertSpaceNativeToCLR(ILCodeStream* pslILEmit
     if (IsByref(m_dwMarshalFlags))
     {
         //
-        // Reset the element count just in case there is a exception thrown in the code emitted by
+        // Reset the element count just in case there is an exception thrown in the code emitted by
         // EmitLoadElementCount. The best thing we can do here is to avoid a crash.
         //
         _ASSERTE(m_dwSavedSizeArg != LOCAL_NUM_UNUSED);
@@ -4372,20 +4243,19 @@ FCIMPL3(void, MngdNativeArrayMarshaler::ConvertContentsToNative, MngdNativeArray
     if (*pArrayRef != NULL)
     {
         const OleVariant::Marshaler* pMarshaler = OleVariant::GetMarshalerForVarType(pThis->m_vt, TRUE);
-    
+        SIZE_T cElements = (*pArrayRef)->GetNumComponents();
         if (pMarshaler == NULL || pMarshaler->ComToOleArray == NULL)
         {
-            SIZE_T cElements = (*pArrayRef)->GetNumComponents();
-            SIZE_T cbArray = cElements;
-            if ( (!SafeMulSIZE_T(&cbArray, OleVariant::GetElementSizeForVarType(pThis->m_vt, pThis->m_pElementMT))) || cbArray > MAX_SIZE_FOR_INTEROP)
+            if ( (!SafeMulSIZE_T(&cElements, OleVariant::GetElementSizeForVarType(pThis->m_vt, pThis->m_pElementMT))) || cElements > MAX_SIZE_FOR_INTEROP)
                 COMPlusThrow(kArgumentException, IDS_EE_STRUCTARRAYTOOLARGE);
     
             _ASSERTE(!GetTypeHandleForCVType(OleVariant::GetCVTypeForVarType(pThis->m_vt)).GetMethodTable()->ContainsPointers());
-            memcpyNoGCRefs(*pNativeHome, (*pArrayRef)->GetDataPtr(), cbArray);
+            memcpyNoGCRefs(*pNativeHome, (*pArrayRef)->GetDataPtr(), cElements);
         }
         else
         {
-            pMarshaler->ComToOleArray(pArrayRef, *pNativeHome, pThis->m_pElementMT, pThis->m_BestFitMap, pThis->m_ThrowOnUnmappableChar, pThis->m_NativeDataValid);
+            pMarshaler->ComToOleArray(pArrayRef, *pNativeHome, pThis->m_pElementMT, pThis->m_BestFitMap, 
+                                      pThis->m_ThrowOnUnmappableChar, pThis->m_NativeDataValid, cElements);
         }
     }
     HELPER_METHOD_FRAME_END();
@@ -4437,13 +4307,12 @@ FCIMPL3(void, MngdNativeArrayMarshaler::ConvertContentsToManaged, MngdNativeArra
         if (pMarshaler == NULL || pMarshaler->OleToComArray == NULL)
         {
             SIZE_T cElements = (*pArrayRef)->GetNumComponents();
-            SIZE_T cbArray = cElements;
-            if ( (!SafeMulSIZE_T(&cbArray, OleVariant::GetElementSizeForVarType(pThis->m_vt, pThis->m_pElementMT))) || cbArray > MAX_SIZE_FOR_INTEROP)
+            if ( (!SafeMulSIZE_T(&cElements, OleVariant::GetElementSizeForVarType(pThis->m_vt, pThis->m_pElementMT))) || cElements > MAX_SIZE_FOR_INTEROP)
                 COMPlusThrow(kArgumentException, IDS_EE_STRUCTARRAYTOOLARGE);
     
                 // If we are copying variants, strings, etc, we need to use write barrier
             _ASSERTE(!GetTypeHandleForCVType(OleVariant::GetCVTypeForVarType(pThis->m_vt)).GetMethodTable()->ContainsPointers());
-            memcpyNoGCRefs((*pArrayRef)->GetDataPtr(), *pNativeHome, cbArray );
+            memcpyNoGCRefs((*pArrayRef)->GetDataPtr(), *pNativeHome, cElements);
         }
         else
         {

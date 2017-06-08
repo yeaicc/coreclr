@@ -28,6 +28,9 @@ class FieldDesc;
 enum RuntimeExceptionKind;
 class AwareLock;
 class PtrArray;
+#if defined(FEATURE_GDBJIT)
+class CalledMethod;
+#endif
 
 #include "genericdict.h"
 
@@ -51,7 +54,7 @@ void InitJITHelpers1();
 void InitJITHelpers2();
 
 PCODE UnsafeJitFunction(MethodDesc* ftn, COR_ILMETHOD_DECODER* header,
-                        DWORD flags, DWORD flags2, ULONG* sizeOfCode = NULL);
+                        CORJIT_FLAGS flags, ULONG* sizeOfCode = NULL);
 
 void getMethodInfoHelper(MethodDesc * ftn,
                          CORINFO_METHOD_HANDLE ftnHnd,
@@ -314,6 +317,7 @@ private:
     PBYTE   m_pWriteWatchTableImmediate;    // PREGROW | POSTGROW | SVR | WRITE_WATCH |
     PBYTE   m_pLowerBoundImmediate;         // PREGROW | POSTGROW |     | WRITE_WATCH |
     PBYTE   m_pCardTableImmediate;          // PREGROW | POSTGROW | SVR | WRITE_WATCH |
+    PBYTE   m_pCardBundleTableImmediate;    // PREGROW | POSTGROW | SVR | WRITE_WATCH |
     PBYTE   m_pUpperBoundImmediate;         //         | POSTGROW |     | WRITE_WATCH |
 };
 
@@ -340,20 +344,23 @@ EXTERN_C FCDECL1_V(INT32, JIT_Dbl2IntOvf, double val);
 EXTERN_C FCDECL2_VV(float, JIT_FltRem, float dividend, float divisor);
 EXTERN_C FCDECL2_VV(double, JIT_DblRem, double dividend, double divisor);
 
-#if !defined(_WIN64) && !defined(_TARGET_X86_)
+#ifndef BIT64
+#ifdef _TARGET_X86_
+// JIThelp.asm
+EXTERN_C void STDCALL JIT_LLsh();
+EXTERN_C void STDCALL JIT_LRsh();
+EXTERN_C void STDCALL JIT_LRsz();
+#else // _TARGET_X86_
 EXTERN_C FCDECL2_VV(UINT64, JIT_LLsh, UINT64 num, int shift);
 EXTERN_C FCDECL2_VV(INT64, JIT_LRsh, INT64 num, int shift);
 EXTERN_C FCDECL2_VV(UINT64, JIT_LRsz, UINT64 num, int shift);
-#endif
+#endif // !_TARGET_X86_
+#endif // !BIT64
 
 #ifdef _TARGET_X86_
 
 extern "C"
 {
-    void STDCALL JIT_LLsh();                      // JIThelp.asm
-    void STDCALL JIT_LRsh();                      // JIThelp.asm
-    void STDCALL JIT_LRsz();                      // JIThelp.asm
-
     void STDCALL JIT_CheckedWriteBarrierEAX(); // JIThelp.asm/JIThelp.s
     void STDCALL JIT_CheckedWriteBarrierEBX(); // JIThelp.asm/JIThelp.s
     void STDCALL JIT_CheckedWriteBarrierECX(); // JIThelp.asm/JIThelp.s
@@ -375,11 +382,11 @@ extern "C"
     void STDCALL JIT_WriteBarrierEDI();        // JIThelp.asm/JIThelp.s
     void STDCALL JIT_WriteBarrierEBP();        // JIThelp.asm/JIThelp.s
 
-    void STDCALL JIT_WriteBarrierStart();
-    void STDCALL JIT_WriteBarrierLast();
+    void STDCALL JIT_WriteBarrierGroup();
+    void STDCALL JIT_WriteBarrierGroup_End();
 
-    void STDCALL JIT_PatchedWriteBarrierStart();
-    void STDCALL JIT_PatchedWriteBarrierLast();
+    void STDCALL JIT_PatchedWriteBarrierGroup();
+    void STDCALL JIT_PatchedWriteBarrierGroup_End();
 }
 
 void ValidateWriteBarrierHelpers();
@@ -388,7 +395,9 @@ void ValidateWriteBarrierHelpers();
 
 extern "C"
 {
+#ifndef WIN64EXCEPTIONS
     void STDCALL JIT_EndCatch();               // JIThelp.asm/JIThelp.s
+#endif // _TARGET_X86_
 
     void STDCALL JIT_ByRefWriteBarrier();      // JIThelp.asm/JIThelp.s
 
@@ -408,59 +417,11 @@ extern "C"
     void STDCALL JIT_ProfilerEnterLeaveTailcallStub(UINT_PTR ProfilerHandle);
 };
 
-#ifndef FEATURE_CORECLR
-//
-// Obfluscators that are hacking into the JIT expect certain methods to exist in certain places of CEEInfo vtable. Add artifical slots 
-// to the vtable to avoid breaking apps by .NET 4.5 in-place update.
-//
-
-class ICorMethodInfo_Hack
-{
-public:
-    virtual const char* __stdcall ICorMethodInfo_Hack_getMethodName (CORINFO_METHOD_HANDLE ftnHnd, const char** scopeName) = 0;
-};
-
-class ICorModuleInfo_Hack
-{
-public:
-    virtual void ICorModuleInfo_Hack_dummy() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-};
-
-class ICorClassInfo_Hack
-{
-public:
-    virtual void ICorClassInfo_Hack_dummy1() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy2() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy3() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy4() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy5() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy6() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy7() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy8() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy9() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy10() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy11() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy12() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy13() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-    virtual void ICorClassInfo_Hack_dummy14() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-
-    virtual mdMethodDef __stdcall ICorClassInfo_Hack_getMethodDefFromMethod(CORINFO_METHOD_HANDLE hMethod) = 0;
-};
-
-class ICorStaticInfo_Hack : public virtual ICorMethodInfo_Hack, public virtual ICorModuleInfo_Hack, public virtual ICorClassInfo_Hack
-{
-    virtual void ICorStaticInfo_Hack_dummy() { LIMITED_METHOD_CONTRACT; UNREACHABLE(); };
-};
-
-#endif // FEATURE_CORECLR
 
 
 /*********************************************************************/
 /*********************************************************************/
 class CEEInfo : public ICorJitInfo
-#ifndef FEATURE_CORECLR
-    , public virtual ICorStaticInfo_Hack
-#endif
 {
     friend class CEEDynamicCodeInfo;
     
@@ -559,7 +520,7 @@ public:
     void getReadyToRunDelegateCtorHelper(
             CORINFO_RESOLVED_TOKEN * pTargetMethod,
             CORINFO_CLASS_HANDLE     delegateType,
-            CORINFO_CONST_LOOKUP *   pLookup
+            CORINFO_LOOKUP *   pLookup
             );
 
     CorInfoInitClassResult initClass(
@@ -644,7 +605,7 @@ public:
             );
 
     // Returns that compilation flags that are shared between JIT and NGen
-    static DWORD GetBaseCompileFlags(MethodDesc * ftn);
+    static CORJIT_FLAGS GetBaseCompileFlags(MethodDesc * ftn);
 
     // Resolve metadata token into runtime method handles.
     void resolveToken(/* IN, OUT */ CORINFO_RESOLVED_TOKEN * pResolvedToken);
@@ -768,6 +729,22 @@ public:
             unsigned * pOffsetAfterIndirection
             );
 
+    CORINFO_METHOD_HANDLE resolveVirtualMethod(
+        CORINFO_METHOD_HANDLE virtualMethod,
+        CORINFO_CLASS_HANDLE implementingClass,
+        CORINFO_CONTEXT_HANDLE ownerType
+        );
+
+    CORINFO_METHOD_HANDLE resolveVirtualMethodHelper(
+        CORINFO_METHOD_HANDLE virtualMethod,
+        CORINFO_CLASS_HANDLE implementingClass,
+        CORINFO_CONTEXT_HANDLE ownerType
+        );
+
+    void expandRawHandleIntrinsic(
+        CORINFO_RESOLVED_TOKEN *        pResolvedToken,
+        CORINFO_GENERICHANDLE_RESULT *  pResult);
+
     CorInfoIntrinsics getIntrinsicID(CORINFO_METHOD_HANDLE method,
                                      bool * pMustExpand = NULL);
 
@@ -803,11 +780,6 @@ public:
             CORINFO_METHOD_HANDLE       method,
             CORINFO_CLASS_HANDLE        delegateCls,
             BOOL*                       pfIsOpenDelegate);
-
-    // Determines whether the delegate creation obeys security transparency rules
-    BOOL isDelegateCreationAllowed (
-            CORINFO_CLASS_HANDLE        delegateHnd,
-            CORINFO_METHOD_HANDLE       calleeHnd);
 
     // ICorFieldInfo stuff
     const char* getFieldName (CORINFO_FIELD_HANDLE field,
@@ -924,10 +896,6 @@ public:
 
     DWORD getThreadTLSIndex(void **ppIndirection);
     const void * getInlinedCallFrameVptr(void **ppIndirection);
-
-    // Returns the address of the domain neutral module id. This only makes sense for domain neutral (shared)
-    // modules
-    SIZE_T* getAddrModuleDomainID(CORINFO_MODULE_HANDLE   module);
 
     LONG * getAddrOfCaptureThreadGlobal(void **ppIndirection);
     void* getHelperFtn(CorInfoHelpFunc    ftnNum,                 /* IN  */
@@ -1090,6 +1058,9 @@ public:
         m_pThread(GetThread()),
         m_hMethodForSecurity_Key(NULL),
         m_pMethodForSecurity_Value(NULL)
+#if defined(FEATURE_GDBJIT)
+        , m_pCalledMethods(NULL)
+#endif
     {
         LIMITED_METHOD_CONTRACT;
     }
@@ -1151,18 +1122,9 @@ public:
                                                    MethodDesc * pTemplateMD /* for method-based slots */,
                                                    CORINFO_LOOKUP *pResultLookup);
 
-    static void ComputeRuntimeLookupForSharedGenericTokenStatic(DictionaryEntryKind entryKind,
-                                                                CORINFO_RESOLVED_TOKEN * pResolvedToken,
-                                                                CORINFO_RESOLVED_TOKEN * pConstrainedResolvedToken /* for ConstrainedMethodEntrySlot */,
-                                                                MethodDesc * pTemplateMD /* for method-based slots */,
-                                                                LoaderAllocator* pAllocator,
-                                                                DWORD numGenericArgs,
-                                                                DictionaryLayout* pDictionaryLayout,
-                                                                DWORD typeDictionaryIndex,
-                                                                CORINFO_LOOKUP *pResultLookup,
-                                                                BOOL fEnableTypeHandleLookupOptimization,
-                                                                BOOL fInstrument,
-                                                                BOOL fMethodSpecContainsCallingConventionFlag);
+#if defined(FEATURE_GDBJIT)
+    CalledMethod * GetCalledMethods() { return m_pCalledMethods; }
+#endif
 
 protected:
     // NGen provides its own modifications to EE-JIT interface. From technical reason it cannot simply inherit 
@@ -1186,6 +1148,10 @@ protected:
     // Cache of last GetMethodForSecurity() lookup
     CORINFO_METHOD_HANDLE   m_hMethodForSecurity_Key;
     MethodDesc *            m_pMethodForSecurity_Value;
+
+#if defined(FEATURE_GDBJIT)
+    CalledMethod *          m_pCalledMethods;
+#endif
 
     // Tracking of module activation dependencies. We have two flavors: 
     // - Fast one that gathers generic arguments from EE handles, but does not work inside generic context.
@@ -1654,7 +1620,7 @@ struct VirtualFunctionPointerArgs
 
 FCDECL2(CORINFO_MethodPtr, JIT_VirtualFunctionPointer_Dynamic, Object * objectUNSAFE, VirtualFunctionPointerArgs * pArgs);
 
-typedef TADDR (F_CALL_CONV * FnStaticBaseHelper)(TADDR arg0, TADDR arg1);
+typedef HCCALL2_PTR(TADDR, FnStaticBaseHelper, TADDR arg0, TADDR arg1);
 
 struct StaticFieldAddressArgs
 {
@@ -1667,9 +1633,21 @@ struct StaticFieldAddressArgs
 FCDECL1(TADDR, JIT_StaticFieldAddress_Dynamic, StaticFieldAddressArgs * pArgs);
 FCDECL1(TADDR, JIT_StaticFieldAddressUnbox_Dynamic, StaticFieldAddressArgs * pArgs);
 
+struct GenericHandleArgs
+{
+    LPVOID signature;
+    CORINFO_MODULE_HANDLE module;
+    DWORD dictionaryIndexAndSlot;
+};
+
+FCDECL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleMethodWithSlotAndModule, CORINFO_METHOD_HANDLE  methodHnd, GenericHandleArgs * pArgs);
+FCDECL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleClassWithSlotAndModule, CORINFO_CLASS_HANDLE classHnd, GenericHandleArgs * pArgs);
+
 CORINFO_GENERIC_HANDLE JIT_GenericHandleWorker(MethodDesc   *pMD,
                                                MethodTable  *pMT,
-                                               LPVOID signature);
+                                               LPVOID        signature,
+                                               DWORD         dictionaryIndexAndSlot = -1,
+                                               Module *      pModule = NULL);
 
 void ClearJitGenericHandleCache(AppDomain *pDomain);
 
@@ -1678,8 +1656,8 @@ public:
     static FCDECL3(void, UnsafeSetArrayElement, PtrArray* pPtrArray, INT32 index, Object* object);
 };
 
-DWORD GetDebuggerCompileFlags(Module* pModule, DWORD flags);
+CORJIT_FLAGS GetDebuggerCompileFlags(Module* pModule, CORJIT_FLAGS flags);
 
-bool TrackAllocationsEnabled();
+bool __stdcall TrackAllocationsEnabled();
 
 #endif // JITINTERFACE_H

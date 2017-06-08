@@ -17,15 +17,17 @@ PAL_fflush
 PAL__flushall
 PAL_free
 PAL_fwprintf
-PAL_swprintf
 PAL_GetPALDirectoryW
 PAL_GetResourceString
 PAL_get_stdout
 PAL_get_stderr
+PAL_GetCurrentThread
 PAL_GetSymbolModuleBase
 PAL_GetTransportPipeName
 PAL_InitializeDLL
+PAL_TerminateEx
 PAL_IsDebuggerPresent
+PAL_ProbeMemory
 PAL_iswspace
 PAL_memcpy
 PAL_malloc
@@ -34,10 +36,10 @@ PAL_printf
 PAL_qsort
 PAL_Reenter
 PAL_fprintf
-PAL__vsnprintf
 PAL__wcstoui64
 PAL_wcstoul
 PAL_iswprint
+PAL_VirtualReserveFromExecutableMemoryAllocatorWithinRange
 PAL_wcslen
 PAL_wcsncmp
 PAL_wcsrchr
@@ -49,12 +51,17 @@ PAL_wcsstr
 
 _wcsicmp
 _stricmp
-_snprintf
-_snwprintf
-_vsnwprintf
-_itow
-_i64tow
+sprintf_s
+swprintf_s
+vsprintf_s
+_snprintf_s
+_snwprintf_s
+_vsnprintf_s
+_vsnwprintf_s
+_itow_s
+_i64tow_s
 memcpy_s
+sscanf_s
 
 CoCreateGuid
 CopyFileW
@@ -99,6 +106,7 @@ GetLastError
 GetLongPathNameW
 GetModuleFileNameW
 GetProcAddress
+GetProcessAffinityMask
 GetProcessHeap
 GetShortPathNameW
 GetStdHandle
@@ -115,6 +123,9 @@ IID_IClassFactory
 IID_ISequentialStream
 IID_IStream
 IID_IUnknown
+IID_ICLRDataTarget
+IID_ICorDebugDataTarget4
+IID_ICLRDataEnumMemoryRegionsCallback
 InitializeCriticalSection
 IsDBCSLeadByte
 LeaveCriticalSection
@@ -164,7 +175,6 @@ WaitForSingleObject
 WaitForSingleObjectEx
 WideCharToMultiByte
 WriteFile
-YieldProcessor
 
 nativeStringResourceTable_mscorrc_debug
 _ZN25NativeExceptionHolderBase4PushEv

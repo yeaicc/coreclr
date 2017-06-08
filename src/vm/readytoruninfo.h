@@ -13,6 +13,7 @@
 #define _READYTORUNINFO_H_
 
 #include "nativeformatreader.h"
+#include "inlinetracking.h"
 
 typedef DPTR(struct READYTORUN_SECTION) PTR_READYTORUN_SECTION;
 
@@ -40,7 +41,9 @@ class ReadyToRunInfo
     Crst                            m_Crst;
     PtrHashMap                      m_entryPointToMethodDescMap;
 
-    ReadyToRunInfo(Module * pModule, PEImageLayout * pLayout, READYTORUN_HEADER * pHeader);
+    PTR_PersistentInlineTrackingMapR2R m_pPersistentInlineTrackingMap;
+
+    ReadyToRunInfo(Module * pModule, PEImageLayout * pLayout, READYTORUN_HEADER * pHeader, AllocMemTracker *pamTracker);
 
 public:
     static BOOL IsReadyToRunEnabled();
@@ -118,10 +121,16 @@ public:
 
     static DWORD GetFieldBaseOffset(MethodTable * pMT);
 
+    PTR_PersistentInlineTrackingMapR2R GetInlineTrackingMap()
+    {
+        return m_pPersistentInlineTrackingMap;
+    }
+
 private:
     BOOL GetTypeNameFromToken(IMDInternalImport * pImport, mdToken mdType, LPCUTF8 * ppszName, LPCUTF8 * ppszNameSpace);
     BOOL GetEnclosingToken(IMDInternalImport * pImport, mdToken mdType, mdToken * pEnclosingToken);
     BOOL CompareTypeNameOfTokens(mdToken mdToken1, IMDInternalImport * pImport1, mdToken mdToken2, IMDInternalImport * pImport2);
+	BOOL IsImageVersionAtLeast(int majorVersion, int minorVersion);
 };
 
 class DynamicHelpers
@@ -138,7 +147,7 @@ public:
     static PCODE CreateReturnIndirConst(LoaderAllocator * pAllocator, TADDR arg, INT8 offset);
     static PCODE CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADDR arg, PCODE target);
     static PCODE CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADDR arg, TADDR arg2, PCODE target);
-    static PCODE CreateDictionaryLookupHelper(LoaderAllocator * pAllocator, CORINFO_RUNTIME_LOOKUP * pLookup);
+    static PCODE CreateDictionaryLookupHelper(LoaderAllocator * pAllocator, CORINFO_RUNTIME_LOOKUP * pLookup, DWORD dictionaryIndexAndSlot, Module * pModule);
 };
 
 #endif // _READYTORUNINFO_H_

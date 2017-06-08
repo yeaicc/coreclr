@@ -14,27 +14,18 @@
 #include "gcenv.h"
 #include "gc.h"
 
-#ifdef FEATURE_SVR_GC
-SVAL_IMPL_INIT(uint32_t,GCHeap,gcHeapType,GCHeap::GC_HEAP_INVALID);
-#endif // FEATURE_SVR_GC
+IGCHeapInternal* g_theGCHeap;
+IGCHandleManager* g_theGCHandleManager;
 
-GPTR_IMPL(GCHeap,g_pGCHeap);
-
-/* global versions of the card table and brick table */ 
-GPTR_IMPL(uint32_t,g_card_table);
-
-/* absolute bounds of the GC memory */
-GPTR_IMPL_INIT(uint8_t,g_lowest_address,0);
-GPTR_IMPL_INIT(uint8_t,g_highest_address,0);
+#ifdef BUILD_AS_STANDALONE
+IGCToCLR* g_theGCToCLR;
+#endif // BUILD_AS_STANDALONE
 
 #ifdef GC_CONFIG_DRIVEN
-GARY_IMPL(size_t, gc_global_mechanisms, MAX_GLOBAL_GC_MECHANISMS_COUNT);
+size_t gc_global_mechanisms[MAX_GLOBAL_GC_MECHANISMS_COUNT];
 #endif //GC_CONFIG_DRIVEN
 
 #ifndef DACCESS_COMPILE
-
-uint8_t* g_ephemeral_low = (uint8_t*)1;
-uint8_t* g_ephemeral_high = (uint8_t*)~0;
 
 #ifdef WRITE_BARRIER_CHECK
 uint8_t* g_GCShadow;
@@ -42,12 +33,23 @@ uint8_t* g_GCShadowEnd;
 uint8_t* g_shadow_lowest_address = NULL;
 #endif
 
-VOLATILE(int32_t) m_GCLock = -1;
+uint32_t* g_gc_card_table;
+
+#ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+uint32_t* g_gc_card_bundle_table;
+#endif
+
+uint8_t* g_gc_lowest_address  = 0;
+uint8_t* g_gc_highest_address = 0;
+GCHeapType g_gc_heap_type = GC_HEAP_INVALID;
+uint32_t g_max_generation = max_generation;
+MethodTable* g_gc_pFreeObjectMethodTable = nullptr;
+uint32_t g_num_processors = 0;
 
 #ifdef GC_CONFIG_DRIVEN
 void record_global_mechanism (int mech_index)
 {
-	(gc_global_mechanisms[mech_index])++;
+    (gc_global_mechanisms[mech_index])++;
 }
 #endif //GC_CONFIG_DRIVEN
 
@@ -110,6 +112,102 @@ void record_changed_seg (uint8_t* start, uint8_t* end,
     {
         saved_changed_segs_count = 0;
     }
+}
+
+namespace WKS 
+{
+    extern void PopulateDacVars(GcDacVars* dacVars);
+}
+
+namespace SVR
+{
+    extern void PopulateDacVars(GcDacVars* dacVars);
+}
+
+//------------------------------------------------------------------
+// Externally-facing GC symbols, used to initialize the GC
+// -----------------------------------------------------------------
+
+#ifdef _MSC_VER
+#define DLLEXPORT __declspec(dllexport)
+#else
+#define DLLEXPORT __attribute__ ((visibility ("default")))
+#endif // _MSC_VER
+
+#ifdef BUILD_AS_STANDALONE
+#define GC_API extern "C" DLLEXPORT
+#else
+#define GC_API extern "C"
+#endif // BUILD_AS_STANDALONE
+
+GC_API
+bool
+InitializeGarbageCollector(
+    /* In */  IGCToCLR* clrToGC,
+    /* Out */ IGCHeap** gcHeap,
+    /* Out */ IGCHandleManager** gcHandleManager,
+    /* Out */ GcDacVars* gcDacVars
+    )
+{
+    LIMITED_METHOD_CONTRACT;
+
+    IGCHeapInternal* heap;
+
+    assert(gcDacVars != nullptr);
+    assert(gcHeap != nullptr);
+    assert(gcHandleManager != nullptr);
+
+#ifdef BUILD_AS_STANDALONE
+    assert(clrToGC != nullptr);
+    g_theGCToCLR = clrToGC;
+#else
+    UNREFERENCED_PARAMETER(clrToGC);
+    assert(clrToGC == nullptr);
+#endif
+
+    // Initialize GCConfig before anything else - initialization of our
+    // various components may want to query the current configuration.
+    GCConfig::Initialize();
+
+    IGCHandleManager* handleManager = CreateGCHandleManager();
+    if (handleManager == nullptr)
+    {
+        return false;
+    }
+
+#ifdef FEATURE_SVR_GC
+    if (GCConfig::GetServerGC())
+    {
+#ifdef WRITE_BARRIER_CHECK
+        g_GCShadow = 0;
+        g_GCShadowEnd = 0;
+#endif // WRITE_BARRIER_CHECK
+
+        g_gc_heap_type = GC_HEAP_SVR;
+        heap = SVR::CreateGCHeap();
+        SVR::PopulateDacVars(gcDacVars);
+    }
+    else
+    {
+        g_gc_heap_type = GC_HEAP_WKS;
+        heap = WKS::CreateGCHeap();
+        WKS::PopulateDacVars(gcDacVars);
+    }
+#else
+    g_gc_heap_type = GC_HEAP_WKS;
+    heap = WKS::CreateGCHeap();
+    WKS::PopulateDacVars(gcDacVars);
+#endif
+
+    if (heap == nullptr)
+    {
+        return false;
+    }
+
+    g_theGCHeap = heap;
+    *gcHandleManager = handleManager;
+    *gcHeap = heap;
+    return true;
 }
 
 #endif // !DACCESS_COMPILE

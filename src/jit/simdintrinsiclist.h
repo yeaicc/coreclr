@@ -8,6 +8,7 @@
 #endif
 /*****************************************************************************/
 
+// clang-format off
 #ifdef FEATURE_SIMD
 
     /*
@@ -19,7 +20,7 @@
             e) TODO-Cleanup: when we plumb TYP_SIMD through front-end, replace TYP_STRUCT with TYP_SIMD.
      */
 
-#ifdef _TARGET_AMD64_
+#ifdef _TARGET_XARCH_
 
 // Max number of parameters that we model in the table for SIMD intrinsic methods.
 #define SIMD_INTRINSIC_MAX_MODELED_PARAM_COUNT       3
@@ -88,13 +89,12 @@ SIMD_INTRINSIC("op_Subtraction",            false,       Sub,                   
 SIMD_INTRINSIC("op_Multiply",               false,       Mul,                      "*",                      TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_SHORT,TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 SIMD_INTRINSIC("op_Division",               false,       Div,                      "/",                      TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_FLOAT, TYP_DOUBLE, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 
-// Abs and SquareRoot are recognized as intrinsics only in case of float or double vectors
-SIMD_INTRINSIC("Abs",                       false,       Abs,                      "abs",                    TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF, TYP_UNDEF},    {TYP_FLOAT, TYP_DOUBLE, TYP_CHAR, TYP_UBYTE, TYP_UINT, TYP_ULONG, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// SquareRoot is recognized as an intrinsic only for float or double vectors
 SIMD_INTRINSIC("SquareRoot",                false,       Sqrt,                     "sqrt",                   TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF, TYP_UNDEF},    {TYP_FLOAT, TYP_DOUBLE, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 
-// Min and max methods are recognized as intrinsics only in case of float or double vectors
 SIMD_INTRINSIC("Min",                       false,       Min,                      "min",                    TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
 SIMD_INTRINSIC("Max",                       false,       Max,                      "max",                    TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
+SIMD_INTRINSIC("Abs",                       false,       Abs,                      "abs",                    TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF, TYP_UNDEF },   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
 
 // Vector Relational operators
 SIMD_INTRINSIC("Equals",                    false,       Equal,                    "eq",                     TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
@@ -110,13 +110,31 @@ SIMD_INTRINSIC("op_BitwiseOr",              false,       BitwiseOr,             
 SIMD_INTRINSIC("op_ExclusiveOr",            false,       BitwiseXor,               "^",                      TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
 
 // Dot Product
-SIMD_INTRINSIC("Dot",                       false,       DotProduct,               "Dot",                    TYP_UNKNOWN,    2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_FLOAT, TYP_DOUBLE, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Is supported only on Vector<int> on AVX.
+SIMD_INTRINSIC("Dot",                       false,       DotProduct,               "Dot",                    TYP_UNKNOWN,    2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 
 // Select
 SIMD_INTRINSIC("ConditionalSelect",         false,       Select,                   "Select",                 TYP_STRUCT,     3,      {TYP_STRUCT, TYP_STRUCT, TYP_STRUCT},  {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
 
 // Cast
 SIMD_INTRINSIC("op_Explicit",               false,       Cast,                     "Cast",                   TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_INT, TYP_FLOAT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_ULONG})
+
+// Convert int/uint to single
+SIMD_INTRINSIC("ConvertToSingle",           false,       ConvertToSingle,          "ConvertToSingle",        TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_INT, TYP_UINT, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Convert long/ulong to double
+SIMD_INTRINSIC("ConvertToDouble",           false,       ConvertToDouble,          "ConvertToDouble",        TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_LONG, TYP_ULONG, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Convert single to int
+SIMD_INTRINSIC("ConvertToInt32",            false,       ConvertToInt32,           "ConvertToInt32",         TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_FLOAT, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Convert single to uint
+SIMD_INTRINSIC("ConvertToUInt32",           false,       ConvertToUInt32,          "ConvertToUInt32",        TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_FLOAT, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Convert double to long
+SIMD_INTRINSIC("ConvertToInt64",            false,       ConvertToInt64,           "ConvertToInt64",         TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_DOUBLE, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Convert double to ulong
+SIMD_INTRINSIC("ConvertToUInt64",           false,       ConvertToUInt64,          "ConvertToUInt64",        TYP_STRUCT,     1,      {TYP_STRUCT, TYP_UNDEF,  TYP_UNDEF},   {TYP_DOUBLE, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Narrow two input Vector<T>s to a single Vector<T>. The return value's lower elements are the elements from src1, and the upper elements are from src2.
+SIMD_INTRINSIC("Narrow",                    false,       Narrow,                   "Narrow",                 TYP_STRUCT,     2,      {TYP_STRUCT, TYP_STRUCT, TYP_UNDEF},   {TYP_INT, TYP_DOUBLE, TYP_LONG, TYP_CHAR, TYP_SHORT, TYP_UINT, TYP_ULONG, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Widen one input Vector<T> to two Vector<T>s: dest1 contains the lower half of elements in src, and dest2 contains the upper half of elements in src.
+SIMD_INTRINSIC("Widen",                     false,       Widen,                    "Widen",                  TYP_VOID,       3,      {TYP_STRUCT, TYP_BYREF,  TYP_BYREF},   {TYP_INT, TYP_FLOAT, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 
 // Miscellaneous
 SIMD_INTRINSIC("get_IsHardwareAccelerated", false,       HWAccel,                  "HWAccel",                TYP_BOOL,       0,      {TYP_UNDEF,  TYP_UNDEF,  TYP_UNDEF},   {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
@@ -133,11 +151,16 @@ SIMD_INTRINSIC("ShiftRightInternal",        false,       ShiftRightInternal,    
 SIMD_INTRINSIC("UpperSave",                 false,       UpperSave,                "UpperSave Internal",     TYP_STRUCT,     2,      {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF},     {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 SIMD_INTRINSIC("UpperRestore",              false,       UpperRestore,             "UpperRestore Internal",  TYP_STRUCT,     2,      {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF},     {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 
-SIMD_INTRINSIC(nullptr,                     false,       Invalid,                  "Invalid",                TYP_UNDEF,      0,      {TYP_UNDEF,  TYP_UNDEF,  TYP_UNDEF},   {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+// Internal intrinsics for Widen
+SIMD_INTRINSIC("WidenHi",                   false,       WidenHi,                   "WidenHi",               TYP_VOID,       2,      {TYP_UNDEF, TYP_UNDEF,  TYP_UNDEF},    {TYP_INT, TYP_FLOAT, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+SIMD_INTRINSIC("WidenLo",                   false,       WidenLo,                   "WidenLo",               TYP_VOID,       2,      {TYP_UNDEF, TYP_UNDEF,  TYP_UNDEF},    {TYP_INT, TYP_FLOAT, TYP_CHAR, TYP_UBYTE, TYP_BYTE, TYP_SHORT, TYP_UINT, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
+
+SIMD_INTRINSIC(nullptr,                     false,       Invalid,                   "Invalid",               TYP_UNDEF,      0,      {TYP_UNDEF,  TYP_UNDEF,  TYP_UNDEF},   {TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF, TYP_UNDEF})
 #undef SIMD_INTRINSIC
 
-#else //_TARGET_AMD64_
+#else //_TARGET_XARCH_
 #error SIMD intrinsics not defined for target arch
-#endif //!_TARGET_AMD64_
+#endif //!_TARGET_XARCH_
 
 #endif //FEATURE_SIMD
+// clang-format on

@@ -24,10 +24,15 @@ bool TwoWayPipe::CreateServer(DWORD id)
     PAL_GetTransportPipeName(m_inPipeName, id, "in");
     PAL_GetTransportPipeName(m_outPipeName, id, "out");
 
+    unlink(m_inPipeName);
+
     if (mkfifo(m_inPipeName, S_IRWXU) == -1)
     {
         return false;
     }
+
+
+    unlink(m_outPipeName);
 
     if (mkfifo(m_outPipeName, S_IRWXU) == -1)
     {
@@ -161,18 +166,6 @@ bool TwoWayPipe::Disconnect()
     // IMPORTANT NOTE: This function must not call any signal unsafe functions
     // since it is called from signal handlers.
     // That includes ASSERT and TRACE macros.
-
-    if (m_outboundPipe != INVALID_PIPE && m_outboundPipe != 0)
-    {
-        close(m_outboundPipe);
-        m_outboundPipe = INVALID_PIPE;
-    }
-
-    if (m_inboundPipe != INVALID_PIPE && m_inboundPipe != 0)
-    {
-        close(m_inboundPipe);
-        m_inboundPipe = INVALID_PIPE;
-    }
 
     if (m_state == ServerConnected || m_state == Created)
     {

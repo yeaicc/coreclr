@@ -309,10 +309,12 @@ LOCAL_LABEL(LNullThis):
 //
 // r12 = UMEntryThunk*
 //
-        NESTED_ENTRY UMThunkStub,_TEXT,NoHandler
+        NESTED_ENTRY UMThunkStub,_TEXT,UnhandledExceptionHandlerUnix
         PROLOG_PUSH         "{r4,r5,r7,r11,lr}"
-        push                {r0-r3,r12}
-        PROLOG_STACK_SAVE_OFFSET   r7, #28
+        PROLOG_STACK_SAVE_OFFSET   r7, #8
+
+        alloc_stack         4 * 5
+        stm                 sp, {r0-r3,r12}
 
         //GBLA UMThunkStub_HiddenArgOffest // offset of saved UMEntryThunk *
         //GBLA UMThunkStub_StackArgsOffest // offset of original stack args
@@ -378,8 +380,7 @@ LOCAL_LABEL(UMThunkStub_PostCall):
         mov                 r4, 0
         str                 r4, [r5, #Thread__m_fPreemptiveGCDisabled]
 
-        EPILOG_STACK_RESTORE_OFFSET    r7, #28
-        free_stack           4 * 5
+        EPILOG_STACK_RESTORE_OFFSET    r7, #8
         EPILOG_POP           "{r4,r5,r7,r11,pc}"
 
 LOCAL_LABEL(UMThunkStub_DoThreadSetup):
@@ -508,6 +509,24 @@ LOCAL_LABEL(UM2MThunk_WrapperHelper_ArgumentsSetup):
         NESTED_END ThePreStub, _TEXT
 
 // ------------------------------------------------------------------
+        NESTED_ENTRY ThePreStubCompactARM, _TEXT, NoHandler
+
+        // r12 - address of compact entry point + PC_REG_RELATIVE_OFFSET
+
+        PROLOG_WITH_TRANSITION_BLOCK
+
+        mov         r0, r12
+
+        bl          C_FUNC(PreStubGetMethodDescForCompactEntryPoint)
+
+        mov         r12, r0                                          // pMethodDesc
+
+        EPILOG_WITH_TRANSITION_BLOCK_TAILCALL
+
+        b           C_FUNC(ThePreStub)
+
+        NESTED_END ThePreStubCompactARM, _TEXT
+// ------------------------------------------------------------------
 // This method does nothing. It's just a fixed function for the debugger to put a breakpoint on.
         LEAF_ENTRY ThePreStubPatch, _TEXT
         nop
@@ -635,6 +654,92 @@ ThePreStubPatchLabel:
 0:
 
         .endm
+
+//
+// EXTERN_C void ProfileEnterNaked(FunctionIDOrClientID functionIDOrClientID);
+//
+NESTED_ENTRY ProfileEnterNaked, _TEXT, NoHandler
+    PROLOG_PUSH "{r4, r5, r7, r11, lr}"
+    PROLOG_STACK_SAVE_OFFSET r7, #8
+
+    // fields of PLATFORM_SPECIFIC_DATA, in reverse order
+
+    // UINT32      r0;         // Keep r0 & r1 contiguous to make returning 64-bit results easier
+    // UINT32      r1;
+    // void       *R11;
+    // void       *Pc;
+    // union                   // Float arg registers as 32-bit (s0-s15) and 64-bit (d0-d7)
+    // {
+    //     UINT32  s[16];
+    //     UINT64  d[8];
+    // };
+    // FunctionID  functionId;
+    // void       *probeSp;    // stack pointer of managed function 
+    // void       *profiledSp; // location of arguments on stack
+    // LPVOID      hiddenArg;
+    // UINT32      flags;
+    movw        r4, #1
+    push        { /* flags      */ r4 }
+    movw        r4, #0
+    push        { /* hiddenArg  */ r4 }
+    add         r5, r11, #8
+    push        { /* profiledSp */ r5 }
+    add         r5, sp, #32
+    push        { /* probeSp    */ r5 }
+    push        { /* functionId */ r0 }
+    vpush.64    { d0 - d7 }
+    push        { lr }
+    push        { r11 }
+    push        { /* return value, r4 is NULL */ r4 }
+    push        { /* return value, r4 is NULL */ r4 }
+    mov         r1, sp
+    bl          C_FUNC(ProfileEnter)
+    EPILOG_STACK_RESTORE_OFFSET r7, #8
+    EPILOG_POP "{r4, r5, r7, r11, pc}"
+NESTED_END ProfileEnterNaked, _TEXT
+
+//
+// EXTERN_C void ProfileLeaveNaked(FunctionIDOrClientID functionIDOrClientID);
+//
+NESTED_ENTRY ProfileLeaveNaked, _TEXT, NoHandler
+    PROLOG_PUSH "{r1, r2, r4, r5, r7, r11, lr}"
+    PROLOG_STACK_SAVE_OFFSET r7, #16
+
+    // fields of PLATFORM_SPECIFIC_DATA, in reverse order
+
+    // UINT32      r0;         // Keep r0 & r1 contiguous to make returning 64-bit results easier
+    // UINT32      r1;
+    // void       *R11;
+    // void       *Pc;
+    // union                   // Float arg registers as 32-bit (s0-s15) and 64-bit (d0-d7)
+    // {
+    //     UINT32  s[16];
+    //     UINT64  d[8];
+    // };
+    // FunctionID  functionId;
+    // void       *probeSp;    // stack pointer of managed function 
+    // void       *profiledSp; // location of arguments on stack
+    // LPVOID      hiddenArg;
+    // UINT32      flags;
+    movw        r4, #2
+    push        { /* flags      */ r4 }
+    movw        r4, #0
+    push        { /* hiddenArg  */ r4 }
+    add         r5, r11, #8
+    push        { /* profiledSp */ r5 }
+    add         r5, sp, #40
+    push        { /* probeSp    */ r5 }
+    push        { /* functionId */ r0 }
+    vpush.64    { d0 - d7 }
+    push        { lr }
+    push        { r11 }
+    push        { r1 }
+    push        { r2 }
+    mov         r1, sp
+    bl          C_FUNC(ProfileLeave)
+    EPILOG_STACK_RESTORE_OFFSET r7, #16
+    EPILOG_POP "{r1, r2, r4, r5, r7, r11, pc}"
+NESTED_END ProfileLeaveNaked, _TEXT
 
 // EXTERN_C int __fastcall HelperMethodFrameRestoreState(
 //         INDEBUG_COMMA(HelperMethodFrame *pFrame)
@@ -1159,7 +1264,7 @@ LOCAL_LABEL(DoWrite):
         UPDATE_GC_SHADOW \name, r0, r1
         UPDATE_CARD_TABLE \name, r0, r1, \mp, \post, r0
         bx lr
-    LEAF_END \name, _TEXT
+    LEAF_END_MARKED \name, _TEXT
     .endm
     
     .macro JIT_CHECKEDWRITEBARRIER_SP name, post
@@ -1171,7 +1276,7 @@ LOCAL_LABEL(DoWrite):
         UPDATE_CARD_TABLE \name, r0, r1, 0, \post, r0
 1:
         bx lr
-    LEAF_END \name, _TEXT
+    LEAF_END_MARKED \name, _TEXT
     .endm
     
     .macro JIT_CHECKEDWRITEBARRIER_MP name, post
@@ -1186,7 +1291,7 @@ LOCAL_LABEL(DoWrite):
 1:
         str r1, [r0]
         bx lr
-    LEAF_END \name, _TEXT
+    LEAF_END_MARKED \name, _TEXT
     .endm
     
     .macro JIT_BYREFWRITEBARRIER name, mp, post
@@ -1205,7 +1310,7 @@ LOCAL_LABEL(DoWrite):
         add r0, #4
         add r1, #4
         bx lr
-    LEAF_END \name, _TEXT
+    LEAF_END_MARKED \name, _TEXT
     .endm
     
     .macro JIT_WRITEBARRIER_DESCRIPTOR name
@@ -1305,8 +1410,6 @@ DelayLoad_MethodCall:
 
     .macro DynamicHelper frameFlags, suffix
 
-__FakePrologName="DelayLoad_Helper\suffix\()_FakeProlog"
-
         NESTED_ENTRY DelayLoad_Helper\suffix\()_FakeProlog, _TEXT, NoHandler
 
         // Match what the lazy thunk has pushed. The actual method arguments will be spilled later.
@@ -1364,34 +1467,8 @@ DelayLoad_Helper\suffix:
 #ifdef FEATURE_HIJACK
 
 // ------------------------------------------------------------------
-// Hijack function for functions which return a reference type
-        NESTED_ENTRY OnHijackObjectTripThread, _TEXT, NoHandler
-        PROLOG_PUSH "{r0,r4-r11,lr}"
-
-        CHECK_STACK_ALIGNMENT
-
-        mov r0, sp
-        bl OnHijackObjectWorker
-
-        EPILOG_POP "{r0,r4-r11,pc}"
-        NESTED_END OnHijackObjectTripThread, _TEXT
-
-// ------------------------------------------------------------------
-// Hijack function for functions which return an interior pointer within an object allocated in managed heap
-        NESTED_ENTRY OnHijackInteriorPointerTripThread, _TEXT, NoHandler
-        PROLOG_PUSH "{r0,r4-r11,lr}"
-
-        CHECK_STACK_ALIGNMENT
-
-        mov r0, sp
-        bl C_FUNC(OnHijackInteriorPointerWorker)
-
-        EPILOG_POP "{r0,r4-r11,pc}"
-        NESTED_END OnHijackInteriorPointerTripThread, _TEXT
-
-// ------------------------------------------------------------------
 // Hijack function for functions which return a value type
-        NESTED_ENTRY OnHijackScalarTripThread, _TEXT, NoHandler
+        NESTED_ENTRY OnHijackTripThread, _TEXT, NoHandler
         PROLOG_PUSH "{r0,r4-r11,lr}"
 
         PROLOG_VPUSH "{d0-d3}"    // saving as d0-d3 can have the floating point return value
@@ -1401,13 +1478,13 @@ DelayLoad_Helper\suffix:
         CHECK_STACK_ALIGNMENT
 
         add r0, sp, #40
-        bl C_FUNC(OnHijackScalarWorker)
+        bl C_FUNC(OnHijackWorker)
 
         free_stack 4
         EPILOG_POP "{r1}"
         EPILOG_VPOP "{d0-d3}"
 
         EPILOG_POP "{r0,r4-r11,pc}"
-        NESTED_END OnHijackScalarTripThread, _TEXT
+        NESTED_END OnHijackTripThread, _TEXT
 #endif
 

@@ -4,6 +4,7 @@
 
 bpmd
 ClrStack
+CreateDump
 DumpArray
 DumpAssembly
 DumpClass
@@ -23,6 +24,7 @@ DumpStack
 DumpStackObjects
 DumpVC
 EEHeap
+GCWhere
 EEStack
 EHInfo
 FindAppDomain

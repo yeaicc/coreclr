@@ -16,7 +16,6 @@ set(VM_CROSSGEN_SOURCES
     ../comdelegate.cpp
     ../codeman.cpp
     ../compile.cpp
-    ../constrainedexecutionregion.cpp
     ../custommarshalerinfo.cpp
     ../domainfile.cpp
     ../baseassemblyspec.cpp
@@ -65,16 +64,6 @@ set(VM_CROSSGEN_SOURCES
     ../pendingload.cpp
     ../precode.cpp
     ../olevariant.cpp
-    ../security.cpp
-    ../securitypolicy.cpp
-    ../securityattributes.cpp
-    ../securitydeclarative.cpp
-    ../securitydeclarativecache.cpp
-    ../securitydescriptor.cpp
-    ../securitydescriptorappdomain.cpp
-    ../securitydescriptorassembly.cpp
-    ../securitymeta.cpp
-    ../securitytransparentassembly.cpp
     ../siginfo.cpp
     ../sigformat.cpp
     ../simplerwlock.cpp
@@ -92,7 +81,6 @@ set(VM_CROSSGEN_SOURCES
     ../vars.cpp
     ../versionresilienthashcode.cpp
     ../zapsig.cpp
-    ../dbggcinfodecoder.cpp
     ../gcinfodecoder.cpp
     ../sha1.cpp
     ../crossgencompile.cpp

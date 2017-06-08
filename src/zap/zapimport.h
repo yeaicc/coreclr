@@ -301,7 +301,7 @@ class ZapImportTable : public ZapNode
 
     ModuleReferenceEntry * GetModuleReference(CORINFO_MODULE_HANDLE handle);
 
-    static DWORD __stdcall EncodeModuleHelper(LPVOID referencingModule, CORINFO_MODULE_HANDLE referencedModule);
+    static DWORD EncodeModuleHelper(LPVOID referencingModule, CORINFO_MODULE_HANDLE referencedModule);
 
     ImportTable m_imports;          // Interned ZapImport *
     SHash< NoRemoveSHashTraits < ZapBlob::SHashTraits > > m_blobs; // Interned ZapBlos for signatures and fixups
@@ -339,7 +339,7 @@ public:
     void EncodeClass(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_CLASS_HANDLE handle, SigBuilder * pSigBuilder);
     void EncodeClassInContext(CORINFO_MODULE_HANDLE context, CORINFO_CLASS_HANDLE handle, SigBuilder * pSigBuilder);
     void EncodeField(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_FIELD_HANDLE handle, SigBuilder * pSigBuilder,
-            CORINFO_RESOLVED_TOKEN * pResolvedToken = NULL);
+            CORINFO_RESOLVED_TOKEN * pResolvedToken = NULL, BOOL fEncodeUsingResolvedTokenSpecStreams = FALSE);
     void EncodeMethod(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_METHOD_HANDLE handle, SigBuilder * pSigBuilder, 
             CORINFO_RESOLVED_TOKEN * pResolvedToken = NULL, CORINFO_RESOLVED_TOKEN * pConstrainedResolvedToken = NULL,
             BOOL fEncodeUsingResolvedTokenSpecStreams = FALSE);

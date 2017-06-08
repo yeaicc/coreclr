@@ -21,9 +21,8 @@
 #include "float.h"      // for isnan
 #include "dbginterface.h"
 #include "security.h"
-#include "securitymeta.h"
 #include "dllimport.h"
-#include "gc.h"
+#include "gcheaputilities.h"
 #include "comdelegate.h"
 #include "jitperf.h" // to track jit perf
 #include "corprof.h"
@@ -34,9 +33,6 @@
 #include "process.h"
 #endif // !FEATURE_PAL
 
-#ifdef FEATURE_REMOTING
-#include "remoting.h" // create context bound and remote class instances
-#endif
 #include "perfcounters.h"
 #ifdef PROFILING_SUPPORTED
 #include "proftoeeinterfaceimpl.h"
@@ -50,7 +46,6 @@
 #include "genericdict.h"
 #include "array.h"
 #include "debuginfostore.h"
-#include "constrainedexecutionregion.h"
 #include "security.h"
 #include "safemath.h"
 #include "threadstatics.h"
@@ -63,9 +58,7 @@
 #include "gccover.h"
 #endif // HAVE_GCCOVER
 
-#ifdef FEATURE_CORECLR
 #include "runtimehandles.h"
-#endif
 
 //========================================================================
 //
@@ -130,7 +123,7 @@ inline UINT64 ShiftToHi32Bits(UINT32 x)
     return ret.QuadPart;
 }
 
-#if !defined(_TARGET_X86_)
+#if !defined(_TARGET_X86_) || defined(FEATURE_PAL)
 /*********************************************************************/
 HCIMPL2_VV(INT64, JIT_LMul, INT64 val1, INT64 val2)
 {
@@ -145,7 +138,7 @@ HCIMPL2_VV(INT64, JIT_LMul, INT64 val1, INT64 val2)
     return (val1 * val2);
 }
 HCIMPLEND
-#endif // !defined(_TARGET_X86_)
+#endif // !_TARGET_X86_ || FEATURE_PAL
 
 /*********************************************************************/
 HCIMPL2_VV(INT64, JIT_LMulOvf, INT64 val1, INT64 val2)
@@ -460,7 +453,7 @@ HCIMPL2_VV(UINT64, JIT_ULMod, UINT64 dividend, UINT64 divisor)
 }
 HCIMPLEND
 
-#if !defined(_WIN64) && !defined(_TARGET_X86_)
+#if !defined(BIT64) && !defined(_TARGET_X86_)
 /*********************************************************************/
 HCIMPL2_VV(UINT64, JIT_LLsh, UINT64 num, int shift)
 {
@@ -484,8 +477,7 @@ HCIMPL2_VV(UINT64, JIT_LRsz, UINT64 num, int shift)
     return num >> shift;
 }
 HCIMPLEND
-
-#endif
+#endif // !BIT64 && !_TARGET_X86_
 
 #include <optdefault.h>
 
@@ -513,7 +505,7 @@ HCIMPL1_V(double, JIT_ULng2Dbl, UINT64 val)
 HCIMPLEND
 
 /*********************************************************************/
-// needed for ARM
+// needed for ARM and RyuJIT-x86
 HCIMPL1_V(double, JIT_Lng2Dbl, INT64 val)
 {
     FCALL_CONTRACT;
@@ -619,7 +611,7 @@ HCIMPL1_V(UINT64, JIT_Dbl2ULng, double val)
     else {        
         // subtract 0x8000000000000000, do the convert then add it back again
         ret = FastDbl2Lng(val - two63) + I64(0x8000000000000000);
-}
+    }
     return ret;
 }
 HCIMPLEND
@@ -654,7 +646,7 @@ HCIMPL1_V(UINT64, JIT_Dbl2ULngOvf, double val)
 HCIMPLEND
 
 
-#if !defined(_TARGET_X86_)
+#if !defined(_TARGET_X86_) || defined(FEATURE_PAL)
 
 HCIMPL1_V(INT64, JIT_Dbl2Lng, double val)
 {
@@ -755,7 +747,7 @@ HCIMPL2_VV(double, JIT_DblRem, double dividend, double divisor)
 }
 HCIMPLEND
 
-#endif // !defined(_TARGET_X86_)
+#endif // !_TARGET_X86_ || FEATURE_PAL
 
 #include <optdefault.h>
 
@@ -785,14 +777,6 @@ HCIMPL2(void*, JIT_GetFieldAddr_Framed, Object *obj, FieldDesc* pFD)
     if (objRef == NULL)
         COMPlusThrow(kNullReferenceException);
 
-#ifdef FEATURE_REMOTING
-    if(objRef->IsTransparentProxy())
-    {
-        objRef = CRemotingServices::GetObjectFromProxy(objRef);
-        if (objRef->IsTransparentProxy())
-            COMPlusThrow(kInvalidOperationException, W("Remoting_InvalidValueTypeFieldAccess"));
-    }
-#endif // FEATURE_REMOTING
 
     fldAddr = pFD->GetAddress(OBJECTREFToObject(objRef));
 
@@ -1183,17 +1167,6 @@ HCIMPL4(VOID, JIT_GetFieldStruct_Framed, LPVOID retBuff, Object *obj, FieldDesc 
     // the server object.
     BOOL fRemoted = FALSE;
 
-#ifdef FEATURE_REMOTING
-    if (objRef->IsTransparentProxy())
-    {
-        objRef = CRemotingServices::GetObjectFromProxy(objRef);
-        if (objRef->IsTransparentProxy())
-        {
-            CRemotingServices::FieldAccessor(pFD, objRef, retBuff, TRUE);
-            fRemoted = TRUE;
-        }
-    }
-#endif
 
     if (!fRemoted)
     {
@@ -1248,18 +1221,6 @@ HCIMPL4(VOID, JIT_SetFieldStruct_Framed, Object *obj, FieldDesc *pFD, MethodTabl
     // the server object.
     BOOL fRemoted = FALSE;
 
-#ifdef FEATURE_REMOTING
-    if(objRef->IsTransparentProxy())
-    {
-        objRef = CRemotingServices::GetObjectFromProxy(objRef);
-
-        if(objRef->IsTransparentProxy())
-        {
-            CRemotingServices::FieldAccessor(pFD, objRef, valuePtr, FALSE);
-            fRemoted = TRUE;
-        }
-    }
-#endif
 
     if (!fRemoted)
     {
@@ -1298,68 +1259,7 @@ HCIMPLEND
 //
 //========================================================================
 
-#ifdef FEATURE_MIXEDMODE
-HCIMPL1(void*, JIT_GetStaticFieldAddr_Tls, FieldDesc *pFD)
-{
-    CONTRACTL {
-        FCALL_CHECK;
-        PRECONDITION(CheckPointer(pFD));
-        PRECONDITION(pFD->IsStatic());
-        PRECONDITION(pFD->IsRVA() && pFD->GetModule()->IsRvaFieldTls(pFD->GetOffset()));
-    } CONTRACTL_END;
 
-    void *addr = NULL;
-
-    HELPER_METHOD_FRAME_BEGIN_RET_0();
-
-    Module* pModule = pFD->GetModule();
-
-    // Get the ThreadLocalStoragePointer in the TEB.
-    LPVOID pTlsPtr     = ClrTeb::GetLegacyThreadLocalStoragePointer();
-
-    // pTlsPtr is pointing at an array of pointers, each of which points to
-    // the TLS block of a dll.  So here, we need to get the TLS index for
-    // the dll, add that to pTlsPtr, and dereference it to get the TLS
-    // block of the dll.
-    DWORD  tlsIndex    = pModule->GetTlsIndex();
-    LPVOID pDllTlsBase = (LPVOID)*((UINT_PTR*)pTlsPtr + tlsIndex);
-
-    // Finally, we need to find the field offset into the TLS block.
-    addr = (LPVOID)((PBYTE)pDllTlsBase + pModule->GetFieldTlsOffset(pFD->GetOffset()));
-
-    HELPER_METHOD_FRAME_END();
-
-    return addr;
-}
-HCIMPLEND
-#endif // FEATURE_MIXEDMODE
-
-#ifdef FEATURE_REMOTING
-HCIMPL1(void*, JIT_GetStaticFieldAddr_Context, FieldDesc *pFD)
-{
-    CONTRACTL {
-        FCALL_CHECK;
-        PRECONDITION(CheckPointer(pFD));
-        PRECONDITION(pFD->IsStatic());
-        PRECONDITION(pFD->IsContextStatic());
-    } CONTRACTL_END;
-
-    void *addr = NULL;
-
-    HELPER_METHOD_FRAME_BEGIN_RET_0();
-
-    MethodTable *pMT = pFD->GetEnclosingMethodTable();
-    pMT->CheckRestore();
-    pMT->CheckRunClassInitThrowing();
-
-    addr = Context::GetStaticFieldAddress(pFD);
-
-    HELPER_METHOD_FRAME_END();
-
-    return addr;
-}
-HCIMPLEND
-#endif
 
 // Slow helper to tailcall from the fast one
 NOINLINE HCIMPL1(void, JIT_InitClass_Framed, MethodTable* pMT)
@@ -2413,13 +2313,6 @@ BOOL ObjIsInstanceOf(Object *pObject, TypeHandle toTypeHnd, BOOL throwCastExcept
 
     // If we are trying to cast a proxy we need to delegate to remoting
     // services which will determine whether the proxy and the type are compatible.
-#ifdef FEATURE_REMOTING    
-    if (fromTypeHnd.IsTransparentProxy())
-    {
-        fCast = CRemotingServices::CheckCast(obj, toTypeHnd);
-    }
-    else
-#endif        
     // Start by doing a quick static cast check to see if the type information captured in
     // the metadata indicates that the cast is legal.
     if (fromTypeHnd.CanCastTo(toTypeHnd))
@@ -2858,7 +2751,7 @@ HCIMPL1(Object*, JIT_NewS_MP_FastPortable, CORINFO_CLASS_HANDLE typeHnd_)
 
     do
     {
-        _ASSERTE(GCHeap::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // This is typically the only call in the fast path. Making the call early seems to be better, as it allows the compiler
         // to use volatile registers for intermediate values. This reduces the number of push/pop instructions and eliminates
@@ -2872,7 +2765,7 @@ HCIMPL1(Object*, JIT_NewS_MP_FastPortable, CORINFO_CLASS_HANDLE typeHnd_)
         SIZE_T size = methodTable->GetBaseSize();
         _ASSERTE(size % DATA_ALIGNMENT == 0);
 
-        alloc_context *allocContext = thread->GetAllocContext();
+        gc_alloc_context *allocContext = thread->GetAllocContext();
         BYTE *allocPtr = allocContext->alloc_ptr;
         _ASSERTE(allocPtr <= allocContext->alloc_limit);
         if (size > static_cast<SIZE_T>(allocContext->alloc_limit - allocPtr))
@@ -2931,53 +2824,6 @@ HCIMPL1(Object*, JIT_New, CORINFO_CLASS_HANDLE typeHnd_)
 }
 HCIMPLEND
 
-#ifdef FEATURE_REMOTING
-/*************************************************************/
-HCIMPL1(Object*, JIT_NewCrossContext_Portable, CORINFO_CLASS_HANDLE typeHnd_)
-{
-    FCALL_CONTRACT;
-
-    OBJECTREF newobj = NULL;
-    HELPER_METHOD_FRAME_BEGIN_RET_0();    // Set up a frame
-
-    TypeHandle typeHnd(typeHnd_);
-
-    _ASSERTE(!typeHnd.IsTypeDesc());                                   // we never use this helper for arrays
-    MethodTable *pMT = typeHnd.AsMethodTable();
-
-    // Don't bother to restore the method table; assume that the prestub of the
-    // constructor will do that check.
-
-#ifdef _DEBUG
-    if (g_pConfig->FastGCStressLevel()) {
-        GetThread()->DisableStressHeap();
-    }
-#endif // _DEBUG
-
-    if (CRemotingServices::RequiresManagedActivation(typeHnd))
-    {
-        if (pMT->IsComObjectType())
-        {
-            newobj = AllocateObject(pMT);
-        }
-        else
-        {
-            // Remoting services determines if the current context is appropriate
-            // for activation. If the current context is OK then it creates an object
-            // else it creates a proxy.
-            newobj = CRemotingServices::CreateProxyOrObject(pMT);
-        }
-    }
-    else
-    {
-        newobj = AllocateObject(pMT);
-    }
-
-    HELPER_METHOD_FRAME_END();
-    return(OBJECTREFToObject(newobj));
-}
-HCIMPLEND
-#endif // FEATURE_REMOTING
 
 
 //========================================================================
@@ -2997,7 +2843,7 @@ HCIMPL1(StringObject*, AllocateString_MP_FastPortable, DWORD stringLength)
 
     do
     {
-        _ASSERTE(GCHeap::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // Instead of doing elaborate overflow checks, we just limit the number of elements. This will avoid all overflow
         // problems, as well as making sure big string objects are correctly allocated in the big object heap.
@@ -3021,7 +2867,7 @@ HCIMPL1(StringObject*, AllocateString_MP_FastPortable, DWORD stringLength)
         _ASSERTE(alignedTotalSize >= totalSize);
         totalSize = alignedTotalSize;
 
-        alloc_context *allocContext = thread->GetAllocContext();
+        gc_alloc_context *allocContext = thread->GetAllocContext();
         BYTE *allocPtr = allocContext->alloc_ptr;
         _ASSERTE(allocPtr <= allocContext->alloc_limit);
         if (totalSize > static_cast<SIZE_T>(allocContext->alloc_limit - allocPtr))
@@ -3161,7 +3007,7 @@ HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHn
 
     do
     {
-        _ASSERTE(GCHeap::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // Do a conservative check here.  This is to avoid overflow while doing the calculations.  We don't
         // have to worry about "large" objects, since the allocation quantum is never big enough for
@@ -3198,7 +3044,7 @@ HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHn
         _ASSERTE(alignedTotalSize >= totalSize);
         totalSize = alignedTotalSize;
 
-        alloc_context *allocContext = thread->GetAllocContext();
+        gc_alloc_context *allocContext = thread->GetAllocContext();
         BYTE *allocPtr = allocContext->alloc_ptr;
         _ASSERTE(allocPtr <= allocContext->alloc_limit);
         if (totalSize > static_cast<SIZE_T>(allocContext->alloc_limit - allocPtr))
@@ -3238,7 +3084,7 @@ HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeH
 
     do
     {
-        _ASSERTE(GCHeap::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // Make sure that the total size cannot reach LARGE_OBJECT_SIZE, which also allows us to avoid overflow checks. The
         // "256" slack is to cover the array header size and round-up, using a constant value here out of laziness.
@@ -3266,7 +3112,7 @@ HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeH
 
         _ASSERTE(ALIGN_UP(totalSize, DATA_ALIGNMENT) == totalSize);
 
-        alloc_context *allocContext = thread->GetAllocContext();
+        gc_alloc_context *allocContext = thread->GetAllocContext();
         BYTE *allocPtr = allocContext->alloc_ptr;
         _ASSERTE(allocPtr <= allocContext->alloc_limit);
         if (totalSize > static_cast<SIZE_T>(allocContext->alloc_limit - allocPtr))
@@ -3994,11 +3840,7 @@ void ClearJitGenericHandleCache(AppDomain *pDomain)
 
 // Factored out most of the body of JIT_GenericHandle so it could be called easily from the CER reliability code to pre-populate the
 // cache.
-CORINFO_GENERIC_HANDLE 
-JIT_GenericHandleWorker(
-    MethodDesc *  pMD, 
-    MethodTable * pMT, 
-    LPVOID        signature)
+CORINFO_GENERIC_HANDLE JIT_GenericHandleWorker(MethodDesc * pMD, MethodTable * pMT, LPVOID signature, DWORD dictionaryIndexAndSlot, Module* pModule)
 {
      CONTRACTL {
         THROWS;
@@ -4009,20 +3851,34 @@ JIT_GenericHandleWorker(
 
     if (pMT != NULL)
     {
-        SigPointer ptr((PCCOR_SIGNATURE)signature);
-
-        ULONG kind; // DictionaryEntryKind
-        IfFailThrow(ptr.GetData(&kind));
-
-        // We need to normalize the class passed in (if any) for reliability purposes. That's because preparation of a code region that
-        // contains these handle lookups depends on being able to predict exactly which lookups are required (so we can pre-cache the
-        // answers and remove any possibility of failure at runtime). This is hard to do if the lookup (in this case the lookup of the
-        // dictionary overflow cache) is keyed off the somewhat arbitrary type of the instance on which the call is made (we'd need to
-        // prepare for every possible derived type of the type containing the method). So instead we have to locate the exactly
-        // instantiated (non-shared) super-type of the class passed in.
-
         ULONG dictionaryIndex = 0;
-        IfFailThrow(ptr.GetData(&dictionaryIndex));
+
+        if (pModule != NULL)
+        {
+#ifdef _DEBUG
+            // Only in R2R mode are the module, dictionary index and dictionary slot provided as an input
+            _ASSERTE(dictionaryIndexAndSlot != -1);
+            _ASSERT(ExecutionManager::FindReadyToRunModule(dac_cast<TADDR>(signature)) == pModule);
+#endif
+            dictionaryIndex = (dictionaryIndexAndSlot >> 16);
+        }
+        else
+        {
+            SigPointer ptr((PCCOR_SIGNATURE)signature);
+
+            ULONG kind; // DictionaryEntryKind
+            IfFailThrow(ptr.GetData(&kind));
+
+            // We need to normalize the class passed in (if any) for reliability purposes. That's because preparation of a code region that
+            // contains these handle lookups depends on being able to predict exactly which lookups are required (so we can pre-cache the
+            // answers and remove any possibility of failure at runtime). This is hard to do if the lookup (in this case the lookup of the
+            // dictionary overflow cache) is keyed off the somewhat arbitrary type of the instance on which the call is made (we'd need to
+            // prepare for every possible derived type of the type containing the method). So instead we have to locate the exactly
+            // instantiated (non-shared) super-type of the class passed in.
+
+            _ASSERTE(dictionaryIndexAndSlot == -1);
+            IfFailThrow(ptr.GetData(&dictionaryIndex));
+        }
 
         pDeclaringMT = pMT;
         for (;;)
@@ -4049,7 +3905,7 @@ JIT_GenericHandleWorker(
     }
 
     DictionaryEntry * pSlot;
-    CORINFO_GENERIC_HANDLE result = (CORINFO_GENERIC_HANDLE)Dictionary::PopulateEntry(pMD, pDeclaringMT, signature, FALSE, &pSlot);
+    CORINFO_GENERIC_HANDLE result = (CORINFO_GENERIC_HANDLE)Dictionary::PopulateEntry(pMD, pDeclaringMT, signature, FALSE, &pSlot, dictionaryIndexAndSlot, pModule);
 
     if (pSlot == NULL)
     {
@@ -4076,10 +3932,12 @@ JIT_GenericHandleWorker(
 
 /*********************************************************************/
 // slow helper to tail call from the fast one
-NOINLINE HCIMPL3(CORINFO_GENERIC_HANDLE, JIT_GenericHandle_Framed,
-         CORINFO_CLASS_HANDLE classHnd,
-         CORINFO_METHOD_HANDLE methodHnd,
-         LPVOID signature)
+NOINLINE HCIMPL5(CORINFO_GENERIC_HANDLE, JIT_GenericHandle_Framed, 
+        CORINFO_CLASS_HANDLE classHnd, 
+        CORINFO_METHOD_HANDLE methodHnd, 
+        LPVOID signature, 
+        DWORD dictionaryIndexAndSlot, 
+        CORINFO_MODULE_HANDLE moduleHnd)
 {
     CONTRACTL {
         FCALL_CHECK;
@@ -4092,11 +3950,12 @@ NOINLINE HCIMPL3(CORINFO_GENERIC_HANDLE, JIT_GenericHandle_Framed,
 
     MethodDesc * pMD = GetMethod(methodHnd);
     MethodTable * pMT = TypeHandle(classHnd).AsMethodTable();
+    Module * pModule = GetModule(moduleHnd);
 
     // Set up a frame
     HELPER_METHOD_FRAME_BEGIN_RET_0();
 
-    result = JIT_GenericHandleWorker(pMD, pMT, signature);
+    result = JIT_GenericHandleWorker(pMD, pMT, signature, dictionaryIndexAndSlot, pModule);
 
     HELPER_METHOD_FRAME_END();
 
@@ -4125,7 +3984,27 @@ HCIMPL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleMethod, CORINFO_METHOD_HANDLE  
 
     // Tailcall to the slow helper
     ENDFORBIDGC();
-    return HCCALL3(JIT_GenericHandle_Framed, NULL, methodHnd, signature);
+    return HCCALL5(JIT_GenericHandle_Framed, NULL, methodHnd, signature, -1, NULL);
+}
+HCIMPLEND
+
+HCIMPL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleMethodWithSlotAndModule, CORINFO_METHOD_HANDLE  methodHnd, GenericHandleArgs * pArgs)
+{
+    CONTRACTL{
+        FCALL_CHECK;
+        PRECONDITION(CheckPointer(methodHnd));
+        PRECONDITION(GetMethod(methodHnd)->IsRestored());
+        PRECONDITION(CheckPointer(pArgs));
+    } CONTRACTL_END;
+
+    JitGenericHandleCacheKey key(NULL, methodHnd, pArgs->signature);
+    HashDatum res;
+    if (g_pJitGenericHandleCache->GetValueSpeculative(&key, &res))
+        return (CORINFO_GENERIC_HANDLE)(DictionaryEntry)res;
+
+    // Tailcall to the slow helper
+    ENDFORBIDGC();
+    return HCCALL5(JIT_GenericHandle_Framed, NULL, methodHnd, pArgs->signature, pArgs->dictionaryIndexAndSlot, pArgs->module);
 }
 HCIMPLEND
 #include <optdefault.h>
@@ -4149,7 +4028,7 @@ HCIMPL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleMethodLogging, CORINFO_METHOD_H
 
     // Tailcall to the slow helper
     ENDFORBIDGC();
-    return HCCALL3(JIT_GenericHandle_Framed, NULL, methodHnd, signature);
+    return HCCALL5(JIT_GenericHandle_Framed, NULL, methodHnd, signature, -1, NULL);
 }
 HCIMPLEND
 
@@ -4171,7 +4050,27 @@ HCIMPL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleClass, CORINFO_CLASS_HANDLE cla
 
     // Tailcall to the slow helper
     ENDFORBIDGC();
-    return HCCALL3(JIT_GenericHandle_Framed, classHnd, NULL, signature);
+    return HCCALL5(JIT_GenericHandle_Framed, classHnd, NULL, signature, -1, NULL);
+}
+HCIMPLEND
+
+HCIMPL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleClassWithSlotAndModule, CORINFO_CLASS_HANDLE classHnd, GenericHandleArgs * pArgs)
+{
+    CONTRACTL{
+        FCALL_CHECK;
+        PRECONDITION(CheckPointer(classHnd));
+        PRECONDITION(TypeHandle(classHnd).IsRestored());
+        PRECONDITION(CheckPointer(pArgs));
+    } CONTRACTL_END;
+
+    JitGenericHandleCacheKey key(classHnd, NULL, pArgs->signature);
+    HashDatum res;
+    if (g_pJitGenericHandleCache->GetValueSpeculative(&key, &res))
+        return (CORINFO_GENERIC_HANDLE)(DictionaryEntry)res;
+
+    // Tailcall to the slow helper
+    ENDFORBIDGC();
+    return HCCALL5(JIT_GenericHandle_Framed, classHnd, NULL, pArgs->signature, pArgs->dictionaryIndexAndSlot, pArgs->module);
 }
 HCIMPLEND
 #include <optdefault.h>
@@ -4195,7 +4094,7 @@ HCIMPL2(CORINFO_GENERIC_HANDLE, JIT_GenericHandleClassLogging, CORINFO_CLASS_HAN
 
     // Tailcall to the slow helper
     ENDFORBIDGC();
-    return HCCALL3(JIT_GenericHandle_Framed, classHnd, NULL, signature);
+    return HCCALL5(JIT_GenericHandle_Framed, classHnd, NULL, signature, -1, NULL);
 }
 HCIMPLEND
 
@@ -5362,7 +5261,6 @@ HCIMPL1(void, IL_Throw,  Object* obj)
             EEPolicy::HandleOutOfMemory();
         }
 
-#if defined(FEATURE_EXCEPTIONDISPATCHINFO)
         // If the flag indicating ForeignExceptionRaise has been set,
         // then do not clear the "_stackTrace" field of the exception object.
         if (GetThread()->GetExceptionState()->IsRaisingForeignException())
@@ -5370,7 +5268,6 @@ HCIMPL1(void, IL_Throw,  Object* obj)
             ((EXCEPTIONREF)oref)->SetStackTraceString(NULL);
         }
         else
-#endif // defined(FEATURE_EXCEPTIONDISPATCHINFO)
         {
             ((EXCEPTIONREF)oref)->ClearStackTracePreservingRemoteStackTrace();
         }
@@ -5562,7 +5459,7 @@ HCIMPL1(void, JIT_SecurityUnmanagedCodeException, CORINFO_CLASS_HANDLE typeHnd_)
 
     HELPER_METHOD_FRAME_BEGIN_ATTRIB_NOPOLL(Frame::FRAME_ATTR_EXCEPTION);    // Set up a frame
 
-    Security::ThrowSecurityException(g_SecurityPermissionClassName, SPFLAGSUNMANAGEDCODE);
+    COMPlusThrow(kSecurityException);
 
     HELPER_METHOD_FRAME_END();
 }
@@ -5756,340 +5653,47 @@ HCIMPLEND;
 //
 //========================================================================
 
-NOINLINE HCIMPL2(void, JIT_DelegateSecurityCheck_Internal, CORINFO_CLASS_HANDLE delegateHnd, CORINFO_METHOD_HANDLE calleeMethodHnd)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    TypeHandle delegateType(delegateHnd);
-    MethodDesc* pCallee = GetMethod(calleeMethodHnd);
-
-    Security::EnforceTransparentDelegateChecks(delegateType.AsMethodTable(), pCallee);
-
-    HELPER_METHOD_FRAME_END_POLL();
-}
-HCIMPLEND
-
-#include <optsmallperfcritical.h>
-/*************************************************************/
 HCIMPL2(void, JIT_DelegateSecurityCheck, CORINFO_CLASS_HANDLE delegateHnd, CORINFO_METHOD_HANDLE calleeMethodHnd)
 {
     FCALL_CONTRACT;
-
-#ifdef FEATURE_CORECLR
-    // If we're in full trust, then we don't enforce the delegate binding rules
-    if (GetAppDomain()->GetSecurityDescriptor()->IsFullyTrusted())
-    {
-        return;
-    }
-#endif // FEATURE_CORECLR
-
-    // Tailcall to the real implementation
-    ENDFORBIDGC();
-    HCCALL2(JIT_DelegateSecurityCheck_Internal, delegateHnd, calleeMethodHnd);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-
-/*************************************************************/
-//Make sure to allow check of 0 for COMPlus_Security_AlwaysInsertCallout
-NOINLINE HCIMPL4(void, JIT_MethodAccessCheck_Internal, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_METHOD_HANDLE calleeMethodHnd, CORINFO_CLASS_HANDLE calleeTypeHnd, CorInfoSecurityRuntimeChecks check)
-{
-    FCALL_CONTRACT;
-
-    //
-    // Verify with the security at runtime whether call is allowed.
-    // Throws an exception if the call is not allowed, returns if it is allowed.
-    //
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    MethodDesc *pCaller = GetMethod(callerMethodHnd);
-    MethodDesc *pCallee = GetMethod(calleeMethodHnd);
-    // If we're being called because of a transparency violation (either a standard violation, or an attempt
-    // to call a conditional APTCA protected method from transparent code), process that now.
-    if (check & CORINFO_ACCESS_SECURITY_TRANSPARENCY)
-    {
-        Security::EnforceTransparentAssemblyChecks(pCaller, pCallee);
-    }
-
-    // Also make sure that we have access to the type that the method lives on
-    TypeHandle calleeTH(calleeTypeHnd);
-    Security::DoSecurityClassAccessChecks(pCaller, calleeTH, check);
-
-    // If the method has a generic instantiation, then we also need to do checks on its generic parameters
-    if (pCallee->HasMethodInstantiation())
-    {
-        Instantiation instantiation = pCallee->GetMethodInstantiation();
-        for (DWORD i = 0; i < instantiation.GetNumArgs(); i++)
-        {   
-            TypeHandle argTH = instantiation[i];
-            if (!argTH.IsGenericVariable())
-            {
-                Security::DoSecurityClassAccessChecks(pCaller, argTH, check);
-            }
-        }
-    }
-
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-
-#include <optsmallperfcritical.h>
-/*************************************************************/
-//Make sure to allow check of 0 for COMPlus_Security_AlwaysInsertCallout
 HCIMPL4(void, JIT_MethodAccessCheck, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_METHOD_HANDLE calleeMethodHnd, CORINFO_CLASS_HANDLE calleeTypeHnd, CorInfoSecurityRuntimeChecks check)
 {
     FCALL_CONTRACT;
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-    _ASSERTE(GetMethod(callerMethodHnd)->IsRestored());
-    _ASSERTE(GetMethod(calleeMethodHnd)->IsRestored());
-
-
-    // If we don't need to process this callout, then exit early
-    if (Security::SecurityCalloutQuickCheck(pCallerMD))
-    {
-        return;
-    }
-
-    // Tailcall to the slow helper
-    ENDFORBIDGC();
-    HCCALL4(JIT_MethodAccessCheck_Internal, callerMethodHnd, calleeMethodHnd, calleeTypeHnd, check);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-
-// Slower checks (including failure paths) for determining if a method has runtime access to a field
-NOINLINE HCIMPL3(void, JIT_FieldAccessCheck_Internal, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_FIELD_HANDLE calleeFieldHnd, CorInfoSecurityRuntimeChecks check)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-    FieldDesc *pFD = reinterpret_cast<FieldDesc *>(calleeFieldHnd);
-
-    // We can get caller checks of 0 if we're in AlwaysInsertCallout mode, so make sure to do all of our
-    // work under checks for specific flags
-    
-    if (check & CORINFO_ACCESS_SECURITY_TRANSPARENCY)
-    {
-        _ASSERTE(pCallerMD != NULL);
-        StaticAccessCheckContext accessContext(pCallerMD);
-
-        if (!Security::CheckCriticalAccess(&accessContext, NULL, pFD, NULL))
-        {
-            ThrowFieldAccessException(pCallerMD, pFD, TRUE, IDS_E_CRITICAL_FIELD_ACCESS_DENIED);
-        }
-    }
-
-    // Also make sure that we have access to the type that the field lives on
-    TypeHandle fieldTH(pFD->GetApproxEnclosingMethodTable());
-    Security::DoSecurityClassAccessChecks(pCallerMD, fieldTH, check);
-
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-#include <optsmallperfcritical.h>
-// Check to see if a method has runtime access to a field
 HCIMPL3(void, JIT_FieldAccessCheck, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_FIELD_HANDLE calleeFieldHnd, CorInfoSecurityRuntimeChecks check)
 {
     FCALL_CONTRACT;
-    _ASSERTE(GetMethod(callerMethodHnd)->IsRestored());
-    _ASSERTE(((FieldDesc*)calleeFieldHnd)->GetEnclosingMethodTable()->IsRestored_NoLogging());
-
-    // We want to try to exit JIT_FieldAccessCheck as soon as possible, preferably without
-    // entering JIT_FieldAccessCheck_Internal.  This method contains only quick checks to see if
-    // the access is definately allowed.  More complete checks are done in the Internal method.
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-
-    // If we don't need to process this callout at all, exit early
-    if (Security::SecurityCalloutQuickCheck(pCallerMD))
-    {
-        return;
-    }
-
-    // If the callout is for conditional APTCA only and we know the target is enabled, then we can also exit
-    // early
-
-    // We couldn't quickly determine that this access is legal, so tailcall to the slower helper to do some
-    // more work to process the access.
-    ENDFORBIDGC();
-    HCCALL3(JIT_FieldAccessCheck_Internal, callerMethodHnd, calleeFieldHnd, check);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-// Slower checks (including failure paths) for determining if a method has runtime access to a type
-NOINLINE HCIMPL3(void, JIT_ClassAccessCheck_Internal, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_CLASS_HANDLE calleeClassHnd, CorInfoSecurityRuntimeChecks check)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-    TypeHandle calleeClassTH(calleeClassHnd);
-
-    Security::DoSecurityClassAccessChecks(pCallerMD, calleeClassTH, check);
-
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-#include <optsmallperfcritical.h>
-// Check to see if a method has runtime access to a type
 HCIMPL3(void, JIT_ClassAccessCheck, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_CLASS_HANDLE calleeClassHnd, CorInfoSecurityRuntimeChecks check)
 {
     FCALL_CONTRACT;
-    _ASSERTE(GetMethod(callerMethodHnd)->IsRestored());
-    _ASSERTE(TypeHandle(calleeClassHnd).IsRestored());
-
-    // We want to try to exit JIT_ClassAccessCheck as soon as possible, preferably without
-    // entering JIT_ClassAccessCheck_Internal.  This method contains only quick checks to see if
-    // the access is definately allowed.  More complete checks are done in the Internal method.
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-       
-    // If we don't need to prrocess the callout at all, exit early
-    if (Security::SecurityCalloutQuickCheck(pCallerMD))
-    {
-        return;
-    }
-
-    // If the callout is for conditional APTCA only, and we know the target is enabled, then we can also
-    // exit early
-
-    // We couldn't quickly determine that this access is legal, so tailcall to the slower helper to do some
-    // more work processing the access.
-    ENDFORBIDGC();
-    HCCALL3(JIT_ClassAccessCheck_Internal, callerMethodHnd, calleeClassHnd, check);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-NOINLINE HCIMPL2(void, JIT_Security_Prolog_Framed, CORINFO_METHOD_HANDLE methHnd_, OBJECTREF* ppFrameSecDesc)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-    {
-        ASSUME_BYREF_FROM_JIT_STACK_BEGIN(ppFrameSecDesc);
-
-        MethodDesc *pCurrent = GetMethod(methHnd_);
-
-        g_IBCLogger.LogMethodDescAccess(pCurrent);
-
-        // Note: This check is replicated in JIT_Security_Prolog
-        if ((pCurrent->IsInterceptedForDeclSecurity() &&
-            !(pCurrent->IsInterceptedForDeclSecurityCASDemandsOnly() &&
-                SecurityStackWalk::HasFlagsOrFullyTrusted(0)))
-#ifdef FEATURE_COMPRESSEDSTACK
-                || SecurityStackWalk::MethodIsAnonymouslyHostedDynamicMethodWithCSToEvaluate(pCurrent)
-#endif //FEATURE_COMPRESSEDSTACK
-                )
-        {
-            MethodSecurityDescriptor MDSecDesc(pCurrent);
-            MethodSecurityDescriptor::LookupOrCreateMethodSecurityDescriptor(&MDSecDesc);
-
-            // Do the Declarative CAS actions check
-            DeclActionInfo* pRuntimeDeclActionInfo = MDSecDesc.GetRuntimeDeclActionInfo();
-            if (pRuntimeDeclActionInfo != NULL || pCurrent->IsLCGMethod())
-            {
-                 // Tell the debugger not to start on any managed code that we call in this method    
-                FrameWithCookie<DebuggerSecurityCodeMarkFrame> __dbgSecFrame;
-
-                Security::DoDeclarativeActions(pCurrent, pRuntimeDeclActionInfo, ppFrameSecDesc, &MDSecDesc);
-
-                // Pop the debugger frame
-                __dbgSecFrame.Pop();
-            }
-        }
-
-        ASSUME_BYREF_FROM_JIT_STACK_END();
-    }  
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-/*************************************************************/
-#include <optsmallperfcritical.h>
 HCIMPL2(void, JIT_Security_Prolog, CORINFO_METHOD_HANDLE methHnd_, OBJECTREF* ppFrameSecDesc)
 {
     FCALL_CONTRACT;
-
-    //
-    // do the security prolog work
-    //
-
-    MethodDesc *pCurrent = GetMethod(methHnd_);
-
-    // Note: This check is replicated in JIT_Security_Prolog_Framed
-    if ((pCurrent->IsInterceptedForDeclSecurity() &&
-        !(pCurrent->IsInterceptedForDeclSecurityCASDemandsOnly() &&
-        SecurityStackWalk::HasFlagsOrFullyTrusted(0)))
-        // We don't necessarily need to do work for LCG methods, but we need a frame
-        // to find out for sure
-        || pCurrent->IsLCGMethod())
-    {
-        // Tailcall to the slow helper
-        ENDFORBIDGC();
-        HCCALL2(JIT_Security_Prolog_Framed, methHnd_, ppFrameSecDesc);
-    }
 }
 HCIMPLEND
-#include <optdefault.h>
 
-/*************************************************************/
-NOINLINE HCIMPL1(void, JIT_VerificationRuntimeCheck_Internal, CORINFO_METHOD_HANDLE methHnd_)
+HCIMPL2(void, JIT_Security_Prolog_Framed, CORINFO_METHOD_HANDLE methHnd_, OBJECTREF* ppFrameSecDesc)
 {
     FCALL_CONTRACT;
-
-    
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-    {
-#ifdef FEATURE_CORECLR
-        // Transparent methods that contains unverifiable code is not allowed.
-        MethodDesc *pMethod = GetMethod(methHnd_);
-        SecurityTransparent::ThrowMethodAccessException(pMethod);
-#else // FEATURE_CORECLR        
-    //
-    // inject a full-demand for unmanaged code permission at runtime
-    // around methods in transparent assembly that contains unverifiable code
-        Security::SpecialDemand(SSWT_DECLARATIVE_DEMAND, SECURITY_UNMANAGED_CODE);
-#endif // FEATURE_CORECLR
-    }
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-#include <optsmallperfcritical.h>
-/*************************************************************/
 HCIMPL1(void, JIT_VerificationRuntimeCheck, CORINFO_METHOD_HANDLE methHnd_)
 {
     FCALL_CONTRACT;
-
-    if (SecurityStackWalk::HasFlagsOrFullyTrustedIgnoreMode(0)) 
-        return;
-    //
-    // inject a full-demand for unmanaged code permission at runtime
-    // around methods in transparent assembly that contains unverifiable code
-    {
-        // Tailcall to the slow helper
-        ENDFORBIDGC();
-        HCCALL1(JIT_VerificationRuntimeCheck_Internal, methHnd_);
-    }
-
 }
 HCIMPLEND
-#include <optdefault.h>
-
 
 
 //========================================================================
@@ -6378,7 +5982,7 @@ HCIMPL0(VOID, JIT_StressGC)
     bool fSkipGC = false;
 
     if (!fSkipGC)
-        GCHeap::GetGCHeap()->GarbageCollect();
+        GCHeapUtilities::GetGCHeap()->GarbageCollect();
 
 // <TODO>@TODO: the following ifdef is in error, but if corrected the
 // compiler complains about the *__ms->pRetAddr() saying machine state

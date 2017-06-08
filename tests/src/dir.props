@@ -10,19 +10,19 @@
     <!-- Disable some C# warnings for the tests. -->
     <NoWarn>78,162,164,168,169,219,251,252,414,429,642,649,652,675,1691,1717,1718,3001,3002,3003,3005,3008</NoWarn>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <CLRTestKind>BuildAndRun</CLRTestKind>
     <SkipSigning Condition="'$(CrossGen)' == 'true'">true</SkipSigning>
     <!-- Set the project.json directory for generated TestWrappers. -->
     <TestWrappersPackagesConfigFileDirectory>$(MSBuildThisFileDirectory)TestWrappersConfig\</TestWrappersPackagesConfigFileDirectory>
+    <AssemblyKey>Test</AssemblyKey>
   </PropertyGroup>
 
   <!-- Expose the target OS in a more convenient fashion -->
   <PropertyGroup>
-    <OSGroup Condition="'$(OSGroup)'=='' and $(Configuration.StartsWith('Windows'))">Windows_NT</OSGroup>
-    <OSGroup Condition="'$(OSGroup)'=='' and $(Configuration.StartsWith('Linux'))">Linux</OSGroup>
-    <OSGroup Condition="'$(OSGroup)'=='' and $(Configuration.StartsWith('OSX'))">OSX</OSGroup>
-    <OSGroup Condition="'$(OSGroup)'=='' and $(Configuration.StartsWith('FreeBSD'))">FreeBSD</OSGroup>
-    <OSGroup Condition="'$(OSGroup)'==''">Windows_NT</OSGroup>
+    <OSGroup Condition="'$(OSGroup)'=='' and $(OSPlatformConfig.StartsWith('Windows'))">Windows_NT</OSGroup>
+    <OSGroup Condition="'$(OSGroup)'=='' and $(OSPlatformConfig.StartsWith('Linux'))">Linux</OSGroup>
+    <OSGroup Condition="'$(OSGroup)'=='' and $(OSPlatformConfig.StartsWith('OSX'))">OSX</OSGroup>
+    <OSGroup Condition="'$(OSGroup)'=='' and $(OSPlatformConfig.StartsWith('FreeBSD'))">FreeBSD</OSGroup>
+    <OSGroup Condition="'$(OSGroup)'==''">AnyOS</OSGroup>
   </PropertyGroup>
 
   <!-- Setup properties per OSGroup -->
@@ -48,7 +48,7 @@
       <PropertyGroup>
         <TargetsUnix>true</TargetsUnix>
         <TargetsOSX>true</TargetsOSX>
-        <TestNugetRuntimeId>osx.10.10-x64</TestNugetRuntimeId>
+        <TestNugetRuntimeId>osx.10.12-x64</TestNugetRuntimeId>
       </PropertyGroup>
     </When>
     <When Condition="'$(OSGroup)'=='FreeBSD'">
@@ -67,11 +67,32 @@
 
   <PropertyGroup>
     <TargetsUnknownUnix Condition="'$(TargetsUnix)' == 'true' AND '$(OSGroup)' != 'FreeBSD' AND '$(OSGroup)' != 'Linux' AND '$(OSGroup)' != 'OSX'">true</TargetsUnknownUnix>
+    <Language Condition="'$(Language)' == '' and  '$(MSBuildProjectExtension)' == '.csproj'">C#</Language>
+    <Language Condition="'$(Language)' == '' and  '$(MSBuildProjectExtension)' == '.ilproj'">IL</Language>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFrameworkIdentifier)' != '.NETFramework'">
+    <!-- RAR thinks all EXEs require binding redirects.  That's not the case for CoreCLR -->
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <!-- Don't reference the mscorlib facade -->
+  <PropertyGroup>
+    <ExcludeMscorlibFacade>true</ExcludeMscorlibFacade>
   </PropertyGroup>
 
   <!-- Set default ZapRequire level (used only when CrossGen is enabled) -->
   <PropertyGroup>
     <ZapRequire Condition="'$(ZapRequire)' == ''">2</ZapRequire>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <RestoreOutputPath>$(MSBuildProjectDirectory)\obj</RestoreOutputPath>
+
+    <!-- Specify the target framework of the common test dependency project.json. -->
+    <NuGetTargetMoniker>.NETCoreApp,Version=v2.0</NuGetTargetMoniker>
+    <NuGetTargetMonikerShort>netcoreapp2.0</NuGetTargetMonikerShort>
+    <PrereleaseResolveNuGetPackages>true</PrereleaseResolveNuGetPackages>
   </PropertyGroup>
 
 </Project>

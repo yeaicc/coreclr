@@ -40,18 +40,14 @@
 #include "safemath.h"
 
 
-#ifdef _ASSERTE
 #undef _ASSERTE
-#endif
 
-#ifndef _ASSERTE
 #ifdef _DEBUG
 #define _ASSERTE(expr)         \
     do { if (!(expr) ) { ExtErr("_ASSERTE fired:\n\t%s\n", #expr); if (IsDebuggerPresent()) DebugBreak(); } } while (0)
 #else
 #define _ASSERTE(x)
 #endif
-#endif // ASSERTE
 
 inline size_t ALIGN_DOWN( size_t val, size_t alignment )
 {
@@ -1320,11 +1316,11 @@ void PrintNotReachableInRange(TADDR rngStart, TADDR rngEnd, BOOL bExcludeReadyFo
 // The value of card_size is determined empirically according to the average size of an object
 // In the code we also rely on the assumption that one card_table entry (DWORD) covers an entire os page
 //
-#if defined (_TARGET_AMD64_)
+#if defined (_TARGET_WIN64_)
 #define card_size ((size_t)(2*DT_OS_PAGE_SIZE/card_word_width))
 #else
 #define card_size ((size_t)(DT_OS_PAGE_SIZE/card_word_width))
-#endif //_TARGET_AMD64_
+#endif //_TARGET_WIN64_
 
 // so card_size = 128 on x86, 256 on x64
 

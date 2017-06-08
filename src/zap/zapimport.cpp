@@ -351,7 +351,7 @@ ZapGenericSignature * ZapImportTable::GetGenericSignature(PVOID signature, BOOL 
 // At ngen time Zapper::CompileModule PlaceFixups called from
 //     code:ZapSig.GetSignatureForTypeHandle
 //
-/*static*/ DWORD __stdcall ZapImportTable::EncodeModuleHelper( LPVOID compileContext,
+/*static*/ DWORD ZapImportTable::EncodeModuleHelper( LPVOID compileContext,
                                                 CORINFO_MODULE_HANDLE referencedModule)
 {
     ZapImportTable * pTable = (ZapImportTable *)compileContext;
@@ -999,13 +999,13 @@ void ZapImportTable::EncodeClassInContext(CORINFO_MODULE_HANDLE context, CORINFO
 }
 
 void ZapImportTable::EncodeField(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_FIELD_HANDLE handle, SigBuilder * pSigBuilder,
-        CORINFO_RESOLVED_TOKEN * pResolvedToken)
+        CORINFO_RESOLVED_TOKEN * pResolvedToken, BOOL fEncodeUsingResolvedTokenSpecStreams)
 {
     CORINFO_CLASS_HANDLE clsHandle = GetJitInfo()->getFieldClass(handle);
     CORINFO_MODULE_HANDLE referencingModule = GetJitInfo()->getClassModule(clsHandle);
     referencingModule = TryEncodeModule(kind, referencingModule, pSigBuilder);
     GetCompileInfo()->EncodeField(referencingModule, handle, pSigBuilder, this, EncodeModuleHelper,
-        pResolvedToken);
+        pResolvedToken, fEncodeUsingResolvedTokenSpecStreams);
 }
 
 void ZapImportTable::EncodeMethod(CORCOMPILE_FIXUP_BLOB_KIND kind, CORINFO_METHOD_HANDLE handle, SigBuilder * pSigBuilder,
@@ -1808,6 +1808,7 @@ ZapImport * ZapImportTable::GetDictionaryLookupCell(CORCOMPILE_FIXUP_BLOB_KIND k
     switch (pLookup->runtimeLookupFlags)
     {
     case READYTORUN_FIXUP_TypeHandle:
+    case READYTORUN_FIXUP_DeclaringTypeHandle:
         {
             if (pResolvedToken->pTypeSpec == NULL)
             {
@@ -1815,7 +1816,17 @@ ZapImport * ZapImportTable::GetDictionaryLookupCell(CORCOMPILE_FIXUP_BLOB_KIND k
                 ThrowHR(E_NOTIMPL);
             }
 
-            sigBuilder.AppendData(ENCODE_TYPE_HANDLE);
+            if (pLookup->runtimeLookupFlags == READYTORUN_FIXUP_DeclaringTypeHandle)
+            {
+                _ASSERTE(pLookup->runtimeLookupArgs != NULL);
+                sigBuilder.AppendData(ENCODE_DECLARINGTYPE_HANDLE);
+                GetCompileInfo()->EncodeClass(m_pImage->GetModuleHandle(), (CORINFO_CLASS_HANDLE)pLookup->runtimeLookupArgs, &sigBuilder, NULL, NULL);
+            }
+            else
+            {
+                sigBuilder.AppendData(ENCODE_TYPE_HANDLE);
+            }
+
             if (pResolvedToken->tokenType == CORINFO_TOKENKIND_Newarr)
                 sigBuilder.AppendElementType(ELEMENT_TYPE_SZARRAY);
             sigBuilder.AppendBlob((PVOID)pResolvedToken->pTypeSpec, pResolvedToken->cbTypeSpec);
@@ -1827,14 +1838,16 @@ ZapImport * ZapImportTable::GetDictionaryLookupCell(CORCOMPILE_FIXUP_BLOB_KIND k
         break;
 
     case READYTORUN_FIXUP_MethodEntry:
-        EncodeMethod(ENCODE_METHOD_ENTRY, pResolvedToken->hMethod, &sigBuilder, pResolvedToken, NULL, TRUE);
+        EncodeMethod(ENCODE_METHOD_ENTRY, pResolvedToken->hMethod, &sigBuilder, pResolvedToken, (CORINFO_RESOLVED_TOKEN*)pLookup->runtimeLookupArgs, TRUE);
         break;
 
     case READYTORUN_FIXUP_VirtualEntry:
         EncodeMethod(ENCODE_VIRTUAL_ENTRY, pResolvedToken->hMethod, &sigBuilder, pResolvedToken, NULL, TRUE);
         break;
 
-        // TODO: support for the rest of the dictionary signature kinds
+    case READYTORUN_FIXUP_FieldHandle:
+        EncodeField(ENCODE_FIELD_HANDLE, pResolvedToken->hField, &sigBuilder, pResolvedToken, TRUE);
+        break;
 
     default:
         _ASSERTE(!"Invalid R2R fixup kind!");
@@ -2085,47 +2098,33 @@ DWORD ZapIndirectHelperThunk::SaveWorker(ZapWriter * pZapWriter)
 #elif defined(_TARGET_ARM_)
     if (IsDelayLoadHelper())
     {
-        // Indirection
-        if (IsVSD())
-        {
-            // push r4
-            *(WORD *)(p + 0) = 0xB410;
-            p += 2;
-        }
-        else
-        {
-            // push r12
-            *(WORD *)(p + 0) = 0xF84D;
-            *(WORD *)(p + 2) = 0xCD04;
-            p += 4;
-        }
+        // r4 contains indirection cell
+        // push r4
+        *(WORD *)(p + 0) = 0xB410;
+        p += 2;
 
-        // mov r12, index
-        *(WORD *)(p + 0) = 0xF04F;
+        // mov r4, index
         _ASSERTE(GetSectionIndex() <= 0x7F);
-        *(WORD *)(p + 2) = 0x0C00 | (BYTE)GetSectionIndex();
-        p += 4;
+        *(WORD *)(p + 0) = 0x2400 | (BYTE)GetSectionIndex();
+        p += 2;
 
-        // push r12
-        *(WORD *)(p + 0) = 0xF84D;
-        *(WORD *)(p + 2) = 0xCD04;
-        p += 4;
+        // push r4
+        *(WORD *)(p + 0) = 0xB410;
+        p += 2;
 
-        // mov r12, [module]
-        MovRegImm(p, 12);
+        // mov r4, [module]
+        MovRegImm(p, 4);
         if (pImage != NULL)
             pImage->WriteReloc(buffer, (int) (p - buffer), pImage->GetImportTable()->GetHelperImport(READYTORUN_HELPER_Module), 0, IMAGE_REL_BASED_THUMB_MOV32);
         p += 8;
 
-        // ldr r12, [r12]
-        *(WORD *)(p + 0) = 0xF8DC;
-        *(WORD *)(p + 2) = 0xC000;
-        p += 4;
+        // ldr r4, [r4]
+        *(WORD *)p = 0x6824;
+        p += 2;
 
-        // push r12
-        *(WORD *)(p + 0) = 0xF84D;
-        *(WORD *)(p + 2) = 0xCD04;
-        p += 4;
+        // push r4
+        *(WORD *)(p + 0) = 0xB410;
+        p += 2;
     }
     else
     if (IsLazyHelper())
@@ -2141,19 +2140,18 @@ DWORD ZapIndirectHelperThunk::SaveWorker(ZapWriter * pZapWriter)
         p += 2;
     }
 
-    // mov r12, [helper]
-    MovRegImm(p, 12);
+    // mov r4, [helper]
+    MovRegImm(p, 4);
     if (pImage != NULL)
         pImage->WriteReloc(buffer, (int) (p - buffer), pImage->GetImportTable()->GetHelperImport(GetReadyToRunHelper()), 0, IMAGE_REL_BASED_THUMB_MOV32);
     p += 8;
 
-    // ldr r12, [r12]
-    *(WORD *)(p + 0) = 0xF8DC;
-    *(WORD *)(p + 2) = 0xC000;
-    p += 4;
+    // ldr r4, [r4]
+    *(WORD *)p = 0x6824;
+    p += 2;
 
-    // bx r12
-    *(WORD *)p = 0x4760;
+    // bx r4
+    *(WORD *)p = 0x4720;
     p += 2;
 #elif defined(_TARGET_ARM64_)
     if (IsDelayLoadHelper())
@@ -2161,19 +2159,19 @@ DWORD ZapIndirectHelperThunk::SaveWorker(ZapWriter * pZapWriter)
         // x11 contains indirection cell
         // Do nothing x11 contains our first param
 
-        //  movz x8, #index
+        //  movz x9, #index
         DWORD index = GetSectionIndex();
         _ASSERTE(index <= 0x7F);
-        *(DWORD*)p = 0xd2800008 | (index << 5);
+        *(DWORD*)p = 0xd2800009 | (index << 5);
         p += 4;
 
-        // move Module* -> x9
-        // ldr x9, [PC+0x14]
-        *(DWORD*)p = 0x580000A9;
+        // move Module* -> x10
+        // ldr x10, [PC+0x14]
+        *(DWORD*)p = 0x580000AA;
         p += 4;
 
-        //ldr x9, [x9]
-        *(DWORD*)p = 0xf9400129;
+        //ldr x10, [x10]
+        *(DWORD*)p = 0xf940014A;
         p += 4;
     }
     else

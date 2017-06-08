@@ -15,8 +15,10 @@
 
 #define READYTORUN_SIGNATURE 0x00525452 // 'RTR'
 
-#define READYTORUN_MAJOR_VERSION 0x0001
+#define READYTORUN_MAJOR_VERSION 0x0002
 #define READYTORUN_MINOR_VERSION 0x0002
+// R2R Version 2.1 adds the READYTORUN_SECTION_INLINING_INFO section
+// R2R Version 2.2 adds the READYTORUN_SECTION_PROFILEDATA_INFO section
 
 struct READYTORUN_HEADER
 {
@@ -57,6 +59,14 @@ enum ReadyToRunSectionType
     // 107 used by an older format of READYTORUN_SECTION_AVAILABLE_TYPES
     READYTORUN_SECTION_AVAILABLE_TYPES              = 108,
     READYTORUN_SECTION_INSTANCE_METHOD_ENTRYPOINTS  = 109,
+    READYTORUN_SECTION_INLINING_INFO                = 110, // Added in V2.1
+    READYTORUN_SECTION_PROFILEDATA_INFO             = 111  // Added in V2.2
+
+	// If you add a new section consider whether it is a breaking or non-breaking change.
+	// Usually it is non-breaking, but if it is preferable to have older runtimes fail
+	// to load the image vs. ignoring the new section it could be marked breaking.
+	// Increment the READYTORUN_MINOR_VERSION (non-breaking) or READYTORUN_MAJOR_VERSION
+	// (breaking) as appropriate.
 };
 
 //
@@ -166,6 +176,7 @@ enum ReadyToRunFixupKind
     READYTORUN_FIXUP_Check_FieldOffset          = 0x2B,
 
     READYTORUN_FIXUP_DelegateCtor               = 0x2C, /* optimized delegate ctor */
+    READYTORUN_FIXUP_DeclaringTypeHandle        = 0x2D,
 };
 
 //
@@ -218,6 +229,9 @@ enum ReadyToRunHelper
 
     // Get string handle lazily
     READYTORUN_HELPER_GetString                 = 0x50,
+
+    // Used by /Tuning for Profile optimizations
+    READYTORUN_HELPER_LogMethodEnter            = 0x51,
 
     // Reflection helpers
     READYTORUN_HELPER_GetRuntimeTypeHandle      = 0x54,
@@ -278,7 +292,7 @@ enum ReadyToRunHelper
     READYTORUN_HELPER_DblRound                  = 0xE2,
     READYTORUN_HELPER_FltRound                  = 0xE3,
 
-#ifndef _TARGET_X86_
+#ifdef WIN64EXCEPTIONS
     // Personality rountines
     READYTORUN_HELPER_PersonalityRoutine        = 0xF0,
     READYTORUN_HELPER_PersonalityRoutineFilterFunclet = 0xF1,

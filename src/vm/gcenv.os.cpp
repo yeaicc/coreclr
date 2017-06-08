@@ -18,6 +18,12 @@
 #include <Psapi.h>
 #endif
 
+#ifdef Sleep
+#undef Sleep
+#endif // Sleep
+
+#include "env/gcenv.os.h"
+
 #define MAX_PTR ((uint8_t*)(~(ptrdiff_t)0))
 
 // Initialize the interface implementation
@@ -160,18 +166,23 @@ void GCToOSInterface::YieldThread(uint32_t switchCount)
 //  flags     - flags to control special settings like write watching
 // Return:
 //  Starting virtual address of the reserved range
-void* GCToOSInterface::VirtualReserve(void* address, size_t size, size_t alignment, uint32_t flags)
+void* GCToOSInterface::VirtualReserve(size_t size, size_t alignment, uint32_t flags)
 {
     LIMITED_METHOD_CONTRACT;
 
     DWORD memFlags = (flags & VirtualReserveFlags::WriteWatch) ? (MEM_RESERVE | MEM_WRITE_WATCH) : MEM_RESERVE;
+
+    // This is not strictly necessary for a correctness standpoint. Windows already guarantees
+    // allocation granularity alignment when using MEM_RESERVE, so aligning the size here has no effect.
+    // However, ClrVirtualAlloc does expect the size to be aligned to the allocation granularity.
+    size_t aligned_size = (size + g_SystemInfo.dwAllocationGranularity - 1) & ~static_cast<size_t>(g_SystemInfo.dwAllocationGranularity - 1);
     if (alignment == 0)
     {
-        return ::ClrVirtualAlloc(0, size, memFlags, PAGE_READWRITE);
+        return ::ClrVirtualAlloc(0, aligned_size, memFlags, PAGE_READWRITE);
     }
     else
     {
-        return ::ClrVirtualAllocAligned(0, size, memFlags, PAGE_READWRITE, alignment);
+        return ::ClrVirtualAllocAligned(0, aligned_size, memFlags, PAGE_READWRITE, alignment);
     }
 }
 
@@ -249,7 +260,7 @@ bool GCToOSInterface::SupportsWriteWatch()
     // check if the OS supports write-watch. 
     // Drawbridge does not support write-watch so we still need to do the runtime detection for them.
     // Otherwise, all currently supported OSes do support write-watch.
-    void* mem = VirtualReserve (0, g_SystemInfo.dwAllocationGranularity, 0, VirtualReserveFlags::WriteWatch);
+    void* mem = VirtualReserve (g_SystemInfo.dwAllocationGranularity, 0, VirtualReserveFlags::WriteWatch);
     if (mem != NULL)
     {
         VirtualRelease (mem, g_SystemInfo.dwAllocationGranularity);
@@ -323,11 +334,7 @@ bool GCToOSInterface::GetCurrentProcessAffinityMask(uintptr_t* processMask, uint
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_PAL
     return !!::GetProcessAffinityMask(GetCurrentProcess(), (PDWORD_PTR)processMask, (PDWORD_PTR)systemMask);
-#else
-    return false;
-#endif
 }
 
 // Get number of processors assigned to the current process
@@ -354,32 +361,15 @@ size_t GCToOSInterface::GetVirtualMemoryLimit()
 }
 
 
+static size_t g_RestrictedPhysicalMemoryLimit = (size_t)MAX_PTR;
+
 #ifndef FEATURE_PAL
 
 typedef BOOL (WINAPI *PGET_PROCESS_MEMORY_INFO)(HANDLE handle, PROCESS_MEMORY_COUNTERS* memCounters, uint32_t cb);
 static PGET_PROCESS_MEMORY_INFO GCGetProcessMemoryInfo = 0;
 
-static size_t g_RestrictedPhysicalMemoryLimit = (size_t)MAX_PTR;
-
 typedef BOOL (WINAPI *PIS_PROCESS_IN_JOB)(HANDLE processHandle, HANDLE jobHandle, BOOL* result);
 typedef BOOL (WINAPI *PQUERY_INFORMATION_JOB_OBJECT)(HANDLE jobHandle, JOBOBJECTINFOCLASS jobObjectInfoClass, void* lpJobObjectInfo, DWORD cbJobObjectInfoLength, LPDWORD lpReturnLength);
-
-#ifdef FEATURE_CORECLR
-// For coresys we need to look for an API in some apiset dll on win8 if we can't find it  
-// in the traditional dll.
-HINSTANCE LoadDllForAPI(WCHAR* dllTraditional, WCHAR* dllApiSet)
-{
-    HINSTANCE hinst = WszLoadLibrary(dllTraditional);
-
-    if (!hinst)
-    {
-        if(RunningOnWin8())
-            hinst = WszLoadLibrary(dllApiSet);
-    }
-
-    return hinst;
-}
-#endif
 
 static size_t GetRestrictedPhysicalMemoryLimit()
 {
@@ -391,63 +381,28 @@ static size_t GetRestrictedPhysicalMemoryLimit()
 
     size_t job_physical_memory_limit = (size_t)MAX_PTR;
     BOOL in_job_p = FALSE;
-#ifdef FEATURE_CORECLR
-    HINSTANCE hinstApiSetPsapiOrKernel32 = 0;
-    // these 2 modules will need to be freed no matter what as we only use them locally in this method.
-    HINSTANCE hinstApiSetJob1OrKernel32 = 0;
-    HINSTANCE hinstApiSetJob2OrKernel32 = 0;
-#else
-    HINSTANCE hinstPsapi = 0;
-#endif
+    HINSTANCE hinstKernel32 = 0;
 
     PIS_PROCESS_IN_JOB GCIsProcessInJob = 0;
     PQUERY_INFORMATION_JOB_OBJECT GCQueryInformationJobObject = 0;
 
-#ifdef FEATURE_CORECLR
-    hinstApiSetJob1OrKernel32 = LoadDllForAPI(L"kernel32.dll", L"api-ms-win-core-job-l1-1-0.dll");
-    if (!hinstApiSetJob1OrKernel32)
-        goto exit;
-
-    GCIsProcessInJob = (PIS_PROCESS_IN_JOB)GetProcAddress(hinstApiSetJob1OrKernel32, "IsProcessInJob");
-    if (!GCIsProcessInJob)
-        goto exit;
-#else
     GCIsProcessInJob = &(::IsProcessInJob);
-#endif
 
     if (!GCIsProcessInJob(GetCurrentProcess(), NULL, &in_job_p))
         goto exit;
 
     if (in_job_p)
     {
-#ifdef FEATURE_CORECLR
-        hinstApiSetPsapiOrKernel32 = LoadDllForAPI(L"kernel32.dll", L"api-ms-win-core-psapi-l1-1-0");
-        if (!hinstApiSetPsapiOrKernel32)
+        hinstKernel32 = WszLoadLibrary(L"kernel32.dll");
+        if (!hinstKernel32)
             goto exit;
 
-        GCGetProcessMemoryInfo = (PGET_PROCESS_MEMORY_INFO)GetProcAddress(hinstApiSetPsapiOrKernel32, "K32GetProcessMemoryInfo");
-#else
-        // We need a way to get the working set in a job object and GetProcessMemoryInfo 
-        // is the way to get that. According to MSDN, we should use GetProcessMemoryInfo In order to 
-        // compensate for the incompatibility that psapi.dll introduced we are getting this dynamically.
-        hinstPsapi = WszLoadLibrary(L"psapi.dll");
-        if (!hinstPsapi)
-            return 0;
-        GCGetProcessMemoryInfo = (PGET_PROCESS_MEMORY_INFO)GetProcAddress(hinstPsapi, "GetProcessMemoryInfo");
-#endif
+        GCGetProcessMemoryInfo = (PGET_PROCESS_MEMORY_INFO)GetProcAddress(hinstKernel32, "K32GetProcessMemoryInfo");
 
         if (!GCGetProcessMemoryInfo)
             goto exit;
 
-#ifdef FEATURE_CORECLR
-        hinstApiSetJob2OrKernel32 = LoadDllForAPI(L"kernel32.dll", L"api-ms-win-core-job-l2-1-0");
-        if (!hinstApiSetJob2OrKernel32)
-            goto exit;
-
-        GCQueryInformationJobObject = (PQUERY_INFORMATION_JOB_OBJECT)GetProcAddress(hinstApiSetJob2OrKernel32, "QueryInformationJobObject");
-#else
         GCQueryInformationJobObject = &(::QueryInformationJobObject);
-#endif 
 
         if (!GCQueryInformationJobObject)
             goto exit;
@@ -490,28 +445,32 @@ static size_t GetRestrictedPhysicalMemoryLimit()
     }
 
 exit:
-#ifdef FEATURE_CORECLR
-    if (hinstApiSetJob1OrKernel32)
-        FreeLibrary(hinstApiSetJob1OrKernel32);
-    if (hinstApiSetJob2OrKernel32)
-        FreeLibrary(hinstApiSetJob2OrKernel32);
-#endif
-
     if (job_physical_memory_limit == (size_t)MAX_PTR)
     {
         job_physical_memory_limit = 0;
 
-#ifdef FEATURE_CORECLR
-        FreeLibrary(hinstApiSetPsapiOrKernel32);
-#else
-        FreeLibrary(hinstPsapi);
-#endif
+        FreeLibrary(hinstKernel32);
     }
 
     VolatileStore(&g_RestrictedPhysicalMemoryLimit, job_physical_memory_limit);
     return g_RestrictedPhysicalMemoryLimit;
 }
 
+#else
+
+static size_t GetRestrictedPhysicalMemoryLimit()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    // The limit was cached already
+    if (g_RestrictedPhysicalMemoryLimit != (size_t)MAX_PTR)
+        return g_RestrictedPhysicalMemoryLimit;
+
+    size_t memory_limit = PAL_GetRestrictedPhysicalMemoryLimit();
+    
+    VolatileStore(&g_RestrictedPhysicalMemoryLimit, memory_limit);
+    return g_RestrictedPhysicalMemoryLimit;
+}
 #endif // FEATURE_PAL
 
 
@@ -522,11 +481,9 @@ uint64_t GCToOSInterface::GetPhysicalMemoryLimit()
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_PAL
     size_t restricted_limit = GetRestrictedPhysicalMemoryLimit();
     if (restricted_limit != 0)
         return restricted_limit;
-#endif
 
     MEMORYSTATUSEX memStatus;
     ::GetProcessMemoryLoad(&memStatus);
@@ -534,24 +491,41 @@ uint64_t GCToOSInterface::GetPhysicalMemoryLimit()
     return memStatus.ullTotalPhys;
 }
 
-// Get global memory status
+// Get memory status
 // Parameters:
-//  ms - pointer to the structure that will be filled in with the memory status
+//  memory_load - A number between 0 and 100 that specifies the approximate percentage of physical memory
+//      that is in use (0 indicates no memory use and 100 indicates full memory use).
+//  available_physical - The amount of physical memory currently available, in bytes.
+//  available_page_file - The maximum amount of memory the current process can commit, in bytes.
+// Remarks:
+//  Any parameter can be null.
 void GCToOSInterface::GetMemoryStatus(uint32_t* memory_load, uint64_t* available_physical, uint64_t* available_page_file)
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_PAL
     uint64_t restricted_limit = GetRestrictedPhysicalMemoryLimit();
     if (restricted_limit != 0)
     {
+        size_t workingSetSize;
+        BOOL status = FALSE;
+#ifndef FEATURE_PAL
         PROCESS_MEMORY_COUNTERS pmc;
-        if (GCGetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        status = GCGetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+        workingSetSize = pmc.WorkingSetSize;
+#else
+        status = PAL_GetWorkingSetSize(&workingSetSize);
+#endif
+        if(status)
         {
             if (memory_load)
-                *memory_load = (uint32_t)((float)pmc.WorkingSetSize * 100.0 / (float)restricted_limit);
+                *memory_load = (uint32_t)((float)workingSetSize * 100.0 / (float)restricted_limit);
             if (available_physical)
-                *available_physical = restricted_limit - pmc.WorkingSetSize;
+            {
+                if(workingSetSize > restricted_limit)
+                    *available_physical = 0;
+                else
+                    *available_physical = restricted_limit - workingSetSize;
+            }
             // Available page file doesn't mean much when physical memory is restricted since
             // we don't know how much of it is available to this process so we are not going to 
             // bother to make another OS call for it.
@@ -561,7 +535,6 @@ void GCToOSInterface::GetMemoryStatus(uint32_t* memory_load, uint64_t* available
             return;
         }
     }
-#endif
 
     MEMORYSTATUSEX ms;
     ::GetProcessMemoryLoad(&ms);
@@ -628,7 +601,7 @@ struct GCThreadStubParam
 };
 
 // GC thread stub to convert GC thread function to an OS specific thread function
-static DWORD GCThreadStub(void* param)
+static DWORD WINAPI GCThreadStub(void* param)
 {
     WRAPPER_NO_CONTRACT;
 
@@ -701,6 +674,13 @@ bool GCToOSInterface::CreateThread(GCThreadFunction function, void* param, GCThr
     return true;
 }
 
+uint32_t GCToOSInterface::GetTotalProcessorCount()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return g_SystemInfo.dwNumberOfProcessors;
+}
+
 // Initialize the critical section
 void CLRCriticalSection::Initialize()
 {
@@ -728,3 +708,208 @@ void CLRCriticalSection::Leave()
     WRAPPER_NO_CONTRACT;
     UnsafeLeaveCriticalSection(&m_cs);
 }
+
+// An implementatino of GCEvent that delegates to
+// a CLREvent, which in turn delegates to the PAL. This event
+// is also host-aware.
+class GCEvent::Impl
+{
+private:
+    CLREvent m_event;
+
+public:
+    Impl() = default;
+
+    bool IsValid()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        return !!m_event.IsValid();
+    }
+
+    void CloseEvent()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        m_event.CloseEvent();
+    }
+
+    void Set()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        m_event.Set();
+    }
+
+    void Reset()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        m_event.Reset();
+    }
+
+    uint32_t Wait(uint32_t timeout, bool alertable)
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        return m_event.Wait(timeout, alertable);
+    }
+
+    bool CreateAutoEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateAutoEventNoThrow(initialState);
+    }
+
+    bool CreateManualEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateManualEventNoThrow(initialState);
+    }
+
+    bool CreateOSAutoEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateOSAutoEventNoThrow(initialState);
+    }
+
+    bool CreateOSManualEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateOSManualEventNoThrow(initialState);
+    }
+};
+
+GCEvent::GCEvent()
+  : m_impl(nullptr)
+{
+}
+
+void GCEvent::CloseEvent()
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    m_impl->CloseEvent();
+}
+
+void GCEvent::Set()
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    m_impl->Set();
+}
+
+void GCEvent::Reset()
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    m_impl->Reset();
+}
+
+uint32_t GCEvent::Wait(uint32_t timeout, bool alertable)
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    return m_impl->Wait(timeout, alertable);
+}
+
+bool GCEvent::CreateManualEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateManualEvent(initialState);
+    m_impl = event.Extract();
+    return true;
+}
+
+bool GCEvent::CreateAutoEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateAutoEvent(initialState);
+    m_impl = event.Extract();
+    return IsValid();
+}
+
+bool GCEvent::CreateOSAutoEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateOSAutoEvent(initialState);
+    m_impl = event.Extract();
+    return IsValid();
+}
+
+bool GCEvent::CreateOSManualEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateOSManualEvent(initialState);
+    m_impl = event.Extract();
+    return IsValid();
+}
+

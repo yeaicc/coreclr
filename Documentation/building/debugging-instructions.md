@@ -89,7 +89,7 @@ This is the full list of commands currently supported by SOS. LLDB is case-sensi
     HistObjFind (histobjfind)
     HistClear (histclear)
 
-###Aliases###
+### Aliases ###
 
 By default you can reach all the SOS commands by using: _sos [command\_name]_
 However the common commands have been aliased so that you don't need the SOS prefix:
@@ -136,10 +136,3 @@ Loading Linux core dumps with lldb 3.7 doesn't work. lldb 3.7 loads OS X and Fre
 just fine. lldb 3.8 loads all the platform's core dumps without problem.
 
 For more information on SOS commands see: https://msdn.microsoft.com/en-us/library/bb190764(v=vs.110).aspx
-
-Debugging Mscorlib and/or managed application
-=============================================
-
-To step into and debug managed code of Mscorlib.dll (or the managed application being executed by the runtime you built), using Visual Studio, is something that will be supported with Visual Studio 2015. We are actively working to enable this support. 
-
-Until then, you can use [WinDbg](https://msdn.microsoft.com/en-us/library/windows/hardware/ff551063(v=vs.85).aspx) and [SOS](https://msdn.microsoft.com/en-us/library/bb190764(v=vs.110).aspx) (an extension to WinDbg to support managed debugging) to step in and debug the generated managed code. This is what we do on the .NET Runtime team as well :)

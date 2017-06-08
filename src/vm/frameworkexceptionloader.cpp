@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include "frameworkexceptionloader.h"
+#include "typeparse.h"
 
 
 struct ExceptionLocationData
@@ -74,7 +75,7 @@ MethodTable* FrameworkExceptionLoader::GetException(RuntimeExceptionKind kind)
     {
         Exception *ex = GET_EXCEPTION();
 
-        // Let non-file-not-found execeptions propagate
+        // Let non-file-not-found exceptions propagate
         if (EEFileLoadException::GetFileLoadKind(ex->GetHR()) != kFileNotFoundException)
             EX_RETHROW;
 

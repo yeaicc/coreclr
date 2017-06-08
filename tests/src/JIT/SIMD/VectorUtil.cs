@@ -26,7 +26,7 @@ internal partial class VectorTest
         }
         if (returnVal == false)
         {
-            Console.WriteLine("CheckValue failed for " + expectedValue + " of type " + typeof(T).ToString());
+            Console.WriteLine("CheckValue failed for type " + typeof(T).ToString() + ". Expected: {0} (0x{0:X}), Got: {1} (0x{1:X})", expectedValue, value);
         }
         return returnVal;
     }
@@ -309,7 +309,7 @@ class JitLog : IDisposable
             }
             if (simdIntrinsicsSupported && methodFound)
             {
-                Console.WriteLine("Method " + method + " was compiled but should not have been\n");
+                Console.WriteLine("Method " + method + " was compiled but should not have been");
                 return false;
             }
             // Useful when developing / debugging just to be sure that we reached here:

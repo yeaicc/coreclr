@@ -24,7 +24,9 @@ elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
   add_definitions(-DSOS_TARGET_X86=1)
   add_definitions(-D_TARGET_X86_=1)
   add_definitions(-DDBG_TARGET_32BIT)
-  add_definitions(-DSOS_TARGET_ARM=1)
+  if(WIN32)
+    add_definitions(-DSOS_TARGET_ARM=1)
+  endif(WIN32)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
   add_definitions(-DSOS_TARGET_ARM=1)
   add_definitions(-D_TARGET_WIN32_=1)
@@ -44,6 +46,8 @@ remove_definitions(-D_UNICODE)
 include_directories(BEFORE ${VM_DIR})
 include_directories(${CLR_DIR}/src/gcdump)
 include_directories(${CLR_DIR}/src/debug/shim)
+include_directories(${CLR_DIR}/src/coreclr/hosts/unixcoreruncommon)
+include_directories(${CLR_DIR}/src/coreclr/hosts/inc)
 
 if(WIN32)
   include_directories(inc)
@@ -90,6 +94,7 @@ if(WIN32)
     kernel32.lib
     user32.lib
     ole32.lib
+    oleaut32.lib
     dbghelp.lib
     uuid.lib
     version.lib
@@ -122,6 +127,7 @@ else(WIN32)
     strike.cpp
     sos.cpp
     util.cpp
+    ../../../coreclr/hosts/unixcoreruncommon/coreruncommon.cpp
   )
 
   set(SOS_LIBRARY
@@ -130,6 +136,7 @@ else(WIN32)
     dbgutil
     # share the PAL in the dac module
     mscordaccore
+    palrt
   )
 
   set(DEF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/sos_unixexports.src)
@@ -138,6 +145,13 @@ else(WIN32)
 endif(WIN32)
 
 if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
+  if(CLR_CMAKE_PLATFORM_LINUX)
+    list(APPEND 
+      SOS_LIBRARY 
+      createdump_lib
+    )
+    add_definitions(-DCREATE_DUMP_SUPPORTED)
+  endif(CLR_CMAKE_PLATFORM_LINUX)
   set(SOS_SOURCES_ARCH
     disasmX86.cpp
   )
@@ -150,8 +164,13 @@ if(CLR_CMAKE_PLATFORM_ARCH_AMD64)
 elseif(CLR_CMAKE_PLATFORM_ARCH_I386)
   set(SOS_SOURCES_ARCH 
     disasmX86.cpp
-    disasmARM.cpp
   )
+  if(WIN32)
+    list(APPEND
+      SOS_SOURCES_ARCH
+      disasmARM.cpp
+    )
+  endif(WIN32)
 elseif(CLR_CMAKE_PLATFORM_ARCH_ARM)
   set(SOS_SOURCES_ARCH
     disasmARM.cpp

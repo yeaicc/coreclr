@@ -16,9 +16,6 @@
 #include "clrtypes.h"
 
 #include "comcallablewrapper.h"
-#ifdef FEATURE_REMOTING
-#include "remoting.h"
-#endif
 
 #include "object.h"
 #include "field.h"
@@ -51,6 +48,7 @@
 #include "rcwwalker.h"
 #include "windowsruntimebufferhelper.h"
 #include "winrttypenameconverter.h"
+#include "typestring.h"
 
 #ifdef MDA_SUPPORTED
 const int DEBUG_AssertSlots = 50;
@@ -409,17 +407,6 @@ MethodTable* RefineProxy(OBJECTREF pServer)
     
     MethodTable* pRefinedClass = NULL;
     
-#ifdef FEATURE_REMOTING
-    GCPROTECT_BEGIN(pServer);
-    if (pServer->IsTransparentProxy())
-    {
-        // if we have a transparent proxy let us refine it fully 
-        // before giving it out to unmanaged code
-        REFLECTCLASSBASEREF refClass= CRemotingServices::GetClass(pServer);
-        pRefinedClass = refClass->GetType().GetMethodTable();
-    }
-    GCPROTECT_END();
-#endif
 
     RETURN pRefinedClass;
 }
@@ -959,43 +946,43 @@ void SimpleComCallWrapper::BuildRefCountLogMessage(LPCWSTR wszOperation, StackSS
     }
     CONTRACTL_END;
 
-    GCX_COOP();
-
-    // There's no way how to get the class name if the AD is unloaded. We will just skip it if it
-    // is the case. Note that we do log the AD unload event in SimpleComCallWrapper::Neuter so there
-    // should still be enough useful information in the log.
-    AppDomainFromIDHolder ad(GetRawDomainID(), TRUE);
-    if (!ad.IsUnloaded())
+    // Don't worry about domain unloading in CoreCLR
+    LPCUTF8 pszClassName;
+    LPCUTF8 pszNamespace;
+    if (SUCCEEDED(m_pMT->GetMDImport()->GetNameOfTypeDef(m_pMT->GetCl(), &pszClassName, &pszNamespace)))
     {
-        LPCUTF8 pszClassName;
-        LPCUTF8 pszNamespace;
-        if (SUCCEEDED(m_pMT->GetMDImport()->GetNameOfTypeDef(m_pMT->GetCl(), &pszClassName, &pszNamespace)))
+        OBJECTHANDLE handle = GetMainWrapper()->GetRawObjectHandle();
+        _UNCHECKED_OBJECTREF obj = NULL;
+
+        // Force retriving the handle without using OBJECTREF and under cooperative mode
+        // We only need the value in ETW events and it doesn't matter if it is super accurate
+        if (handle != NULL)
+            obj = *((_UNCHECKED_OBJECTREF *)(handle));
+
+        if (ETW_EVENT_ENABLED(MICROSOFT_WINDOWS_DOTNETRUNTIME_PRIVATE_PROVIDER_Context, CCWRefCountChange)) 
+            FireEtwCCWRefCountChange(
+                handle, 
+                (Object *)obj, 
+                this, 
+                dwEstimatedRefCount, 
+                NULL,                   // domain value is not interesting in CoreCLR
+                pszClassName, pszNamespace, wszOperation, GetClrInstanceId());
+        
+        if (g_pConfig->ShouldLogCCWRefCountChange(pszClassName, pszNamespace))
         {
-            OBJECTHANDLE handle = GetMainWrapper()->GetRawObjectHandle();
-            Object* obj = NULL;
-            if (handle != NULL)
-                obj = OBJECTREFToObject(ObjectFromHandle(handle));
-
-            if (ETW_EVENT_ENABLED(MICROSOFT_WINDOWS_DOTNETRUNTIME_PRIVATE_PROVIDER_Context, CCWRefCountChange)) 
-                FireEtwCCWRefCountChange(handle, obj, this, dwEstimatedRefCount, (LONGLONG) ad.GetAddress(),
-                    pszClassName, pszNamespace, wszOperation, GetClrInstanceId());
-            
-            if (g_pConfig->ShouldLogCCWRefCountChange(pszClassName, pszNamespace))
+            EX_TRY
             {
-                EX_TRY
-                {
-                    StackSString ssClassName;
-                    TypeString::AppendType(ssClassName, TypeHandle(m_pMT));
+                StackSString ssClassName;
+                TypeString::AppendType(ssClassName, TypeHandle(m_pMT));
 
-                    ssMessage.Printf(W("LogCCWRefCountChange[%s]: '%s', Object=poi(%p)"),
-                        wszOperation,                                          // %s operation
-                        ssClassName.GetUnicode(),                              // %s type name
-                        handle);               // %p Object
-                }
-                EX_CATCH
-                { }
-                EX_END_CATCH(SwallowAllExceptions);
+                ssMessage.Printf(W("LogCCWRefCountChange[%s]: '%s', Object=poi(%p)"),
+                    wszOperation,                                          // %s operation
+                    ssClassName.GetUnicode(),                              // %s type name
+                    handle);               // %p Object
             }
+            EX_CATCH
+            { }
+            EX_END_CATCH(SwallowAllExceptions);
         }
     }
 }
@@ -1286,10 +1273,6 @@ void SimpleComCallWrapper::InitNew(OBJECTREF oref, ComCallWrapperCache *pWrapper
     MethodTable* pMT = pTemplate->GetClassType().GetMethodTable();
     PREFIX_ASSUME(pMT != NULL);
 
-#ifdef FEATURE_REMOTING
-    if (CRemotingServices::IsTransparentProxy(OBJECTREFToObject(oref)))
-        m_flags |= enum_IsObjectTP;
-#endif
     
     m_pMT = pMT;
     m_pWrap = pWrap; 
@@ -1774,12 +1757,10 @@ IUnknown* SimpleComCallWrapper::QIStandardInterface(Enum_StdInterfaces index)
 
     else if (index == enum_IDispatchEx)
     {
-#ifdef FEATURE_CORECLR
         if (AppX::IsAppXProcess())
         { 
             RETURN NULL;
         }
-#endif // FEATURE_CORECLR
 
         if (SupportsIReflect(m_pMT))
         {
@@ -1953,28 +1934,6 @@ IUnknown* SimpleComCallWrapper::QIStandardInterface(REFIID riid)
         }
         break;
 
-    CASE_IID_INLINE(  enum_IObjectSafety            ,0xCB5BDC81,0x93C1,0x11cf,0x8F,0x20,0x00,0x80,0x5F,0x2C,0xD0,0x64)
-        {
-            // Don't implement IObjectSafety by default.
-            // Use IObjectSafety only for IE Hosting or similar hosts
-            // which create sandboxed AppDomains.
-            // Unconditionally implementing IObjectSafety would allow
-            // Untrusted scripts to use managed components.
-            // Managed components could implement their own IObjectSafety to
-            // override this.
-            BOOL bShouldProvideIObjectSafety=FALSE;
-            {
-                GCX_COOP();
-                AppDomainFromIDHolder pDomain(GetDomainID(), FALSE);
-                if (!pDomain.IsUnloaded()) 
-                    bShouldProvideIObjectSafety=!pDomain->GetSecurityDescriptor()->IsFullyTrusted();
-            }
-
-            if(bShouldProvideIObjectSafety)
-                RETURN QIStandardInterface(enum_IObjectSafety);
-        }
-        break;
-
     CASE_IID_INLINE(  enum_IAgileObject            ,0x94ea2b94,0xe9cc,0x49e0,0xc0,0xff,0xee,0x64,0xca,0x8f,0x5b,0x90)
         {
             // Don't implement IAgileObject if we are aggregated, if we are in a non AppX process, if the object explicitly implements IMarshal,
@@ -1988,9 +1947,6 @@ IUnknown* SimpleComCallWrapper::QIStandardInterface(REFIID riid)
             // Keeping the Apollo behaviour also ensures that we allow SL 8.1 scenarios (which do not pass the AppX flag like the modern host) 
             // to use CorDispatcher for async, in the expected manner, as the OS implementation for CoreDispatcher expects objects to be Agile.
             if (!IsAggregated() 
-#if !defined(FEATURE_CORECLR)
-            && AppX::IsAppXProcess()
-#endif // !defined(FEATURE_CORECLR)
             )
             {
                 ComCallWrapperTemplate *pTemplate = GetComCallWrapperTemplate();
@@ -2385,7 +2341,7 @@ ComCallWrapper* ComCallWrapper::CopyFromTemplate(ComCallWrapperTemplate* pTempla
     if (pStartWrapper == NULL)
         COMPlusThrowOM();
 
-    LOG((LF_INTEROP, LL_INFO100, "ComCallWrapper::CopyFromTemplate on Object %8.8x, Wrapper %8.8x\n", oh, pStartWrapper));
+    LOG((LF_INTEROP, LL_INFO100, "ComCallWrapper::CopyFromTemplate on Object %8.8x, Wrapper %8.8x\n", oh, static_cast<ComCallWrapperPtr>(pStartWrapper)));
 
     // addref commgr
     pWrapperCache->AddRef();
@@ -2688,32 +2644,6 @@ void ComCallWrapper::FreeWrapper(ComCallWrapperCache *pWrapperCache)
     pWrapperCache->Release();
 }
 
-void ComCallWrapper::DoScriptingSecurityCheck()
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    // If the object is shared or agile, and the current domain doesn't have
-    //  UmgdCodePermission, we fail the call.
-    AppDomain* pCurrDomain = GetThread()->GetDomain();
-    ADID currID = pCurrDomain->GetId();
-
-    ADID ccwID = m_pSimpleWrapper->GetRawDomainID();
-    
-    if (currID != ccwID)
-    {
-        IApplicationSecurityDescriptor* pASD = pCurrDomain->GetSecurityDescriptor();
-
-        if (!pASD->CanCallUnmanagedCode())
-            Security::ThrowSecurityException(g_SecurityPermissionClassName, SPFLAGSUNMANAGEDCODE);
-    }
-}
-
 //--------------------------------------------------------------------------
 //ComCallWrapper* ComCallWrapper::CreateWrapper(OBJECTREF* ppObj, ComCallWrapperTemplate *pTemplate, ComCallWrapper *pClassCCW)
 // this function should be called only with pre-emptive GC disabled
@@ -2741,11 +2671,7 @@ ComCallWrapper* ComCallWrapper::CreateWrapper(OBJECTREF* ppObj, ComCallWrapperTe
 
     pServer = *ppObj;
 
-#ifdef FEATURE_REMOTING
-    Context *pContext = Context::GetExecutionContext(pServer);
-#else
     Context *pContext = GetAppDomain()->GetDefaultContext();
-#endif
 
     // Force Refine the object if it is a transparent proxy
     RefineProxy(pServer);
@@ -3614,12 +3540,10 @@ IUnknown* ComCallWrapper::GetComIPFromCCW(ComCallWrapper *pWrap, REFIID riid, Me
     }                    
     if (IsIDispatch(riid))
     {
-#ifdef FEATURE_CORECLR
         if (AppX::IsAppXProcess())
         { 
             RETURN NULL;
         }
-#endif // FEATURE_CORECLR
 
         // We don't do visibility checks on IUnknown.
         RETURN pWrap->GetIDispatchIP();
@@ -4735,11 +4659,6 @@ BOOL ComMethodTable::LayOutInterfaceMethodTable(MethodTable* pClsMT)
     SLOT *pComVtable;
     unsigned i;
 
-#ifndef FEATURE_CORECLR
-    // Skip this unnecessary expensive check for CoreCLR
-    if (!CheckSigTypesCanBeLoaded(pItfClass))
-        return FALSE;
-#endif
 
     LOG((LF_INTEROP, LL_INFO1000, "LayOutInterfaceMethodTable: %s, this: %p\n", pItfClass->GetDebugClassName(), this));
 

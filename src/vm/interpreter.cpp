@@ -14,7 +14,7 @@
 #include "openum.h"
 #include "fcall.h"
 #include "frames.h"
-#include "gc.h"
+#include "gcheaputilities.h"
 #include <float.h>
 #include "jitinterface.h"
 #include "safemath.h"
@@ -23,9 +23,6 @@
 #include "runtimehandles.h"
 #include "vars.hpp"
 #include "cycletimer.h"
-#ifdef FEATURE_REMOTING
-#include "remoting.h"
-#endif
 
 inline CORINFO_CALLINFO_FLAGS combine(CORINFO_CALLINFO_FLAGS flag1, CORINFO_CALLINFO_FLAGS flag2)
 {
@@ -903,9 +900,10 @@ CorJitResult Interpreter::GenerateInterpreterStub(CEEInfo* comp,
 #endif
         {
             // But we also have to use r4, because ThumbEmitCondRegJump below requires a low register.
+            sl.ThumbEmitMovConstant(r11, 0);
             sl.ThumbEmitMovConstant(r12, UINT_PTR(interpMethInfo));
             sl.ThumbEmitLoadRegIndirect(r12, r12, offsetof(InterpreterMethodInfo, m_jittedCode));
-            sl.ThumbEmitCmpImm(r12, 0); // Set condition codes.
+            sl.ThumbEmitCmpReg(r12, r11); // Set condition codes.
             // If r12 is zero, then go on to do the interpretation.
             CodeLabel* doInterpret = sl.NewCodeLabel();
             sl.ThumbEmitCondFlagJump(doInterpret, thumbCondEq.cond);
@@ -1433,8 +1431,8 @@ CorJitResult Interpreter::GenerateInterpreterStub(CEEInfo* comp,
         sl.X86EmitPopReg(kEBP);
         sl.X86EmitReturn(static_cast<WORD>(argState.callerArgStackSlots * sizeof(void*)));
 #elif defined(_AMD64_)
-        // EDX has "ilArgs" i.e., just the point where registers have been homed.
-        sl.X86EmitIndexLeaRSP(kEDX, static_cast<X86Reg>(kESP_Unsafe), 8);
+        // Pass "ilArgs", i.e. just the point where registers have been homed, as 2nd arg
+        sl.X86EmitIndexLeaRSP(ARGUMENT_kREG2, static_cast<X86Reg>(kESP_Unsafe), 8);
 
         // Allocate space for homing callee's (InterpretMethod's) arguments.
         // Calling convention requires a default allocation space of 4,
@@ -1452,10 +1450,10 @@ CorJitResult Interpreter::GenerateInterpreterStub(CEEInfo* comp,
 #endif
         {
             // For a non-ILStub method, push NULL as the StubContext argument.
-            sl.X86EmitZeroOutReg(kRCX);
-            sl.X86EmitMovRegReg(kR8, kRCX);
+            sl.X86EmitZeroOutReg(ARGUMENT_kREG1);
+            sl.X86EmitMovRegReg(kR8, ARGUMENT_kREG1);
         }
-        sl.X86EmitRegLoad(kRCX, reinterpret_cast<UINT_PTR>(interpMethInfo));
+        sl.X86EmitRegLoad(ARGUMENT_kREG1, reinterpret_cast<UINT_PTR>(interpMethInfo));
         sl.X86EmitCall(sl.NewExternalCodeLabel(interpretMethodFunc), 0);
         sl.X86EmitAddEsp(interpMethodArgSize);
         sl.X86EmitReturn(0);
@@ -1578,7 +1576,7 @@ CorJitResult Interpreter::GenerateInterpreterStub(CEEInfo* comp,
 #else
 #error unsupported platform
 #endif
-        stub = sl.Link();
+        stub = sl.Link(SystemDomain::GetGlobalLoaderAllocator()->GetStubHeap());
 
         *nativeSizeOfCode = static_cast<ULONG>(stub->GetNumCodeBytes());
         // TODO: manage reference count of interpreter stubs.  Look for examples...
@@ -1736,13 +1734,13 @@ void Interpreter::JitMethodIfAppropriate(InterpreterMethodInfo* interpMethInfo, 
                 fprintf(GetLogFile(), "JITting method %s:%s.\n", md->m_pszDebugClassName, md->m_pszDebugMethodName);
             }
 #endif // _DEBUG
-            DWORD dwFlags = CORJIT_FLG_MAKEFINALCODE;
+            CORJIT_FLAGS jitFlags(CORJIT_FLAGS::CORJIT_FLAG_MAKEFINALCODE);
             NewHolder<COR_ILMETHOD_DECODER> pDecoder(NULL);
             // Dynamic methods (e.g., IL stubs) do not have an IL decoder but may
             // require additional flags.  Ordinary methods require the opposite.
             if (md->IsDynamicMethod())
             {
-                dwFlags |= md->AsDynamicMethodDesc()->GetILStubResolver()->GetJitFlags();
+                jitFlags.Add(md->AsDynamicMethodDesc()->GetILStubResolver()->GetJitFlags());
             }
             else
             {
@@ -1751,7 +1749,7 @@ void Interpreter::JitMethodIfAppropriate(InterpreterMethodInfo* interpMethInfo, 
                                                     md->GetMDImport(),
                                                     &status);
             }
-            PCODE res = md->MakeJitWorker(pDecoder, dwFlags, 0);
+            PCODE res = md->MakeJitWorker(pDecoder, jitFlags);
             interpMethInfo->m_jittedCode = res;
         }
     }
@@ -2628,8 +2626,10 @@ EvalLoop:
             {
                 assert(m_curStackHt > 0);
                 m_curStackHt--;
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(_AMD64_)
                 CorInfoType cit = OpStackTypeGet(m_curStackHt).ToCorInfoType();
+#endif // _DEBUG || _AMD64_
+#ifdef _DEBUG
                 assert(cit == CORINFO_TYPE_INT || cit == CORINFO_TYPE_UINT || cit == CORINFO_TYPE_NATIVEINT);
 #endif // _DEBUG
 #if defined(_AMD64_)
@@ -5992,20 +5992,6 @@ void Interpreter::NewObj()
             MethodTable * pNewObjMT = GetMethodTableFromClsHnd(methTok.hClass);
             switch (newHelper)
             {
-#ifdef FEATURE_REMOTING
-            case CORINFO_HELP_NEW_CROSSCONTEXT:
-                {
-                    if (CRemotingServices::RequiresManagedActivation(pNewObjMT) && !pNewObjMT->IsComObjectType())
-                    {
-                        thisArgObj = CRemotingServices::CreateProxyOrObject(pNewObjMT);
-                    }
-                    else
-                    {
-                        thisArgObj = AllocateObject(pNewObjMT);
-                    }
-                }
-                break;
-#endif // FEATURE_REMOTING
             case CORINFO_HELP_NEWFAST:
             default:
                 thisArgObj = AllocateObject(pNewObjMT);
@@ -7329,12 +7315,6 @@ void Interpreter::LdFld(FieldDesc* fldIn)
     {
         OBJECTREF obj = OBJECTREF(OpStackGet<Object*>(stackInd));
         ThrowOnInvalidPointer(OBJECTREFToObject(obj));
-#ifdef FEATURE_REMOTING
-        if (obj->IsTransparentProxy())
-        {
-            NYI_INTERP("Thunking objects not supported");
-        }
-#endif
         if (valCit == CORINFO_TYPE_VALUECLASS)
         {
             void* srcPtr = fld->GetInstanceAddress(obj);
@@ -8607,6 +8587,8 @@ void Interpreter::BoxStructRefAt(unsigned ind, CORINFO_CLASS_HANDLE valCls)
     if (th.IsTypeDesc())
         COMPlusThrow(kInvalidOperationException,W("InvalidOperation_TypeCannotBeBoxed"));
 
+    MethodTable* pMT = th.AsMethodTable();
+
     {
         Object* res = OBJECTREFToObject(pMT->Box(valPtr));
 
@@ -9578,6 +9560,9 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
 
     // This is the argument slot that will be used to hold the return value.
     ARG_SLOT retVal = 0;
+#if !defined(_ARM_) && !defined(UNIX_AMD64_ABI)
+    _ASSERTE (NUMBER_RETURNVALUE_SLOTS == 1);
+#endif
 
     // If the return type is a structure, then these will be initialized.
     CORINFO_CLASS_HANDLE retTypeClsHnd = NULL;
@@ -9853,7 +9838,7 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
 #if INTERP_ILCYCLE_PROFILE
             bool b = CycleTimer::GetThreadCyclesS(&startCycles); assert(b);
 #endif // INTERP_ILCYCLE_PROFILE
-            retVal = mdcs.CallTargetWorker(args);
+            mdcs.CallTargetWorker(args, &retVal, sizeof(retVal));
 
             if (pCscd != NULL)
             {
@@ -9885,7 +9870,6 @@ void Interpreter::DoCallWork(bool virtualCall, void* thisArg, CORINFO_RESOLVED_T
         GCX_FORBID();
 
         // Some managed methods, believe it or not, can push capital-F Frames on the Frame chain.
-        // The example I've found involves SecurityContextFrame.Push/Pop.
         // If this happens, executing the EX_CATCH below will pop it, which is bad.
         // So detect that case, pop the explicitly-pushed frame, and push it again after the EX_CATCH.
         // (Asserting that there is only 1 such frame!)
@@ -10315,15 +10299,23 @@ void Interpreter::CallI()
             }
             else
             {
-                pMD = g_pPrepareConstrainedRegionsMethod;  // A random static method.
+                pMD = g_pExecuteBackoutCodeHelperMethod;  // A random static method.
             }
             MethodDescCallSite mdcs(pMD, &mSig, ftnPtr);
+#if 0
             // If the current method being interpreted is an IL stub, we're calling native code, so
             // change the GC mode.  (We'll only do this at the call if the calling convention turns out
             // to be a managed calling convention.)
             MethodDesc* pStubContextMD = reinterpret_cast<MethodDesc*>(m_stubContext);
             bool transitionToPreemptive = (pStubContextMD != NULL && !pStubContextMD->IsIL());
-            retVal = mdcs.CallTargetWorker(args, transitionToPreemptive);
+            mdcs.CallTargetWorker(args, &retVal, sizeof(retVal), transitionToPreemptive);
+#else
+            // TODO The code above triggers assertion at threads.cpp:6861:
+            //     _ASSERTE(thread->PreemptiveGCDisabled());  // Should have been in managed code
+            // The workaround will likely break more things than what it is fixing:
+            // just do not make transition to preemptive GC for now.
+            mdcs.CallTargetWorker(args, &retVal, sizeof(retVal));
+#endif
         }
         // retVal is now vulnerable.
         GCX_FORBID();

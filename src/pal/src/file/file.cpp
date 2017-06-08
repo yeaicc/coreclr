@@ -18,6 +18,9 @@ Abstract:
 
 --*/
 
+#include "pal/dbgmsg.h"
+SET_DEFAULT_DEBUG_CHANNEL(FILE); // some headers have code with asserts, so do this first
+
 #include "pal/thread.hpp"
 #include "pal/file.hpp"
 #include "shmfilelockmgr.hpp"
@@ -25,7 +28,6 @@ Abstract:
 #include "pal/stackstring.hpp"
 
 #include "pal/palinternal.h"
-#include "pal/dbgmsg.h"
 #include "pal/file.h"
 #include "pal/filetime.h"
 #include "pal/utils.h"
@@ -41,8 +43,6 @@ Abstract:
 #include <limits.h>
 
 using namespace CorUnix;
-
-SET_DEFAULT_DEBUG_CHANNEL(FILE);
 
 int MaxWCharToAcpLengthFactor = 3;
 
@@ -203,7 +203,7 @@ void FILEGetProperNotFoundError( LPCSTR lpPath, LPDWORD lpErrorCode )
         *lpErrorCode = ERROR_FILE_NOT_FOUND;
     }
     
-    InternalFree(lpDupedPath);
+    free(lpDupedPath);
     lpDupedPath = NULL;
     TRACE( "FILEGetProperNotFoundError returning TRUE\n" );
     return;
@@ -2999,8 +2999,11 @@ OUT  PLARGE_INTEGER lpFileSize)
             &dwFileSizeHigh
             );
 
-        lpFileSize->u.LowPart = dwFileSizeLow;
-        lpFileSize->u.HighPart = dwFileSizeHigh;
+        if (NO_ERROR == palError)
+        {
+            lpFileSize->u.LowPart = dwFileSizeLow;
+            lpFileSize->u.HighPart = dwFileSizeHigh;
+        }
     }
     else
     {
@@ -3598,7 +3601,7 @@ GetTempFileNameW(
         path_size = MultiByteToWideChar( CP_ACP, 0, tempfile_name, -1, 
                                            lpTempFileName, MAX_LONGPATH );
 
-        InternalFree(tempfile_name);
+        free(tempfile_name);
         tempfile_name = NULL;
         if (!path_size)
         {
@@ -3657,12 +3660,9 @@ DWORD FILEGetLastErrorFromErrno( void )
     case EEXIST:
         dwRet = ERROR_ALREADY_EXISTS; 
         break;
-#if !defined(_AIX)
-    // ENOTEMPTY is the same as EEXIST on AIX. Meaningful when involving directory operations
     case ENOTEMPTY:
         dwRet = ERROR_DIR_NOT_EMPTY; 
         break;
-#endif
     case EBADF:
         dwRet = ERROR_INVALID_HANDLE; 
         break;
@@ -3814,7 +3814,7 @@ CopyFileA(
         goto done;
     }
 
-    InternalFree(lpUnixPath);
+    free(lpUnixPath);
     lpUnixPath = strdup(lpNewFileName);
     if ( lpUnixPath == NULL )
     {
@@ -3877,7 +3877,7 @@ done:
     }
     if (lpUnixPath) 
     {
-        InternalFree(lpUnixPath);
+        free(lpUnixPath);
     }
 
     LOGEXIT("CopyFileA returns BOOL %d\n", bGood);
@@ -4004,7 +4004,7 @@ done:
         pThread->SetLastError(dwLastError);
     }
     
-    InternalFree(unixFileName);
+    free(unixFileName);
 
     LOGEXIT("SetFileAttributesA returns BOOL %d\n", bRet);
     PERF_EXIT(SetFileAttributesA);
@@ -4056,14 +4056,14 @@ CorUnix::InternalCreatePipe(
 
     /* enable close-on-exec for both pipes; if one gets passed to CreateProcess
        it will be "uncloseonexeced" in order to be inherited */
-    if(-1 == fcntl(readWritePipeDes[0],F_SETFD,1))
+    if(-1 == fcntl(readWritePipeDes[0],F_SETFD,FD_CLOEXEC))
     {
         ASSERT("can't set close-on-exec flag; fcntl() failed. errno is %d "
              "(%s)\n", errno, strerror(errno));
         palError = ERROR_INTERNAL_ERROR;
         goto InternalCreatePipeExit;
     }
-    if(-1 == fcntl(readWritePipeDes[1],F_SETFD,1))
+    if(-1 == fcntl(readWritePipeDes[1],F_SETFD,FD_CLOEXEC))
     {
         ASSERT("can't set close-on-exec flag; fcntl() failed. errno is %d "
              "(%s)\n", errno, strerror(errno));
@@ -4564,7 +4564,7 @@ static HANDLE init_std_handle(HANDLE * pStd, FILE *stream)
 
     /* duplicate the FILE *, so that we can fclose() in FILECloseHandle without
        closing the original */
-    new_fd = dup(fileno(stream));
+    new_fd = fcntl(fileno(stream), F_DUPFD_CLOEXEC, 0); // dup, but with CLOEXEC
     if(-1 == new_fd)
     {
         ERROR("dup() failed; errno is %d (%s)\n", errno, strerror(errno));
